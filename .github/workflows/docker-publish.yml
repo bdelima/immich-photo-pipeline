@@ -1,0 +1,93 @@
+name: Release and publish Docker image
+
+# Bump VERSION in a reviewed PR and merge it: this creates a matching GitHub
+# Release and a multi-arch image on Docker Hub (version tag + latest).
+#
+# The job runs in the `release` Environment, which requires a human
+# approval before it starts and holds the Docker Hub secrets, so a merge
+# alone can never publish an image. One-time setup (done by the user):
+#   gh secret set DOCKERHUB_USERNAME --env release --repo bdelima/immich-photo-pipeline
+#   gh secret set DOCKERHUB_TOKEN    --env release --repo bdelima/immich-photo-pipeline
+# Use a Docker Hub token scoped to this one image (Read & Write, no Delete).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read version
+        id: version
+        run: |
+          v="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "$v" ]; then
+            echo "VERSION file is empty" >&2
+            exit 1
+          fi
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already released
+        id: check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.value }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag and GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.value }}" \
+            --title "${{ steps.version.outputs.value }}" \
+            --generate-notes
+
+      - name: Check for a Dockerfile
+        id: dockerfile
+        run: |
+          if [ -f Dockerfile ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Dockerfile yet; skipping image build and push."
+          fi
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        if: steps.check.outputs.exists == 'false' && steps.dockerfile.outputs.present == 'true'
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        if: steps.check.outputs.exists == 'false' && steps.dockerfile.outputs.present == 'true'
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: steps.check.outputs.exists == 'false' && steps.dockerfile.outputs.present == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        if: steps.check.outputs.exists == 'false' && steps.dockerfile.outputs.present == 'true'
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+            REVISION=${{ github.sha }}
+          tags: |
+            bdelima/immich-photo-pipeline:${{ steps.version.outputs.value }}
+            bdelima/immich-photo-pipeline:latest
