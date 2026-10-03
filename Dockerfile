@@ -40,7 +40,11 @@ USER pipeline
 VOLUME ["/data"]
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/albums', timeout=3)" || exit 1
+# start-period covers the first auth probe (up to a 60s subprocess
+# timeout) so the container isn't marked unhealthy before that's had a
+# chance to complete; /healthz itself returns 503 while no Claude session
+# has been established yet, not just on a web-server-down error.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)" || exit 1
 
 CMD ["python", "-m", "app.main"]

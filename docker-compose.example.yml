@@ -14,6 +14,14 @@ services:
       REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
       LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
       POLL_INTERVAL_SECONDS: "15"
+      # Claude Pro auth: the token file bind-mounted below is the
+      # preferred path (see the volumes block) -- rotating the token is
+      # then just "overwrite that file", never "edit this compose file
+      # and restart". CLAUDE_CODE_OAUTH_TOKEN here is only a fallback for
+      # when a bind-mounted secrets file isn't convenient; the file wins
+      # if both are present.
+      # CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
+      #
       # Uncomment to iterate on the recipe skill without rebuilding the
       # image: RECIPE_SKILL_PATH just gets passed straight through to
       # `claude --skill <path>`, read fresh on every invocation, so an
@@ -23,6 +31,14 @@ services:
       # RECIPE_SKILL_PATH: /skills/photo-mat-recipe
     volumes:
       - ./pipeline-data:/data
+      # Claude Pro OAuth token, generated once with `claude setup-token`
+      # on a machine with a browser (never inside this container) and
+      # saved to this file. Must be readable by uid 1000, since the
+      # container drops to that non-root user. The container checks this
+      # periodically and recovers on its own when the file appears or
+      # changes -- no restart needed. See /healthz and the container
+      # logs for setup instructions if this is missing or stale.
+      - ./secrets/claude_oauth_token:/run/secrets/claude_oauth_token:ro
       # Pairs with RECIPE_SKILL_PATH above. The container runs as uid
       # 1000, so this host directory needs to be readable by that uid
       # (or just world-readable).

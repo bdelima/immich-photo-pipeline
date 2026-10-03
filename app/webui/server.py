@@ -9,14 +9,22 @@ import logging
 from flask import Flask, jsonify, render_template, request
 
 from ..config import Config
+from ..health import HealthStore
 from ..immich_client import ImmichClient
 from ..state import StateStore
 
 log = logging.getLogger(__name__)
 
 
-def create_app(cfg: Config, immich: ImmichClient, store: StateStore) -> Flask:
+def create_app(cfg: Config, immich: ImmichClient, store: StateStore, health: HealthStore) -> Flask:
     app = Flask(__name__)
+
+    @app.get("/healthz")
+    def healthz():
+        snap = health.snapshot()
+        if snap.claude_auth_ok:
+            return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "unhealthy", "reason": snap.last_error}), 503
 
     @app.get("/")
     def index():

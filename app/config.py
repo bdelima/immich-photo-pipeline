@@ -37,6 +37,16 @@ class Config:
     recipe_skill_path: str
     claude_binary: str
 
+    # Where to look for the Claude Pro OAuth token (see recipe_runner.py's
+    # resolve_oauth_token): a bind-mounted file takes precedence over the
+    # CLAUDE_CODE_OAUTH_TOKEN env var, so rotating the token is "overwrite
+    # the mounted file", never "edit compose and restart".
+    claude_oauth_token_file: str
+    # How often the background auth probe re-checks the token, independent
+    # of the main poll interval -- a probe spends a real (if trivial)
+    # Claude invocation, so this defaults much slower than poll_interval.
+    claude_auth_check_interval_seconds: int
+
     webui_host: str
     webui_port: int
 
@@ -53,6 +63,8 @@ class Config:
             state_path=_env("STATE_PATH", "/data/state.json"),
             recipe_skill_path=_env("RECIPE_SKILL_PATH", "/app/photo-mat-recipe"),
             claude_binary=_env("CLAUDE_BINARY", "claude"),
+            claude_oauth_token_file=_env("CLAUDE_OAUTH_TOKEN_FILE", "/run/secrets/claude_oauth_token"),
+            claude_auth_check_interval_seconds=_env_int("CLAUDE_AUTH_CHECK_INTERVAL_SECONDS", 300),
             webui_host=_env("WEBUI_HOST", "0.0.0.0"),
             webui_port=_env_int("WEBUI_PORT", 8080),
         )
