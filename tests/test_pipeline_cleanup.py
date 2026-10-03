@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.immich_client import Asset, ImmichError
 from app.pipeline import Pipeline
+from app.state import ImageState, PipelineState
 
 
 class FakeClient:
@@ -78,3 +79,47 @@ def test_clear_from_entry_queue_does_not_comment_when_removal_succeeds():
     asset = Asset(id="a1", original_file_name="a1.jpg", is_favorite=False, owner_id="me")
     pipeline._clear_from_entry_queue("album-1", [asset])
     assert primary.comments == []
+
+
+class DeletingClient(RecordingClient):
+    """Unlike FakeClient, this stands in for the primary account deleting
+    its OWN upload -- the Review/managed-album case, where there's no
+    ownership restriction to simulate, just a delete_assets call that can
+    succeed or be made to fail."""
+
+    def __init__(self, delete_succeeds=True):
+        super().__init__(succeeds=True)
+        self.delete_succeeds = delete_succeeds
+        self.deleted_ids = []
+
+    def delete_assets(self, asset_ids, force=True):
+        self.deleted_ids.extend(asset_ids)
+        if not self.delete_succeeds:
+            raise ImmichError("delete failed")
+
+
+def test_delete_reviewed_asset_removes_asset_and_drops_state_on_success():
+    client = DeletingClient(delete_succeeds=True)
+    pipeline = make_pipeline(client, [])
+    state = PipelineState(images={"lineage-1": ImageState(source_asset_ids=["src-1"], current_asset_id="a1")})
+
+    pipeline._delete_reviewed_asset(state, "lineage-1", "a1", album_id="review-album")
+
+    assert client.deleted_ids == ["a1"]
+    assert "lineage-1" not in state.images
+    assert client.comments == []
+
+
+def test_delete_reviewed_asset_comments_and_keeps_state_on_failure():
+    client = DeletingClient(delete_succeeds=False)
+    pipeline = make_pipeline(client, [])
+    state = PipelineState(images={"lineage-1": ImageState(source_asset_ids=["src-1"], current_asset_id="a1")})
+
+    pipeline._delete_reviewed_asset(state, "lineage-1", "a1", album_id="review-album")
+
+    assert "lineage-1" in state.images  # left for retry, not silently dropped
+    assert len(client.comments) == 1
+    text, album_id, asset_id = client.comments[0]
+    assert "couldn't delete" in text.lower()
+    assert album_id == "review-album"
+    assert asset_id == "a1"
