@@ -10,15 +10,14 @@ services:
       IMMICH_URL: ${IMMICH_URL}
       # This account's own ("master"/admin) API key. Owns/bootstraps the
       # four core albums below on first run and does everything except
-      # removing entry-queue originals added by a different account --
-      # see IMMICH_EXTRA_API_KEYS_FILE below for that fallback. This is
-      # the SAME key overflight-feed and frame-mirror
-      # (bdelima/immich-display-integrations) already need, so prefer the
-      # bind-mounted file below over this env var: point both this
-      # service's and those services' compose files at one shared host
-      # file instead of copying the same key into three separate places.
-      # IMMICH_API_KEY_FILE below wins when both are set; this var is
-      # just the fallback for anyone who'd rather not use a file.
+      # removing entry-queue originals added by a different account (see
+      # the shared secrets file's IMMICH_EXTRA_API_KEY lines, below, for
+      # that fallback). This is the SAME key overflight-feed and
+      # frame-mirror (bdelima/immich-display-integrations) already need,
+      # so prefer the IMMICH_API_KEY= line in the shared secrets file
+      # (see the volumes block) over this env var -- the file wins when
+      # both are set; this var is just the fallback for anyone who'd
+      # rather not use the file.
       IMMICH_API_KEY: ${IMMICH_API_KEY}
       # The four core albums are created automatically on first run if
       # they don't already exist yet, matched/created by name -- no need
@@ -41,17 +40,23 @@ services:
       # into the entry queues or like/comment on Review and the managed
       # albums. The pipeline doesn't automate that invite step.
       POLL_INTERVAL_SECONDS: "15"
-      # Claude Pro auth: the token file bind-mounted below is the
-      # preferred path (see the volumes block) -- rotating the token is
-      # then just "overwrite that file", never "edit this compose file
-      # and restart". CLAUDE_CODE_OAUTH_TOKEN here is only a fallback for
-      # when a bind-mounted secrets file isn't convenient; the file wins
-      # if both are present.
+      # Claude Pro auth: a CLAUDE_CODE_OAUTH_TOKEN= line in the shared
+      # secrets file (see the volumes block) is the preferred path --
+      # rotating the token is then just "edit that one line", never
+      # "edit this compose file and restart". The env var here is only a
+      # fallback for when the shared secrets file isn't convenient; the
+      # file's line wins if both are present.
       # CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
       #
       # Never set ANTHROPIC_API_KEY in this service: Claude Code prefers
       # it over the subscription token above and silently switches to
       # metered API billing instead of your Pro allocation.
+      #
+      # To generate a token: `docker exec -it immich-photo-pipeline claude
+      # setup-token` (or run it on any other machine with a browser). It
+      # opens a normal claude.ai login -- Google/passkey/etc. all work --
+      # and prints the token to the terminal; nothing is saved
+      # automatically, so copy it into the file below yourself.
       #
       # Uncomment to iterate on the recipe skill without rebuilding the
       # image: RECIPE_SKILL_PATH just gets passed straight through to
@@ -62,38 +67,41 @@ services:
       # RECIPE_SKILL_PATH: /skills/photo-mat-recipe
     volumes:
       - ./pipeline-data:/data
-      # The master/admin Immich API key, as a bind-mounted file instead
-      # of the IMMICH_API_KEY env var above -- same resolve_secret() rule
-      # as the Claude token (file wins over env var when both are set).
-      # Point this at the SAME host file overflight-feed/frame-mirror
-      # already (or will) bind-mount for their own Immich key, e.g.
-      # ../immich-shared-secrets/immich_admin_api_key, so rotating that
-      # one account's key is a single file overwrite instead of editing
-      # three compose files. Converging the physical file across repos
-      # is a deployment-layout change on the host, not an application
-      # change -- it has to happen on the immich-display-integrations
-      # side too, in that project's own compose file.
-      # - ../immich-shared-secrets/immich_admin_api_key:/run/secrets/immich_api_key:ro
-      # Claude Pro OAuth token, generated once with `claude setup-token`
-      # (see the environment block above for how) and saved to this
-      # file. Must be readable by uid 1000, since the container drops
-      # to that non-root user. The container checks this periodically
-      # and recovers on its own when the file appears or changes -- no
-      # restart needed. See /healthz and the container logs for setup
-      # instructions if this is missing or stale.
-      - ./secrets/claude_oauth_token:/run/secrets/claude_oauth_token:ro
-      # Other household members' own Immich API keys (each generated
-      # from THEIR account's Account Settings -> API Keys), one per
-      # line, '#' comments allowed. Immich restricts removing an asset
-      # from an album to whoever added it -- not even the album owner or
-      # an admin key can override that -- so when someone else's account
-      # dropped a photo into an entry-queue album, the primary key alone
-      # can never clear it out again. The pipeline tries the primary key
-      # first, then each of these in turn, and only if every one of them
-      # fails does it leave a comment asking you to delete it by hand.
-      # Unlike the Claude token above, this file is only read once at
-      # startup -- restart the container after adding a new line.
-      # - ./secrets/immich_extra_api_keys:/run/secrets/immich_extra_api_keys:ro
+      # The one shared secrets file for this whole Immich pipeline --
+      # plain KEY=VALUE lines (see app/secrets.py), so a single
+      # bind-mounted file carries every credential instead of one file
+      # per credential. This component reads exactly three keys from it
+      # and leaves anything else alone:
+      #
+      #   CLAUDE_CODE_OAUTH_TOKEN=<from `claude setup-token`, see above>
+      #   IMMICH_API_KEY=<this account's own/admin key>
+      #   IMMICH_EXTRA_API_KEY=<household member 2's own key>
+      #   IMMICH_EXTRA_API_KEY=<household member 3's own key, etc -- one
+      #                         line per extra account, repeat as needed>
+      #
+      # Immich restricts removing an asset from an album to whoever
+      # added it -- not even the album owner or an admin key can
+      # override that -- so IMMICH_EXTRA_API_KEY entries are the fallback
+      # used only when clearing an entry-queue original someone else's
+      # account added: the pipeline tries IMMICH_API_KEY first, then each
+      # IMMICH_EXTRA_API_KEY in turn, and only if every one of them fails
+      # does it leave a comment asking you to delete it by hand.
+      #
+      # Mount the SAME host file into immich-overflight-feed's and
+      # immich-frame-mirror's SECRETS_FILE too
+      # (bdelima/immich-display-integrations) -- they only read the
+      # IMMICH_API_KEY= line and ignore the rest, same as this component
+      # ignores any key it doesn't recognize. One file, one place to
+      # rotate any of these credentials, instead of three.
+      #
+      # Must be readable by uid 1000, since the container drops to that
+      # non-root user. The CLAUDE_CODE_OAUTH_TOKEN= line is checked
+      # periodically and recovers on its own when it appears or changes
+      # -- no restart needed; see /healthz and the container logs for
+      # setup instructions if it's missing or stale. The IMMICH_API_KEY
+      # and IMMICH_EXTRA_API_KEY lines are read once at startup --
+      # restart the container after adding or changing those.
+      - ./secrets/immich-secrets.env:/run/secrets/immich_secrets.env:ro
       # Pairs with RECIPE_SKILL_PATH above. The container runs as uid
       # 1000, so this host directory needs to be readable by that uid
       # (or just world-readable).

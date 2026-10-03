@@ -9,10 +9,10 @@ import time
 from .albums import ensure_core_albums
 from .config import Config
 from .health import HealthStore
-from .immich_client import ImmichClient, ImmichError, read_api_keys_file
+from .immich_client import ImmichClient, ImmichError
 from .pipeline import Pipeline
 from .recipe_runner import RecipeRunner, format_auth_instructions
-from .secrets import resolve_secret
+from .secrets import resolve_secret, resolve_secret_list
 from .state import StateStore
 from .webui.server import create_app
 
@@ -33,7 +33,7 @@ def wait_for_immich_ready(immich: ImmichClient, cfg: Config) -> Config:
             time.sleep(10)
 
 
-def auth_probe_forever(recipe: RecipeRunner, health: HealthStore, token_file: str, interval_seconds: int) -> None:
+def auth_probe_forever(recipe: RecipeRunner, health: HealthStore, secrets_file: str, interval_seconds: int) -> None:
     """Checks whether a Claude session can actually be established, on its
     own slower cadence (a probe spends a real, if trivial, invocation).
     Logs the setup instructions once per failure, not on every retry, so
@@ -49,7 +49,7 @@ def auth_probe_forever(recipe: RecipeRunner, health: HealthStore, token_file: st
             health.set_auth_failed(err or "unknown error")
             if was_ok is not False:
                 log.error("Claude auth check failed: %s", err)
-                log.error(format_auth_instructions(token_file))
+                log.error(format_auth_instructions(secrets_file))
         was_ok = ok
         time.sleep(interval_seconds)
 
@@ -68,25 +68,25 @@ def poll_forever(pipeline: Pipeline, health: HealthStore, interval_seconds: int)
 
 def main() -> None:
     cfg = Config.from_env()
-    immich_api_key = resolve_secret(cfg.immich_api_key_file, cfg.immich_api_key)
+    immich_api_key = resolve_secret(cfg.secrets_file, "IMMICH_API_KEY", cfg.immich_api_key)
     if not immich_api_key:
         raise RuntimeError(
-            f"no Immich API key found: set IMMICH_API_KEY or bind-mount a file "
-            f"at {cfg.immich_api_key_file} (IMMICH_API_KEY_FILE)"
+            f"no Immich API key found: set IMMICH_API_KEY or add an "
+            f"IMMICH_API_KEY=... line to {cfg.secrets_file} (SECRETS_FILE)"
         )
     immich = ImmichClient(cfg.immich_url, immich_api_key)
     cfg = wait_for_immich_ready(immich, cfg)
-    extra_keys = read_api_keys_file(cfg.immich_extra_api_keys_file)
+    extra_keys = resolve_secret_list(cfg.secrets_file, "IMMICH_EXTRA_API_KEY")
     extra_clients = [ImmichClient(cfg.immich_url, key) for key in extra_keys]
     log.info("resolved core albums; %d extra Immich account(s) configured", len(extra_clients))
-    recipe = RecipeRunner(cfg.claude_binary, cfg.recipe_skill_path, cfg.claude_oauth_token_file)
+    recipe = RecipeRunner(cfg.claude_binary, cfg.recipe_skill_path, cfg.secrets_file)
     store = StateStore(cfg.state_path)
     health = HealthStore()
     pipeline = Pipeline(cfg, immich, recipe, store, extra_clients=extra_clients)
 
     auth_thread = threading.Thread(
         target=auth_probe_forever,
-        args=(recipe, health, cfg.claude_oauth_token_file, cfg.claude_auth_check_interval_seconds),
+        args=(recipe, health, cfg.secrets_file, cfg.claude_auth_check_interval_seconds),
         daemon=True,
     )
     auth_thread.start()

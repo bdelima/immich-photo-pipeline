@@ -15,9 +15,10 @@ key -- confirmed against the current Claude Code docs
 (https://code.claude.com/docs/en/authentication, "Generate a long-lived
 token"). That command opens the same browser-approval screen as `/login`
 and prints the resulting token straight to the terminal; it does not
-save it anywhere, so whoever runs it copies the token into
-CLAUDE_CODE_OAUTH_TOKEN (here: the bind-mounted file `resolve_oauth_token`
-reads). It can be run from any machine with a browser, including inside
+save it anywhere, so whoever runs it copies the token into a
+CLAUDE_CODE_OAUTH_TOKEN= line in the shared secrets file
+`resolve_oauth_token` reads (see app/secrets.py). It can be run from any
+machine with a browser, including inside
 this container's own shell via `docker exec -it` -- the docs confirm
 containers/SSH/WSL2 fall back to a short code you paste back into the
 terminal when the browser can't redirect to a local callback port, so no
@@ -50,15 +51,16 @@ log = logging.getLogger(__name__)
 ENV_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
 
-def resolve_oauth_token(token_file: str) -> str | None:
-    """The bind-mounted file always wins over the env var, so rotating a
-    token is "overwrite the file", never "edit compose and restart". Thin
-    wrapper over secrets.resolve_secret -- see that module for why this
-    isn't duplicated per-credential."""
-    return resolve_secret(token_file, os.environ.get(ENV_TOKEN_VAR))
+def resolve_oauth_token(secrets_file: str) -> str | None:
+    """A CLAUDE_CODE_OAUTH_TOKEN= line in the shared secrets file always
+    wins over the env var, so rotating the token is "edit that one line",
+    never "edit compose and restart". Thin wrapper over
+    secrets.resolve_secret -- see that module for why this isn't
+    duplicated per-credential."""
+    return resolve_secret(secrets_file, ENV_TOKEN_VAR, os.environ.get(ENV_TOKEN_VAR))
 
 
-def format_auth_instructions(token_file: str) -> str:
+def format_auth_instructions(secrets_file: str) -> str:
     return (
         "============================================================\n"
         "immich-photo-pipeline: no working Claude Code session.\n"
@@ -84,20 +86,23 @@ def format_auth_instructions(token_file: str) -> str:
         "     this terminal.\n"
         "\n"
         "  2. The command prints the token directly to the terminal --\n"
-        "     it is NOT saved anywhere automatically. Copy it and save\n"
-        "     it to a file, e.g.:\n"
+        "     it is NOT saved anywhere automatically. Add it as a line\n"
+        "     in the shared secrets file this container reads (creating\n"
+        "     the file if it doesn't exist yet):\n"
         "\n"
-        "         echo '<token>' > ./secrets/claude_oauth_token\n"
+        f"         echo 'CLAUDE_CODE_OAUTH_TOKEN=<token>' >> {secrets_file}\n"
         "\n"
-        f"  3. Bind-mount that file into this container at\n"
-        f"     {token_file} (see docker-compose.example.yml),\n"
-        "     readable by uid 1000.\n"
+        f"  3. Make sure that file is bind-mounted into this container at\n"
+        f"     {secrets_file} (see docker-compose.example.yml),\n"
+        "     readable by uid 1000. Other keys already in that file\n"
+        "     (IMMICH_API_KEY, IMMICH_EXTRA_API_KEY, ...) are left alone\n"
+        "     -- only the CLAUDE_CODE_OAUTH_TOKEN= line matters here.\n"
         "\n"
-        "This is rechecked periodically, so once the file is in place\n"
+        "This is rechecked periodically, so once the line is in place\n"
         "the pipeline recovers on its own -- no restart needed. Until\n"
         "then /healthz reports unhealthy and recipe runs are skipped.\n"
-        "Tokens last about a year; regenerate and overwrite the same\n"
-        "file when one expires.\n"
+        "Tokens last about a year; regenerate and replace that same\n"
+        "line when one expires.\n"
         "============================================================"
     )
 
@@ -111,10 +116,10 @@ class RecipeResult:
 
 
 class RecipeRunner:
-    def __init__(self, claude_binary: str, skill_path: str, token_file: str):
+    def __init__(self, claude_binary: str, skill_path: str, secrets_file: str):
         self._claude_binary = claude_binary
         self._skill_path = skill_path
-        self._token_file = token_file
+        self._secrets_file = secrets_file
 
     def run_single(self, source_path: str, output_path: str, note: str | None = None) -> RecipeResult:
         prompt = (
@@ -145,9 +150,9 @@ class RecipeRunner:
         real CLI: the exact flags/output on a bad token are assumed, not
         confirmed, so the failure message quality may need adjusting once
         this runs for real."""
-        token = resolve_oauth_token(self._token_file)
+        token = resolve_oauth_token(self._secrets_file)
         if not token:
-            return False, f"no token in {self._token_file} or {ENV_TOKEN_VAR}"
+            return False, f"no {ENV_TOKEN_VAR}= line in {self._secrets_file}, and no {ENV_TOKEN_VAR} env var"
         env = os.environ.copy()
         env[ENV_TOKEN_VAR] = token
         cmd = [self._claude_binary, "-p", "Reply with OK.", "--output-format", "json"]
@@ -162,7 +167,7 @@ class RecipeRunner:
         return True, None
 
     def _invoke(self, prompt: str, resume: str | None = None) -> RecipeResult:
-        token = resolve_oauth_token(self._token_file)
+        token = resolve_oauth_token(self._secrets_file)
         env = os.environ.copy()
         if token:
             env[ENV_TOKEN_VAR] = token
