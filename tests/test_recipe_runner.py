@@ -35,6 +35,8 @@ def test_format_auth_instructions_mentions_setup_token_and_the_configured_path()
     text = format_auth_instructions("/run/secrets/claude_oauth_token")
     assert "claude setup-token" in text
     assert "/run/secrets/claude_oauth_token" in text
+    assert "ANTHROPIC_API_KEY" in text
+    assert "docker exec" in text
 
 
 def test_check_auth_fails_fast_with_no_token(tmp_path, monkeypatch):

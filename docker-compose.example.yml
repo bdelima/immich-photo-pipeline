@@ -22,6 +22,16 @@ services:
       # if both are present.
       # CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
       #
+      # Never set ANTHROPIC_API_KEY in this service: Claude Code prefers
+      # it over the subscription token above and silently switches to
+      # metered API billing instead of your Pro allocation.
+      #
+      # To generate a token: `docker exec -it immich-photo-pipeline claude
+      # setup-token` (or run it on any other machine with a browser). It
+      # opens a normal claude.ai login -- Google/passkey/etc. all work --
+      # and prints the token to the terminal; nothing is saved
+      # automatically, so copy it into the file below yourself.
+      #
       # Uncomment to iterate on the recipe skill without rebuilding the
       # image: RECIPE_SKILL_PATH just gets passed straight through to
       # `claude --skill <path>`, read fresh on every invocation, so an
@@ -32,12 +42,12 @@ services:
     volumes:
       - ./pipeline-data:/data
       # Claude Pro OAuth token, generated once with `claude setup-token`
-      # on a machine with a browser (never inside this container) and
-      # saved to this file. Must be readable by uid 1000, since the
-      # container drops to that non-root user. The container checks this
-      # periodically and recovers on its own when the file appears or
-      # changes -- no restart needed. See /healthz and the container
-      # logs for setup instructions if this is missing or stale.
+      # (see the environment block above for how) and saved to this
+      # file. Must be readable by uid 1000, since the container drops
+      # to that non-root user. The container checks this periodically
+      # and recovers on its own when the file appears or changes -- no
+      # restart needed. See /healthz and the container logs for setup
+      # instructions if this is missing or stale.
       - ./secrets/claude_oauth_token:/run/secrets/claude_oauth_token:ro
       # Pairs with RECIPE_SKILL_PATH above. The container runs as uid
       # 1000, so this host directory needs to be readable by that uid

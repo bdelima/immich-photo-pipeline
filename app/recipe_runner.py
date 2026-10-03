@@ -9,12 +9,31 @@ Claude Code's documented non-interactive mode (`claude -p`, `--resume
 real CLI. Treat this module as unverified until it's been exercised once
 for real.
 
-Auth works the same way: this container authenticates against a Claude
-Pro subscription via a long-lived OAuth token (`claude setup-token`, run
-once on a machine with a browser -- never inside this container), not an
-API key. `resolve_oauth_token`/`check_auth` below are written from how
-Claude Code documents that flow; the exact command and flags have not
-been confirmed against a real token either.
+Auth: this container authenticates against a Claude Pro subscription via
+a long-lived (~1 year) OAuth token from `claude setup-token`, not an API
+key -- confirmed against the current Claude Code docs
+(https://code.claude.com/docs/en/authentication, "Generate a long-lived
+token"). That command opens the same browser-approval screen as `/login`
+and prints the resulting token straight to the terminal; it does not
+save it anywhere, so whoever runs it copies the token into
+CLAUDE_CODE_OAUTH_TOKEN (here: the bind-mounted file `resolve_oauth_token`
+reads). It can be run from any machine with a browser, including inside
+this container's own shell via `docker exec -it` -- the docs confirm
+containers/SSH/WSL2 fall back to a short code you paste back into the
+terminal when the browser can't redirect to a local callback port, so no
+port-forwarding is needed either way. Whatever method is normally used to
+sign into claude.ai (Google SSO, passkey, email+password) works
+identically in that browser step; the CLI only cares that the browser
+session completes.
+
+One real gotcha from the docs: if ANTHROPIC_API_KEY is set anywhere in
+this container's environment, Claude Code prefers it over the
+subscription token and silently switches to metered API billing instead
+of the Pro allocation. Never set that var here.
+
+What's still unverified in this sandbox: the actual CLI invocation
+shape below (`claude -p ...`) has not been run against a real token,
+since no sandbox here can complete a browser login.
 """
 from __future__ import annotations
 
@@ -51,15 +70,28 @@ def format_auth_instructions(token_file: str) -> str:
         "immich-photo-pipeline: no working Claude Code session.\n"
         "------------------------------------------------------------\n"
         "This container authenticates against your Claude Pro\n"
-        "subscription with a long-lived token, not an API key.\n"
+        "subscription with a long-lived (~1 year) OAuth token, not an\n"
+        "API key -- and setting ANTHROPIC_API_KEY anywhere in this\n"
+        "container's environment would silently switch billing to\n"
+        "metered API usage instead, so never set that var here.\n"
         "\n"
-        "  1. On a machine with a browser (NOT this container), with\n"
-        "     the Claude Code CLI installed and logged into the Pro\n"
-        "     account this pipeline should use, run:\n"
+        "  1. Get a token. Run this from any machine with a browser,\n"
+        "     OR from inside this container's own shell:\n"
         "\n"
-        "         claude setup-token\n"
+        "         docker exec -it <this container> claude setup-token\n"
         "\n"
-        "  2. Save the token string it prints to a file, e.g.:\n"
+        "     This opens the same browser-approval screen as a normal\n"
+        "     /login -- however you normally sign into claude.ai\n"
+        "     (Google, passkey, email, whatever) works the same way\n"
+        "     here. If the browser can't redirect back here (common\n"
+        "     for containers/SSH/WSL2), it shows a short code instead:\n"
+        "     open the approval URL on your phone or any other\n"
+        "     device, approve it there, then paste the code back into\n"
+        "     this terminal.\n"
+        "\n"
+        "  2. The command prints the token directly to the terminal --\n"
+        "     it is NOT saved anywhere automatically. Copy it and save\n"
+        "     it to a file, e.g.:\n"
         "\n"
         "         echo '<token>' > ./secrets/claude_oauth_token\n"
         "\n"
@@ -70,6 +102,8 @@ def format_auth_instructions(token_file: str) -> str:
         "This is rechecked periodically, so once the file is in place\n"
         "the pipeline recovers on its own -- no restart needed. Until\n"
         "then /healthz reports unhealthy and recipe runs are skipped.\n"
+        "Tokens last about a year; regenerate and overwrite the same\n"
+        "file when one expires.\n"
         "============================================================"
     )
 
