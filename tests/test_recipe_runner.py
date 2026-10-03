@@ -78,3 +78,78 @@ def test_check_auth_fails_when_subprocess_exits_nonzero(tmp_path):
         ok, err = runner.check_auth()
     assert ok is False
     assert "Invalid or expired token" in err
+
+
+def test_classify_comment_intent_returns_delete_on_delete_verdict(tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
+    runner = RecipeRunner("claude", "/app/photo-mat-recipe", str(secrets_file))
+
+    class FakeProc:
+        returncode = 0
+        stdout = '{"intent": "delete"}'
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
+        intent = runner.classify_comment_intent("delete this please")
+    assert intent == "delete"
+    # No --skill flag: this is a plain classification prompt, not a
+    # photo-mat-recipe run.
+    assert "--skill" not in mock_run.call_args.args[0]
+
+
+def test_classify_comment_intent_returns_revise_on_revise_verdict(tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
+    runner = RecipeRunner("claude", "/app/photo-mat-recipe", str(secrets_file))
+
+    class FakeProc:
+        returncode = 0
+        stdout = '{"intent": "revise"}'
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+        intent = runner.classify_comment_intent("make the mat darker")
+    assert intent == "revise"
+
+
+def test_classify_comment_intent_defaults_to_revise_on_nonzero_exit(tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
+    runner = RecipeRunner("claude", "/app/photo-mat-recipe", str(secrets_file))
+
+    class FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = "something went wrong"
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+        intent = runner.classify_comment_intent("delete this")
+    assert intent == "revise"
+
+
+def test_classify_comment_intent_defaults_to_revise_on_unparseable_output(tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
+    runner = RecipeRunner("claude", "/app/photo-mat-recipe", str(secrets_file))
+
+    class FakeProc:
+        returncode = 0
+        stdout = "not json at all"
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+        intent = runner.classify_comment_intent("delete this")
+    assert intent == "revise"
+
+
+def test_classify_comment_intent_defaults_to_revise_on_timeout(tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
+    runner = RecipeRunner("claude", "/app/photo-mat-recipe", str(secrets_file))
+
+    import subprocess as subprocess_module
+
+    with patch("app.recipe_runner.subprocess.run", side_effect=subprocess_module.TimeoutExpired(cmd="claude", timeout=60)):
+        intent = runner.classify_comment_intent("delete this")
+    assert intent == "revise"

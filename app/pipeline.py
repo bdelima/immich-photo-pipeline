@@ -240,6 +240,9 @@ class Pipeline:
                     self._ask_which_album(state, lineage_id, asset.id)
                     continue
                 for comment in fresh:
+                    if self.recipe.classify_comment_intent(comment.text) == "delete":
+                        self._delete_reviewed_asset(state, lineage_id, asset.id, album_id=self.cfg.review_album_id)
+                        break
                     answer = is_approval_reply(comment.text) if img.awaiting_clarification else None
                     if img.awaiting_clarification and answer:
                         self._promote_to_album(state, lineage_id, asset.id, answer)
@@ -259,6 +262,29 @@ class Pipeline:
         )
         self.immich.post_comment(question, album_id=self.cfg.review_album_id, asset_id=asset_id)
         state.images[lineage_id].awaiting_clarification = True
+
+    def _delete_reviewed_asset(self, state: PipelineState, lineage_id: str, asset_id: str, *, album_id: str) -> None:
+        """A reviewer who isn't the admin Immich account -- the normal
+        case; see RecipeRunner.classify_comment_intent, which decides
+        whether a comment means this -- can't delete an asset themselves
+        from the Immich UI, so this lets them ask the pipeline to do it
+        via comment instead. No extra_clients fallback needed here, unlike
+        _clear_from_entry_queue: everything in Review or a managed album
+        is this account's own upload (the recipe's output, not a phone
+        import), so the primary API key already owns it outright."""
+        try:
+            self.immich.delete_assets([asset_id])
+        except ImmichError:
+            log.exception("failed to delete asset %s on reviewer delete request", asset_id)
+            try:
+                self.immich.post_comment(
+                    "Couldn't delete this -- check the pipeline logs.",
+                    album_id=album_id, asset_id=asset_id,
+                )
+            except ImmichError:
+                log.exception("could not post delete-failure comment on %s", asset_id)
+            return
+        state.images.pop(lineage_id, None)
 
     def _promote_to_album(self, state: PipelineState, lineage_id: str, asset_id: str, album_name: str) -> None:
         album_id = state.watched_albums.get(album_name)
@@ -292,6 +318,9 @@ class Pipeline:
                 comments = self.immich.list_comments(asset_id=asset.id)
                 fresh = new_comments(comments, set(img.acted_comment_ids))
                 for comment in fresh:
+                    if self.recipe.classify_comment_intent(comment.text) == "delete":
+                        self._delete_reviewed_asset(state, lineage_id, asset.id, album_id=album_id)
+                        break
                     self._reprocess(state, lineage_id, asset.id, comment.text, target_album=album_id)
                     img.acted_comment_ids.append(comment.id)
             except Exception:
