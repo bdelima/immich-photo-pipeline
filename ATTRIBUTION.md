@@ -11,14 +11,14 @@ This repository's own code is licensed under the MIT License (see `LICENSE`). It
 ## Claude Code CLI (Anthropic)
 
 - **Project:** `@anthropic-ai/claude-code`, from Anthropic PBC
-- **License:** proprietary; use is subject to Anthropic's terms, not to this repository's MIT license
-- **How it's used:** installed with npm at image build time (see the `Dockerfile`) and run headless as a subprocess by the pipeline's recipe runner. It is not covered by this repo's license.
+- **License:** proprietary ("All rights reserved"; use is subject to Anthropic's Commercial Terms of Service), not this repository's MIT license
+- **How it's used:** **not** included in this repository or in the published Docker image. The container's entrypoint installs it from npm into the `/data` volume on first start, and the pipeline runs it as a headless subprocess, the container and CI usage Anthropic's documentation describes. Authentication is the operator's own (a long-lived token from `claude setup-token`).
 
-## Node.js
+## Node.js and npm
 
-- **Project:** [nodejs/node](https://github.com/nodejs/node)
-- **License:** MIT (the Node.js project license; bundled components carry their own licenses)
-- **How it's used:** the runtime that Claude Code needs, downloaded from nodejs.org at image build time.
+- **Project:** [nodejs/node](https://github.com/nodejs/node) and npm
+- **License:** MIT (the Node.js project license; bundled components carry their own licenses); npm is Artistic-2.0
+- **How it's used:** installed from Debian's `nodejs` and `npm` packages at image build time; the runtime the Claude Code CLI needs.
 
 ## Python dependencies
 
