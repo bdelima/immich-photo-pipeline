@@ -6,9 +6,10 @@ import logging
 import threading
 import time
 
+from .albums import ensure_core_albums
 from .config import Config
 from .health import HealthStore
-from .immich_client import ImmichClient
+from .immich_client import ImmichClient, ImmichError, read_api_keys_file
 from .pipeline import Pipeline
 from .recipe_runner import RecipeRunner, format_auth_instructions
 from .state import StateStore
@@ -16,6 +17,19 @@ from .webui.server import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("immich-photo-pipeline")
+
+
+def wait_for_immich_ready(immich: ImmichClient, cfg: Config) -> Config:
+    """Resolves/bootstraps the four core albums by name (see albums.py).
+    Retries rather than crashing if Immich isn't reachable yet -- a real
+    possibility at container startup, e.g. under compose without a
+    healthcheck-gated depends_on."""
+    while True:
+        try:
+            return ensure_core_albums(immich, cfg)
+        except ImmichError:
+            log.exception("Immich not ready yet; retrying in 10s")
+            time.sleep(10)
 
 
 def auth_probe_forever(recipe: RecipeRunner, health: HealthStore, token_file: str, interval_seconds: int) -> None:
@@ -54,10 +68,14 @@ def poll_forever(pipeline: Pipeline, health: HealthStore, interval_seconds: int)
 def main() -> None:
     cfg = Config.from_env()
     immich = ImmichClient(cfg.immich_url, cfg.immich_api_key)
+    cfg = wait_for_immich_ready(immich, cfg)
+    extra_keys = read_api_keys_file(cfg.immich_extra_api_keys_file)
+    extra_clients = [ImmichClient(cfg.immich_url, key) for key in extra_keys]
+    log.info("resolved core albums; %d extra Immich account(s) configured", len(extra_clients))
     recipe = RecipeRunner(cfg.claude_binary, cfg.recipe_skill_path, cfg.claude_oauth_token_file)
     store = StateStore(cfg.state_path)
     health = HealthStore()
-    pipeline = Pipeline(cfg, immich, recipe, store)
+    pipeline = Pipeline(cfg, immich, recipe, store, extra_clients=extra_clients)
 
     auth_thread = threading.Thread(
         target=auth_probe_forever,

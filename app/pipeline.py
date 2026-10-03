@@ -1,8 +1,8 @@
 """The poll-cycle orchestration described in the design doc: two entry
 queues, Review, and promotion into whichever managed album a reply names.
 
-The decision functions (`plan_*`) are pure — they take plain data in and
-return a plan of what to do, with no Immich or filesystem calls — so they
+The decision functions (`plan_*`) are pure -- they take plain data in and
+return a plan of what to do, with no Immich or filesystem calls -- so they
 can be unit tested without a live Immich instance. `Pipeline` executes
 those plans against the real clients.
 """
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .config import Config
-from .immich_client import Asset, Comment, ImmichClient
+from .immich_client import Asset, Comment, ImmichClient, ImmichError
 from .recipe_runner import RecipeResult, RecipeRunner
 from .state import ImageState, PipelineState, StateStore
 
@@ -72,11 +72,22 @@ def is_approval_reply(text: str) -> str | None:
 
 
 class Pipeline:
-    def __init__(self, config: Config, immich: ImmichClient, recipe: RecipeRunner, store: StateStore):
+    def __init__(
+        self,
+        config: Config,
+        immich: ImmichClient,
+        recipe: RecipeRunner,
+        store: StateStore,
+        extra_clients: list[ImmichClient] = (),
+    ):
         self.cfg = config
         self.immich = immich
         self.recipe = recipe
         self.store = store
+        # One ImmichClient per extra household API key (IMMICH_EXTRA_API_KEYS),
+        # tried in order after the primary when removing an entry-queue
+        # original -- see _clear_from_entry_queue for why.
+        self.extra_clients = list(extra_clients)
 
     def run_once(self) -> None:
         state = self.store.load()
@@ -87,17 +98,20 @@ class Pipeline:
         self._reap_deleted(state)
         self.store.save(state)
 
-    # Flow 1a — Wallpaper Maker: process solo, immediately.
+    # Flow 1a -- Wallpaper Maker: process solo, immediately.
     def _flow1_wallpaper(self, state: PipelineState) -> None:
         assets = self.immich.list_album_assets(self.cfg.wallpaper_album_id)
         tracked_sources = {sid for s in state.images.values() for sid in s.source_asset_ids}
         for asset in assets:
             if asset.id in tracked_sources:
                 continue
-            log.info("wallpaper: processing %s solo", asset.id)
-            self._process_and_land_in_review(state, [asset.id], collage=False)
+            try:
+                log.info("wallpaper: processing %s solo", asset.id)
+                self._process_and_land_in_review(state, [asset], collage=False)
+            except Exception:
+                log.exception("failed processing wallpaper asset %s; leaving it for next cycle", asset.id)
 
-    # Flow 1b — Collage Maker: hold a singleton, group 2+.
+    # Flow 1b -- Collage Maker: hold a singleton, group 2+.
     def _flow1_collage(self, state: PipelineState) -> None:
         assets = self.immich.list_album_assets(self.cfg.collage_album_id)
         tracked_sources = {sid for s in state.images.values() for sid in s.source_asset_ids}
@@ -107,8 +121,13 @@ class Pipeline:
             if plan.asset_ids:
                 self._ask_lone_portrait_question(state, plan.asset_ids[0])
             return
-        log.info("collage: grouping %s", plan.asset_ids)
-        self._process_and_land_in_review(state, plan.asset_ids, collage=True)
+        by_id = {a.id: a for a in untracked}
+        selected = [by_id[aid] for aid in plan.asset_ids]
+        try:
+            log.info("collage: grouping %s", plan.asset_ids)
+            self._process_and_land_in_review(state, selected, collage=True)
+        except Exception:
+            log.exception("failed processing collage group %s; leaving it for next cycle", plan.asset_ids)
 
     def _ask_lone_portrait_question(self, state: PipelineState, asset_id: str) -> None:
         lineage_id = asset_id
@@ -126,7 +145,8 @@ class Pipeline:
             source_asset_ids=[asset_id], home="collage_maker_wait", awaiting_clarification=True,
         )
 
-    def _process_and_land_in_review(self, state: PipelineState, source_ids: list[str], collage: bool) -> None:
+    def _process_and_land_in_review(self, state: PipelineState, source_assets: list[Asset], collage: bool) -> None:
+        source_ids = [a.id for a in source_assets]
         lineage_id = source_ids[0]
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
@@ -146,19 +166,63 @@ class Pipeline:
             new_asset_id = self.immich.upload_asset(result.output_path, f"{lineage_id}.jpg")
             self.immich.add_assets_to_album(self.cfg.review_album_id, [new_asset_id])
             source_album = self.cfg.collage_album_id if collage else self.cfg.wallpaper_album_id
-            self.immich.remove_assets_from_album(source_album, source_ids)
+            self._clear_from_entry_queue(source_album, source_assets)
             state.images[lineage_id] = ImageState(
                 source_asset_ids=source_ids, current_asset_id=new_asset_id, home="review",
             )
         finally:
             _cleanup(tmp_dir)
 
+    def _clear_from_entry_queue(self, album_id: str, assets: list[Asset]) -> None:
+        """Immich restricts removing an asset from an album to whoever
+        added it -- not just this account, since the originals here are
+        normally added by whoever's phone they came from, not the
+        pipeline. Confirmed as intentional in Immich, not a bug, and true
+        even for the album's own owner or an admin API key
+        (github.com/immich-app/immich/discussions/6804,
+        github.com/immich-app/immich/discussions/31692).
+
+        So: try the primary API key first, then each configured household
+        account's key in turn (IMMICH_EXTRA_API_KEYS) -- one of them
+        should belong to whoever actually added it. Only if every
+        configured account fails does this fall back to leaving a comment
+        asking the human to delete it themselves; `tracked_sources`
+        upstream means a leftover original never gets reprocessed either
+        way, so this is cosmetic, not a correctness issue."""
+        for asset in assets:
+            if self._try_remove_from_album(album_id, asset.id):
+                continue
+            log.warning(
+                "no configured Immich account could remove asset %s (owner %s) from album %s",
+                asset.id, asset.owner_id or "unknown", album_id,
+            )
+            try:
+                self.immich.post_comment(
+                    "Processed and moved to Review -- none of this pipeline's "
+                    "configured accounts has permission to remove this "
+                    "original from here (Immich restricts that to whoever "
+                    "added it), so it's safe to delete yourself whenever "
+                    "you'd like.",
+                    album_id=album_id, asset_id=asset.id,
+                )
+            except ImmichError:
+                log.exception("could not post cleanup comment on %s", asset.id)
+
+    def _try_remove_from_album(self, album_id: str, asset_id: str) -> bool:
+        for client in (self.immich, *self.extra_clients):
+            try:
+                client.remove_assets_from_album(album_id, [asset_id])
+                return True
+            except ImmichError:
+                continue
+        return False
+
     def _download(self, asset_id: str, tmp_dir: str) -> str:
         # Placeholder for the real download call (GET /assets/{id}/original);
-        # not exercised in this PR — see recipe_runner.py's module docstring.
+        # not exercised in this PR -- see recipe_runner.py's module docstring.
         raise NotImplementedError("asset download not yet wired to a live Immich instance")
 
-    # Flow 2 — Review: like promotes (after naming an album), comment revises.
+    # Flow 2 -- Review: like promotes (after naming an album), comment revises.
     def _flow2_review(self, state: PipelineState) -> None:
         review_assets = {a.id: a for a in self.immich.list_album_assets(self.cfg.review_album_id)}
         for lineage_id, img in list(state.images.items()):
@@ -167,20 +231,23 @@ class Pipeline:
             asset = review_assets.get(img.current_asset_id)
             if asset is None:
                 continue
-            comments = self.immich.list_comments(asset_id=asset.id)
-            acted = set(img.acted_comment_ids)
-            fresh = new_comments(comments, acted)
-            if asset.is_favorite and not img.awaiting_clarification:
-                self._ask_which_album(state, lineage_id, asset.id)
-                continue
-            for comment in fresh:
-                answer = is_approval_reply(comment.text) if img.awaiting_clarification else None
-                if img.awaiting_clarification and answer:
-                    self._promote_to_album(state, lineage_id, asset.id, answer)
-                    img.acted_comment_ids.append(comment.id)
-                else:
-                    self._reprocess(state, lineage_id, asset.id, comment.text, target_album=self.cfg.review_album_id)
-                    img.acted_comment_ids.append(comment.id)
+            try:
+                comments = self.immich.list_comments(asset_id=asset.id)
+                acted = set(img.acted_comment_ids)
+                fresh = new_comments(comments, acted)
+                if asset.is_favorite and not img.awaiting_clarification:
+                    self._ask_which_album(state, lineage_id, asset.id)
+                    continue
+                for comment in fresh:
+                    answer = is_approval_reply(comment.text) if img.awaiting_clarification else None
+                    if img.awaiting_clarification and answer:
+                        self._promote_to_album(state, lineage_id, asset.id, answer)
+                        img.acted_comment_ids.append(comment.id)
+                    else:
+                        self._reprocess(state, lineage_id, asset.id, comment.text, target_album=self.cfg.review_album_id)
+                        img.acted_comment_ids.append(comment.id)
+            except Exception:
+                log.exception("failed handling Review item %s; leaving it for next cycle", lineage_id)
 
     def _ask_which_album(self, state: PipelineState, lineage_id: str, asset_id: str) -> None:
         names = ", ".join(state.watched_albums) or "(none yet)"
@@ -203,7 +270,7 @@ class Pipeline:
         img.home = album_name
         img.awaiting_clarification = False
 
-    # Flow 3 — a managed album: comment revises in place, unlike pulls to Review.
+    # Flow 3 -- a managed album: comment revises in place, unlike pulls to Review.
     def _flow3_managed(self, state: PipelineState) -> None:
         for lineage_id, img in list(state.images.items()):
             if img.home in ("review", "awaiting_clarification", "collage_maker_wait") or not img.current_asset_id:
@@ -215,16 +282,19 @@ class Pipeline:
             asset = assets.get(img.current_asset_id)
             if asset is None:
                 continue
-            if not asset.is_favorite:
-                self.immich.add_assets_to_album(self.cfg.review_album_id, [asset.id])
-                self.immich.remove_assets_from_album(album_id, [asset.id])
-                img.home = "review"
-                continue
-            comments = self.immich.list_comments(asset_id=asset.id)
-            fresh = new_comments(comments, set(img.acted_comment_ids))
-            for comment in fresh:
-                self._reprocess(state, lineage_id, asset.id, comment.text, target_album=album_id)
-                img.acted_comment_ids.append(comment.id)
+            try:
+                if not asset.is_favorite:
+                    self.immich.add_assets_to_album(self.cfg.review_album_id, [asset.id])
+                    self.immich.remove_assets_from_album(album_id, [asset.id])
+                    img.home = "review"
+                    continue
+                comments = self.immich.list_comments(asset_id=asset.id)
+                fresh = new_comments(comments, set(img.acted_comment_ids))
+                for comment in fresh:
+                    self._reprocess(state, lineage_id, asset.id, comment.text, target_album=album_id)
+                    img.acted_comment_ids.append(comment.id)
+            except Exception:
+                log.exception("failed handling managed-album item %s; leaving it for next cycle", lineage_id)
 
     def _reprocess(self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str) -> None:
         img = state.images[lineage_id]

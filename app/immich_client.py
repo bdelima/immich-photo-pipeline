@@ -9,6 +9,7 @@ behavior; it's all documented REST endpoints.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,12 +22,31 @@ class ImmichError(RuntimeError):
     pass
 
 
+def read_api_keys_file(path: str) -> list[str]:
+    """One API key per line (blank lines and '#' comments skipped). Used
+    for IMMICH_EXTRA_API_KEYS_FILE -- other household accounts' keys, tried
+    as a fallback when the primary account can't remove something it
+    didn't add (see pipeline.py's _clear_from_entry_queue). Returns []
+    when the file doesn't exist, since having no extra accounts configured
+    is the normal/default case, not an error."""
+    if not path or not os.path.isfile(path):
+        return []
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = [line.strip() for line in fh]
+    return [line for line in lines if line and not line.startswith("#")]
+
+
 @dataclass
 class Asset:
     id: str
     original_file_name: str
     is_favorite: bool
     exif_orientation: str | None = None
+    # Whose account uploaded this asset (AssetResponseDto.ownerId). Only
+    # used for diagnostic logging (pipeline.py's _clear_from_entry_queue) --
+    # removal itself is handled by trying each configured account's API
+    # key in turn, not by predicting ownership up front.
+    owner_id: str = ""
 
 
 @dataclass
@@ -76,6 +96,7 @@ class ImmichClient:
                     original_file_name=item.get("originalFileName", ""),
                     is_favorite=bool(item.get("isFavorite", False)),
                     exif_orientation=(item.get("exifInfo") or {}).get("orientation"),
+                    owner_id=item.get("ownerId", ""),
                 ))
             next_page = body.get("assets", {}).get("nextPage")
             if not next_page:

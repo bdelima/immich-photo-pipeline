@@ -8,11 +8,31 @@ services:
     container_name: immich-photo-pipeline
     environment:
       IMMICH_URL: ${IMMICH_URL}
+      # This account's own API key (Immich: Account Settings -> API
+      # Keys). Owns/bootstraps the four core albums below on first run
+      # and does everything except removing entry-queue originals added
+      # by a different account -- see IMMICH_EXTRA_API_KEYS_FILE below.
       IMMICH_API_KEY: ${IMMICH_API_KEY}
-      COLLAGE_ALBUM_ID: ${COLLAGE_ALBUM_ID}
-      WALLPAPER_ALBUM_ID: ${WALLPAPER_ALBUM_ID}
-      REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
-      LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
+      # The four core albums are created automatically on first run if
+      # they don't already exist yet, matched/created by name -- no need
+      # to look up album ids by hand. Override with the matching
+      # *_ALBUM_ID var instead if you already have these set up and want
+      # to pin them explicitly (an explicit id always wins over the name
+      # lookup).
+      # COLLAGE_ALBUM_NAME: "Collage Maker"
+      # WALLPAPER_ALBUM_NAME: "Wallpaper Maker"
+      # REVIEW_ALBUM_NAME: "Review"
+      # LIVE_ALBUM_NAME: "Live"
+      # COLLAGE_ALBUM_ID: ${COLLAGE_ALBUM_ID}
+      # WALLPAPER_ALBUM_ID: ${WALLPAPER_ALBUM_ID}
+      # REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
+      # LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
+      #
+      # These albums are shared albums once bootstrapped -- Immich still
+      # needs each household member's account invited to them by hand
+      # (Immich UI: the album's Share menu) before they can drop photos
+      # into the entry queues or like/comment on Review and the managed
+      # albums. The pipeline doesn't automate that invite step.
       POLL_INTERVAL_SECONDS: "15"
       # Claude Pro auth: the token file bind-mounted below is the
       # preferred path (see the volumes block) -- rotating the token is
@@ -49,6 +69,18 @@ services:
       # restart needed. See /healthz and the container logs for setup
       # instructions if this is missing or stale.
       - ./secrets/claude_oauth_token:/run/secrets/claude_oauth_token:ro
+      # Other household members' own Immich API keys (each generated
+      # from THEIR account's Account Settings -> API Keys), one per
+      # line, '#' comments allowed. Immich restricts removing an asset
+      # from an album to whoever added it -- not even the album owner or
+      # an admin key can override that -- so when someone else's account
+      # dropped a photo into an entry-queue album, the primary key alone
+      # can never clear it out again. The pipeline tries the primary key
+      # first, then each of these in turn, and only if every one of them
+      # fails does it leave a comment asking you to delete it by hand.
+      # Unlike the Claude token above, this file is only read once at
+      # startup -- restart the container after adding a new line.
+      # - ./secrets/immich_extra_api_keys:/run/secrets/immich_extra_api_keys:ro
       # Pairs with RECIPE_SKILL_PATH above. The container runs as uid
       # 1000, so this host directory needs to be readable by that uid
       # (or just world-readable).
