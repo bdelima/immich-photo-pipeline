@@ -1,8 +1,8 @@
 """The poll-cycle orchestration described in the design doc: two entry
 queues, Review, and promotion into whichever managed album a reply names.
 
-The decision functions (`plan_*`) are pure -- they take plain data in and
-return a plan of what to do, with no Immich or filesystem calls -- so they
+The decision functions (`plan_*`) are pure — they take plain data in and
+return a plan of what to do, with no Immich or filesystem calls — so they
 can be unit tested without a live Immich instance. `Pipeline` executes
 those plans against the real clients.
 """
@@ -98,7 +98,7 @@ class Pipeline:
         self._reap_deleted(state)
         self.store.save(state)
 
-    # Flow 1a -- Wallpaper Maker: process solo, immediately.
+    # Flow 1a — Wallpaper Maker: process solo, immediately.
     def _flow1_wallpaper(self, state: PipelineState) -> None:
         assets = self.immich.list_album_assets(self.cfg.wallpaper_album_id)
         tracked_sources = {sid for s in state.images.values() for sid in s.source_asset_ids}
@@ -111,7 +111,7 @@ class Pipeline:
             except Exception:
                 log.exception("failed processing wallpaper asset %s; leaving it for next cycle", asset.id)
 
-    # Flow 1b -- Collage Maker: hold a singleton, group 2+.
+    # Flow 1b — Collage Maker: hold a singleton, group 2+.
     def _flow1_collage(self, state: PipelineState) -> None:
         assets = self.immich.list_album_assets(self.cfg.collage_album_id)
         tracked_sources = {sid for s in state.images.values() for sid in s.source_asset_ids}
@@ -218,11 +218,12 @@ class Pipeline:
         return False
 
     def _download(self, asset_id: str, tmp_dir: str) -> str:
-        # Placeholder for the real download call (GET /assets/{id}/original);
-        # not exercised in this PR -- see recipe_runner.py's module docstring.
-        raise NotImplementedError("asset download not yet wired to a live Immich instance")
+        """Downloads the asset's original bytes into tmp_dir -- see
+        ImmichClient.download_asset_original for the actual API call and
+        why it needs no fallback to extra_clients (unlike removal)."""
+        return self.immich.download_asset_original(asset_id, tmp_dir)
 
-    # Flow 2 -- Review: like promotes (after naming an album), comment revises.
+    # Flow 2 — Review: like promotes (after naming an album), comment revises.
     def _flow2_review(self, state: PipelineState) -> None:
         review_assets = {a.id: a for a in self.immich.list_album_assets(self.cfg.review_album_id)}
         for lineage_id, img in list(state.images.items()):
@@ -270,7 +271,7 @@ class Pipeline:
         img.home = album_name
         img.awaiting_clarification = False
 
-    # Flow 3 -- a managed album: comment revises in place, unlike pulls to Review.
+    # Flow 3 — a managed album: comment revises in place, unlike pulls to Review.
     def _flow3_managed(self, state: PipelineState) -> None:
         for lineage_id, img in list(state.images.items()):
             if img.home in ("review", "awaiting_clarification", "collage_maker_wait") or not img.current_asset_id:

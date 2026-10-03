@@ -9,6 +9,7 @@ behavior; it's all documented REST endpoints.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +20,23 @@ log = logging.getLogger(__name__)
 
 class ImmichError(RuntimeError):
     pass
+
+
+# Immich serves /original as the source file's own bytes, unconverted, so
+# the extension on disk should match the source type rather than always
+# assuming JPEG -- a HEIC original fed to the recipe as "whatever.jpg"
+# would be mislabeled, not just cosmetically wrong. Falls back to .jpg for
+# any content-type not in this table (covers the vast majority of phone
+# photos, and is no worse than the previous hardcoded assumption).
+_EXT_BY_CONTENT_TYPE = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    "image/tiff": ".tiff",
+    "image/gif": ".gif",
+}
 
 
 @dataclass
@@ -107,6 +125,33 @@ class ImmichClient:
         self._request("DELETE", f"/albums/{album_id}/assets", json={"ids": asset_ids})
 
     # ---- assets -----------------------------------------------------------
+
+    def download_asset_original(self, asset_id: str, dest_dir: str) -> str:
+        """Streams GET /assets/{id}/original into dest_dir and returns the
+        written file's path. Uses this client's own API key -- an
+        admin/master key has unrestricted read access to every asset
+        regardless of who added it, unlike album removal, which Immich
+        restricts to the account that added the asset (see pipeline.py's
+        _clear_from_entry_queue for that distinction; this call has no
+        such restriction so there's no fallback-to-extra-clients logic
+        here).
+
+        Goes through requests directly rather than self._request, since
+        that helper assumes a JSON response; this one streams binary
+        bytes to disk instead, chunked so a large original doesn't have
+        to be held in memory as a single bytes object."""
+        url = f"{self.base_url}/api/assets/{asset_id}/original"
+        resp = self._session.get(url, timeout=60, stream=True)
+        if not resp.ok:
+            raise ImmichError(f"GET /assets/{asset_id}/original -> {resp.status_code}: {resp.text[:500]}")
+        content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+        ext = _EXT_BY_CONTENT_TYPE.get(content_type, ".jpg")
+        dest_path = os.path.join(dest_dir, f"{asset_id}{ext}")
+        with open(dest_path, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                if chunk:
+                    fh.write(chunk)
+        return dest_path
 
     def set_favorite(self, asset_id: str, favorite: bool) -> None:
         self._request("PUT", f"/assets/{asset_id}", json={"isFavorite": favorite})
