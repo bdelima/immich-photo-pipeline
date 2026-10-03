@@ -14,8 +14,19 @@ services:
       REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
       LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
       POLL_INTERVAL_SECONDS: "15"
+      # Uncomment to iterate on the recipe skill without rebuilding the
+      # image: RECIPE_SKILL_PATH just gets passed straight through to
+      # `claude --skill <path>`, read fresh on every invocation, so an
+      # edit to the bind-mounted file below takes effect on the very next
+      # poll cycle -- no restart needed. Leave both commented out to use
+      # the copy baked into the image at /app/photo-mat-recipe instead.
+      # RECIPE_SKILL_PATH: /skills/photo-mat-recipe
     volumes:
       - ./pipeline-data:/data
+      # Pairs with RECIPE_SKILL_PATH above. The container runs as uid
+      # 1000, so this host directory needs to be readable by that uid
+      # (or just world-readable).
+      # - ./photo-mat-recipe:/skills/photo-mat-recipe
     ports:
       - "8096:8080"
     restart: unless-stopped
