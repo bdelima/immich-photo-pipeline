@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import tempfile
 from dataclasses import dataclass
 from typing import Literal
@@ -67,28 +66,6 @@ def is_approval_reply(text: str) -> str | None:
     revision comment instead, which the caller should treat as one)."""
     stripped = text.strip()
     return stripped if stripped else None
-
-
-# A reviewer comment asking outright to delete the asset -- e.g. a
-# non-admin Immich account (the typical reviewer) has no permission to
-# delete an asset itself in the Immich UI, so this gives them a way to
-# ask the pipeline (running with the admin/master key) to do it instead.
-# Matched as the whole comment, not a substring, so a longer revision
-# note that happens to contain the word "delete" (e.g. "delete the drop
-# shadow on the border") is never misread as a request to delete the
-# entire asset.
-_DELETE_REQUEST_RE = re.compile(
-    r"^(please\s+)?(delete|remove|trash|discard)\s*"
-    r"(this( one| photo| image)?|it)?\s*[.!]*$",
-    re.IGNORECASE,
-)
-
-
-def is_delete_request(text: str) -> bool:
-    """True for a short, literal delete command like "delete this",
-    "remove it", or "please discard this photo" -- see _DELETE_REQUEST_RE
-    above for exactly what counts."""
-    return bool(_DELETE_REQUEST_RE.match(text.strip()))
 
 
 # ---- execution ------------------------------------------------------------
@@ -263,7 +240,7 @@ class Pipeline:
                     self._ask_which_album(state, lineage_id, asset.id)
                     continue
                 for comment in fresh:
-                    if is_delete_request(comment.text):
+                    if self.recipe.classify_comment_intent(comment.text) == "delete":
                         self._delete_reviewed_asset(state, lineage_id, asset.id, album_id=self.cfg.review_album_id)
                         break
                     answer = is_approval_reply(comment.text) if img.awaiting_clarification else None
@@ -288,7 +265,8 @@ class Pipeline:
 
     def _delete_reviewed_asset(self, state: PipelineState, lineage_id: str, asset_id: str, *, album_id: str) -> None:
         """A reviewer who isn't the admin Immich account -- the normal
-        case; see is_delete_request -- can't delete an asset themselves
+        case; see RecipeRunner.classify_comment_intent, which decides
+        whether a comment means this -- can't delete an asset themselves
         from the Immich UI, so this lets them ask the pipeline to do it
         via comment instead. No extra_clients fallback needed here, unlike
         _clear_from_entry_queue: everything in Review or a managed album
@@ -340,7 +318,7 @@ class Pipeline:
                 comments = self.immich.list_comments(asset_id=asset.id)
                 fresh = new_comments(comments, set(img.acted_comment_ids))
                 for comment in fresh:
-                    if is_delete_request(comment.text):
+                    if self.recipe.classify_comment_intent(comment.text) == "delete":
                         self._delete_reviewed_asset(state, lineage_id, asset.id, album_id=album_id)
                         break
                     self._reprocess(state, lineage_id, asset.id, comment.text, target_album=album_id)

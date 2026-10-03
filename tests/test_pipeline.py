@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.immich_client import Asset, Comment
-from app.pipeline import is_approval_reply, is_delete_request, is_portrait, new_comments, plan_collage_maker
+from app.pipeline import is_approval_reply, is_portrait, new_comments, plan_collage_maker
 
 
 def make_asset(asset_id, orientation=None, favorite=False):
@@ -57,21 +57,3 @@ def test_new_comments_excludes_acted_on_and_own_posts():
 def test_is_approval_reply_rejects_blank():
     assert is_approval_reply("  ") is None
     assert is_approval_reply("Holiday") == "Holiday"
-
-
-def test_is_delete_request_matches_common_phrasings():
-    for text in [
-        "delete", "Delete", "delete.", "delete!",
-        "delete this", "delete this one", "delete this photo", "delete this image",
-        "remove it", "remove this", "please remove this",
-        "trash it", "discard this", "please delete this one.",
-    ]:
-        assert is_delete_request(text), text
-
-
-def test_is_delete_request_rejects_revision_notes_that_mention_delete():
-    assert not is_delete_request("delete the drop shadow on the border")
-    assert not is_delete_request("can you delete the watermark in the corner")
-    assert not is_delete_request("too pink")
-    assert not is_delete_request("")
-    assert not is_delete_request("   ")

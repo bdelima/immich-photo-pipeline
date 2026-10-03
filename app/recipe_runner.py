@@ -34,7 +34,11 @@ of the Pro allocation. Never set that var here.
 
 What's still unverified in this sandbox: the actual CLI invocation
 shape below (`claude -p ...`) has not been run against a real token,
-since no sandbox here can complete a browser login.
+since no sandbox here can complete a browser login. That includes
+`classify_comment_intent`'s assumption that a plain-text classification
+prompt with `--output-format json` and no `--skill` flag returns JSON
+on stdout in the same shape the rest of this module already assumes for
+recipe runs -- not independently confirmed, just consistent with it.
 """
 from __future__ import annotations
 
@@ -143,6 +147,62 @@ class RecipeRunner:
 
     def resume(self, session_id: str, answer: str) -> RecipeResult:
         return self._invoke(answer, resume=session_id)
+
+    def classify_comment_intent(self, comment_text: str) -> str:
+        """Asks Claude whether a reviewer's comment means "delete this
+        asset outright" or "revise the image" -- this replaces a
+        hand-written regex that could only ever catch a short, literal
+        list of phrasings ("delete this", "remove it", ...) and would
+        misread anything else (e.g. "please get rid of this one") as a
+        revision note instead. No --skill flag: this is a plain
+        classification prompt, not a photo-mat-recipe run, so it doesn't
+        need or want the recipe's own instructions.
+
+        Returns "delete" or "revise"; defaults to "revise" on any
+        failure, timeout, or unparseable response, since that's the
+        existing, safer behavior already in place before this method
+        existed -- a comment misread as "revise" at worst produces a
+        confused Claude response (or needs_clarification) that the
+        reviewer can just try again on, while misreading a real revision
+        note as "delete" would destroy the asset outright.
+
+        Same subprocess contract and unverified-until-run-for-real
+        caveat as everything else in this module -- see the module
+        docstring."""
+        prompt = (
+            "A reviewer left this comment on a photo sitting in a review "
+            f"queue: {comment_text!r}\n\n"
+            "Decide whether this comment is asking to delete/remove/"
+            "discard/trash this photo entirely, as opposed to a note "
+            "describing how to revise or edit the image (cropping, "
+            "color, composition, matting, or anything else that isn't a "
+            "plain request to get rid of the photo). "
+            "Reply with ONLY one of these two JSON objects, no other "
+            'text: {"intent": "delete"} or {"intent": "revise"}'
+        )
+        token = resolve_oauth_token(self._secrets_file)
+        env = os.environ.copy()
+        if token:
+            env[ENV_TOKEN_VAR] = token
+        cmd = [self._claude_binary, "-p", prompt, "--output-format", "json"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            log.exception("comment-intent classification could not run; defaulting to revise")
+            return "revise"
+        if proc.returncode != 0:
+            log.warning(
+                "comment-intent classification exited %s; defaulting to revise: %s",
+                proc.returncode, (proc.stderr or "").strip()[:300],
+            )
+            return "revise"
+        try:
+            payload = json.loads(proc.stdout)
+            intent = payload.get("intent")
+        except (json.JSONDecodeError, AttributeError):
+            log.warning("comment-intent classification returned unparseable output; defaulting to revise")
+            return "revise"
+        return "delete" if intent == "delete" else "revise"
 
     def check_auth(self) -> tuple[bool, str | None]:
         """A cheap, trivial invocation used purely to confirm a session can
