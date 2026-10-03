@@ -1,0 +1,118 @@
+# Example: running immich-photo-pipeline alongside an existing Immich
+# stack, using the published Docker Hub image. Adjust `networks:` to match
+# how your Immich compose project names its network.
+
+services:
+  immich-photo-pipeline:
+    image: bdelima/immich-photo-pipeline:latest
+    container_name: immich-photo-pipeline
+    environment:
+      IMMICH_URL: ${IMMICH_URL}
+      # This account's own ("master"/admin) API key. Owns/bootstraps the
+      # four core albums below on first run and does everything except
+      # removing entry-queue originals added by a different account (see
+      # the shared secrets file's IMMICH_EXTRA_API_KEY lines, below, for
+      # that fallback). This is the SAME key overflight-feed and
+      # frame-mirror (bdelima/immich-display-integrations) already need,
+      # so prefer the IMMICH_API_KEY= line in the shared secrets file
+      # (see the volumes block) over this env var -- the file wins when
+      # both are set; this var is just the fallback for anyone who'd
+      # rather not use the file.
+      IMMICH_API_KEY: ${IMMICH_API_KEY}
+      # The four core albums are created automatically on first run if
+      # they don't already exist yet, matched/created by name -- no need
+      # to look up album ids by hand. Override with the matching
+      # *_ALBUM_ID var instead if you already have these set up and want
+      # to pin them explicitly (an explicit id always wins over the name
+      # lookup).
+      # COLLAGE_ALBUM_NAME: "Collage Maker"
+      # WALLPAPER_ALBUM_NAME: "Wallpaper Maker"
+      # REVIEW_ALBUM_NAME: "Review"
+      # LIVE_ALBUM_NAME: "Live"
+      # COLLAGE_ALBUM_ID: ${COLLAGE_ALBUM_ID}
+      # WALLPAPER_ALBUM_ID: ${WALLPAPER_ALBUM_ID}
+      # REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
+      # LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
+      #
+      # These albums are shared albums once bootstrapped -- Immich still
+      # needs each household member's account invited to them by hand
+      # (Immich UI: the album's Share menu) before they can drop photos
+      # into the entry queues or like/comment on Review and the managed
+      # albums. The pipeline doesn't automate that invite step.
+      POLL_INTERVAL_SECONDS: "15"
+      # Claude Pro auth: a CLAUDE_CODE_OAUTH_TOKEN= line in the shared
+      # secrets file (see the volumes block) is the preferred path --
+      # rotating the token is then just "edit that one line", never
+      # "edit this compose file and restart". The env var here is only a
+      # fallback for when the shared secrets file isn't convenient; the
+      # file's line wins if both are present.
+      # CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
+      #
+      # Never set ANTHROPIC_API_KEY in this service: Claude Code prefers
+      # it over the subscription token above and silently switches to
+      # metered API billing instead of your Pro allocation.
+      #
+      # To generate a token: `docker exec -it immich-photo-pipeline claude
+      # setup-token` (or run it on any other machine with a browser). It
+      # opens a normal claude.ai login -- Google/passkey/etc. all work --
+      # and prints the token to the terminal; nothing is saved
+      # automatically, so copy it into the file below yourself.
+      #
+      # Uncomment to iterate on the recipe skill without rebuilding the
+      # image: RECIPE_SKILL_PATH just gets passed straight through to
+      # `claude --skill <path>`, read fresh on every invocation, so an
+      # edit to the bind-mounted file below takes effect on the very next
+      # poll cycle -- no restart needed. Leave both commented out to use
+      # the copy baked into the image at /app/photo-mat-recipe instead.
+      # RECIPE_SKILL_PATH: /skills/photo-mat-recipe
+    volumes:
+      - ./pipeline-data:/data
+      # The one shared secrets file for this whole Immich pipeline --
+      # plain KEY=VALUE lines (see app/secrets.py), so a single
+      # bind-mounted file carries every credential instead of one file
+      # per credential. This component reads exactly three keys from it
+      # and leaves anything else alone:
+      #
+      #   CLAUDE_CODE_OAUTH_TOKEN=<from `claude setup-token`, see above>
+      #   IMMICH_API_KEY=<this account's own/admin key>
+      #   IMMICH_EXTRA_API_KEY=<household member 2's own key>
+      #   IMMICH_EXTRA_API_KEY=<household member 3's own key, etc -- one
+      #                         line per extra account, repeat as needed>
+      #
+      # Immich restricts removing an asset from an album to whoever
+      # added it -- not even the album owner or an admin key can
+      # override that -- so IMMICH_EXTRA_API_KEY entries are the fallback
+      # used only when clearing an entry-queue original someone else's
+      # account added: the pipeline tries IMMICH_API_KEY first, then each
+      # IMMICH_EXTRA_API_KEY in turn, and only if every one of them fails
+      # does it leave a comment asking you to delete it by hand.
+      #
+      # Mount the SAME host file into immich-overflight-feed's and
+      # immich-frame-mirror's SECRETS_FILE too
+      # (bdelima/immich-display-integrations) -- they only read the
+      # IMMICH_API_KEY= line and ignore the rest, same as this component
+      # ignores any key it doesn't recognize. One file, one place to
+      # rotate any of these credentials, instead of three.
+      #
+      # Must be readable by uid 1000, since the container drops to that
+      # non-root user. The CLAUDE_CODE_OAUTH_TOKEN= line is checked
+      # periodically and recovers on its own when it appears or changes
+      # -- no restart needed; see /healthz and the container logs for
+      # setup instructions if it's missing or stale. The IMMICH_API_KEY
+      # and IMMICH_EXTRA_API_KEY lines are read once at startup --
+      # restart the container after adding or changing those.
+      - ./secrets/immich-secrets.env:/run/secrets/immich_secrets.env:ro
+      # Pairs with RECIPE_SKILL_PATH above. The container runs as uid
+      # 1000, so this host directory needs to be readable by that uid
+      # (or just world-readable).
+      # - ./photo-mat-recipe:/skills/photo-mat-recipe
+    ports:
+      - "8096:8080"
+    restart: unless-stopped
+    networks:
+      - default
+
+networks:
+  default:
+    name: immich_default
+    external: true
