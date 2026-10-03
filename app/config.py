@@ -24,7 +24,20 @@ def _env_int(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class Config:
     immich_url: str
+    # This account's own key -- the "master"/admin key the container runs
+    # as for everything except entry-queue removals someone else's account
+    # added (see immich_extra_api_keys_file below). A bind-mounted file
+    # (immich_api_key_file) wins over this raw env value when both are
+    # set -- same resolve_secret() rule as the Claude token, and the same
+    # motivation: it's what lets this key be the exact same bind-mounted
+    # file already shared with the sibling overflight-feed/frame-mirror
+    # containers (bdelima/immich-display-integrations) instead of a
+    # separately-copied value per project. Resolved once at startup in
+    # main.py, not re-read per request like the Claude token, since unlike
+    # that token this key isn't expected to rotate while the container is
+    # running.
     immich_api_key: str
+    immich_api_key_file: str
 
     # Each *_album_id is optional: when unset, main.py's startup bootstrap
     # (see albums.py) looks up an album with the matching *_album_name,
@@ -72,7 +85,13 @@ class Config:
     def from_env() -> "Config":
         return Config(
             immich_url=_env("IMMICH_URL", required=True).rstrip("/"),
-            immich_api_key=_env("IMMICH_API_KEY", required=True),
+            # Not required=True here: resolve_secret() in main.py accepts
+            # this as the fallback when immich_api_key_file isn't present
+            # either, and raises its own clearer error if both are empty --
+            # "set IMMICH_API_KEY or mount IMMICH_API_KEY_FILE" beats a
+            # generic "required environment variable" message.
+            immich_api_key=_env("IMMICH_API_KEY"),
+            immich_api_key_file=_env("IMMICH_API_KEY_FILE", "/run/secrets/immich_api_key"),
             collage_album_id=_env("COLLAGE_ALBUM_ID"),
             collage_album_name=_env("COLLAGE_ALBUM_NAME", "Collage Maker"),
             wallpaper_album_id=_env("WALLPAPER_ALBUM_ID"),

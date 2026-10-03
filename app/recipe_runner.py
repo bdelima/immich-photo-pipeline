@@ -43,6 +43,8 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+from .secrets import resolve_secret
+
 log = logging.getLogger(__name__)
 
 ENV_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -50,18 +52,10 @@ ENV_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
 def resolve_oauth_token(token_file: str) -> str | None:
     """The bind-mounted file always wins over the env var, so rotating a
-    token is "overwrite the file", never "edit compose and restart"."""
-    if token_file and os.path.isfile(token_file):
-        try:
-            with open(token_file, "r", encoding="utf-8") as fh:
-                content = fh.read().strip()
-        except OSError as exc:
-            log.warning("could not read %s: %s", token_file, exc)
-            content = ""
-        if content:
-            return content
-    env_token = os.environ.get(ENV_TOKEN_VAR, "").strip()
-    return env_token or None
+    token is "overwrite the file", never "edit compose and restart". Thin
+    wrapper over secrets.resolve_secret -- see that module for why this
+    isn't duplicated per-credential."""
+    return resolve_secret(token_file, os.environ.get(ENV_TOKEN_VAR))
 
 
 def format_auth_instructions(token_file: str) -> str:

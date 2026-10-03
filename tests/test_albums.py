@@ -9,7 +9,7 @@ from app.config import Config
 
 def make_cfg(**overrides):
     base = dict(
-        immich_url="http://immich", immich_api_key="k",
+        immich_url="http://immich", immich_api_key="k", immich_api_key_file="/run/secrets/immich_api_key",
         collage_album_id="", collage_album_name="Collage Maker",
         wallpaper_album_id="", wallpaper_album_name="Wallpaper Maker",
         review_album_id="", review_album_name="Review",

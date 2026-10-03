@@ -8,10 +8,17 @@ services:
     container_name: immich-photo-pipeline
     environment:
       IMMICH_URL: ${IMMICH_URL}
-      # This account's own API key (Immich: Account Settings -> API
-      # Keys). Owns/bootstraps the four core albums below on first run
-      # and does everything except removing entry-queue originals added
-      # by a different account -- see IMMICH_EXTRA_API_KEYS_FILE below.
+      # This account's own ("master"/admin) API key. Owns/bootstraps the
+      # four core albums below on first run and does everything except
+      # removing entry-queue originals added by a different account --
+      # see IMMICH_EXTRA_API_KEYS_FILE below for that fallback. This is
+      # the SAME key overflight-feed and frame-mirror
+      # (bdelima/immich-display-integrations) already need, so prefer the
+      # bind-mounted file below over this env var: point both this
+      # service's and those services' compose files at one shared host
+      # file instead of copying the same key into three separate places.
+      # IMMICH_API_KEY_FILE below wins when both are set; this var is
+      # just the fallback for anyone who'd rather not use a file.
       IMMICH_API_KEY: ${IMMICH_API_KEY}
       # The four core albums are created automatically on first run if
       # they don't already exist yet, matched/created by name -- no need
@@ -46,12 +53,6 @@ services:
       # it over the subscription token above and silently switches to
       # metered API billing instead of your Pro allocation.
       #
-      # To generate a token: `docker exec -it immich-photo-pipeline claude
-      # setup-token` (or run it on any other machine with a browser). It
-      # opens a normal claude.ai login -- Google/passkey/etc. all work --
-      # and prints the token to the terminal; nothing is saved
-      # automatically, so copy it into the file below yourself.
-      #
       # Uncomment to iterate on the recipe skill without rebuilding the
       # image: RECIPE_SKILL_PATH just gets passed straight through to
       # `claude --skill <path>`, read fresh on every invocation, so an
@@ -61,6 +62,18 @@ services:
       # RECIPE_SKILL_PATH: /skills/photo-mat-recipe
     volumes:
       - ./pipeline-data:/data
+      # The master/admin Immich API key, as a bind-mounted file instead
+      # of the IMMICH_API_KEY env var above -- same resolve_secret() rule
+      # as the Claude token (file wins over env var when both are set).
+      # Point this at the SAME host file overflight-feed/frame-mirror
+      # already (or will) bind-mount for their own Immich key, e.g.
+      # ../immich-shared-secrets/immich_admin_api_key, so rotating that
+      # one account's key is a single file overwrite instead of editing
+      # three compose files. Converging the physical file across repos
+      # is a deployment-layout change on the host, not an application
+      # change -- it has to happen on the immich-display-integrations
+      # side too, in that project's own compose file.
+      # - ../immich-shared-secrets/immich_admin_api_key:/run/secrets/immich_api_key:ro
       # Claude Pro OAuth token, generated once with `claude setup-token`
       # (see the environment block above for how) and saved to this
       # file. Must be readable by uid 1000, since the container drops

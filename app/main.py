@@ -12,6 +12,7 @@ from .health import HealthStore
 from .immich_client import ImmichClient, ImmichError, read_api_keys_file
 from .pipeline import Pipeline
 from .recipe_runner import RecipeRunner, format_auth_instructions
+from .secrets import resolve_secret
 from .state import StateStore
 from .webui.server import create_app
 
@@ -67,7 +68,13 @@ def poll_forever(pipeline: Pipeline, health: HealthStore, interval_seconds: int)
 
 def main() -> None:
     cfg = Config.from_env()
-    immich = ImmichClient(cfg.immich_url, cfg.immich_api_key)
+    immich_api_key = resolve_secret(cfg.immich_api_key_file, cfg.immich_api_key)
+    if not immich_api_key:
+        raise RuntimeError(
+            f"no Immich API key found: set IMMICH_API_KEY or bind-mount a file "
+            f"at {cfg.immich_api_key_file} (IMMICH_API_KEY_FILE)"
+        )
+    immich = ImmichClient(cfg.immich_url, immich_api_key)
     cfg = wait_for_immich_ready(immich, cfg)
     extra_keys = read_api_keys_file(cfg.immich_extra_api_keys_file)
     extra_clients = [ImmichClient(cfg.immich_url, key) for key in extra_keys]
