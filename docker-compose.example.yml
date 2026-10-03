@@ -1,0 +1,28 @@
+# Example: running immich-photo-pipeline alongside an existing Immich
+# stack, using the published Docker Hub image. Adjust `networks:` to match
+# how your Immich compose project names its network.
+
+services:
+  immich-photo-pipeline:
+    image: bdelima/immich-photo-pipeline:latest
+    container_name: immich-photo-pipeline
+    environment:
+      IMMICH_URL: ${IMMICH_URL}
+      IMMICH_API_KEY: ${IMMICH_API_KEY}
+      COLLAGE_ALBUM_ID: ${COLLAGE_ALBUM_ID}
+      WALLPAPER_ALBUM_ID: ${WALLPAPER_ALBUM_ID}
+      REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
+      LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
+      POLL_INTERVAL_SECONDS: "15"
+    volumes:
+      - ./pipeline-data:/data
+    ports:
+      - "8096:8080"
+    restart: unless-stopped
+    networks:
+      - default
+
+networks:
+  default:
+    name: immich_default
+    external: true

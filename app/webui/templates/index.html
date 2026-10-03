@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>immich-photo-pipeline</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; }
+    h1 { font-size: 1.1rem; }
+    select, button { font-size: 1rem; padding: 0.4rem; }
+    .current { color: #555; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Which album is live?</h1>
+  <p class="current">Currently live: <strong>{{ live_source or "(none selected)" }}</strong></p>
+  {% if albums %}
+  <form id="live-form">
+    <select name="name">
+      {% for name in albums %}
+      <option value="{{ name }}" {% if name == live_source %}selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Make live</button>
+  </form>
+  <p id="status"></p>
+  <script>
+    document.getElementById("live-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = new FormData(e.target).get("name");
+      const res = await fetch("/api/live-album", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const body = await res.json();
+      document.getElementById("status").textContent = res.ok
+        ? `Live album set to ${body.live_source_album}.`
+        : `Error: ${body.error}`;
+    });
+  </script>
+  {% else %}
+  <p>No managed albums yet &mdash; promote something from Review first.</p>
+  {% endif %}
+</body>
+</html>
