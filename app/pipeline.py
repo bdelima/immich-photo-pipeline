@@ -257,6 +257,15 @@ class Pipeline:
             except Exception:
                 log.exception("failed handling Review item %s; leaving it for next cycle", lineage_id)
 
+    @staticmethod
+    def _mark_own(img: ImageState, comment_id: str | None) -> None:
+        """Records a comment this pipeline just posted as already handled.
+        Belt and braces next to Comment.is_own: even if author detection
+        ever failed, the pipeline's own notes and questions can never be
+        read back as reviewer instructions."""
+        if comment_id:
+            img.acted_comment_ids.append(comment_id)
+
     def _ask_which_album(self, state: PipelineState, lineage_id: str, asset_id: str) -> None:
         names = ", ".join(state.watched_albums) or "(none yet)"
         question = (
@@ -264,7 +273,8 @@ class Pipeline:
             f"{names}. Reply with one of those names, or a new name to "
             f"create one."
         )
-        self.immich.post_comment(question, album_id=self.cfg.review_album_id, asset_id=asset_id)
+        posted = self.immich.post_comment(question, album_id=self.cfg.review_album_id, asset_id=asset_id)
+        self._mark_own(state.images[lineage_id], posted)
         state.images[lineage_id].awaiting_clarification = True
 
     def _delete_reviewed_asset(self, state: PipelineState, lineage_id: str, asset_id: str, *, album_id: str) -> None:
@@ -337,12 +347,13 @@ class Pipeline:
             # already-matted image itself, and re-running the recipe on it
             # would double-mat it and then delete the good copy. Callers
             # mark the comment as acted on, so this is said once.
-            self.immich.post_comment(
+            posted = self.immich.post_comment(
                 "This photo was imported already finished, so there's no "
                 "original to revise it from. You can still like/unlike it to "
                 "move it between albums, or comment \"delete this\" to remove it.",
                 album_id=target_album, asset_id=old_asset_id,
             )
+            self._mark_own(img, posted)
             return
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
@@ -351,8 +362,9 @@ class Pipeline:
             result = self.recipe.run_collage(src_paths, out_path, note=note) if len(src_paths) > 1 \
                 else self.recipe.run_single(src_paths[0], out_path, note=note)
             if result.status == "needs_clarification":
-                self.immich.post_comment(result.question or "Need more information to proceed.",
-                                          album_id=target_album, asset_id=old_asset_id)
+                posted = self.immich.post_comment(result.question or "Need more information to proceed.",
+                                                   album_id=target_album, asset_id=old_asset_id)
+                self._mark_own(img, posted)
                 img.awaiting_clarification = True
                 img.claude_session_id = result.session_id
                 return
@@ -360,8 +372,16 @@ class Pipeline:
             self.immich.add_assets_to_album(target_album, [new_asset_id])
             if img.home != "review":
                 self.immich.set_favorite(new_asset_id, True)
-            self.immich.delete_assets([old_asset_id])
-            self.immich.post_comment(f"Applied: {note}", album_id=target_album, asset_id=new_asset_id)
+            if new_asset_id != old_asset_id:
+                # Immich answers an upload of identical bytes with the id of
+                # the copy it already has. Deleting "the old one" then would
+                # delete the only copy (and a force delete skips the trash),
+                # so only remove the previous version when the upload really
+                # produced a new asset -- and into the trash, not for good,
+                # so a revision someone didn't like can still be recovered.
+                self.immich.delete_assets([old_asset_id], force=False)
+            posted = self.immich.post_comment(f"Applied: {note}", album_id=target_album, asset_id=new_asset_id)
+            self._mark_own(img, posted)
             img.current_asset_id = new_asset_id
         finally:
             _cleanup(tmp_dir)

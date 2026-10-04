@@ -105,10 +105,38 @@ class RecordingSession:
         return Resp()
 
 
+class RoutedSession:
+    """Answers each Immich path with its own JSON body."""
+
+    def __init__(self, bodies):
+        self.headers = {}
+        self._bodies = bodies
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        path = url.split("/api", 1)[1]
+        self.calls.append((method, url, kwargs))
+        body = self._bodies[path]
+
+        class Resp:
+            ok = True
+            status_code = 200
+            content = b"x"
+            headers = {"content-type": "application/json"}
+
+            def json(_self):
+                return body
+
+        return Resp()
+
+
 def test_list_comments_always_sends_album_id_and_optional_asset_id():
     # Immich 400s on GET /activities without albumId (seen live in the
     # Review loop), so every call must carry it.
-    session = RecordingSession([{"id": "c1", "comment": "hi", "user": {"id": "u", "isOwner": False}}])
+    session = RoutedSession({
+        "/activities": [{"id": "c1", "comment": "hi", "user": {"id": "u"}}],
+        "/users/me": {"id": "me"},
+    })
     client = ImmichClient("http://immich", "key", session=session)
 
     comments = client.list_comments(album_id="alb-1", asset_id="asset-1")
@@ -119,7 +147,7 @@ def test_list_comments_always_sends_album_id_and_optional_asset_id():
     assert [c.text for c in comments] == ["hi"]
 
     client.list_comments(album_id="alb-1")
-    assert session.calls[1][2]["params"] == {"type": "comment", "albumId": "alb-1"}
+    assert session.calls[-1][2]["params"] == {"type": "comment", "albumId": "alb-1"}
 
 
 def test_list_comments_requires_album_id():
