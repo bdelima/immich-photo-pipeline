@@ -175,12 +175,15 @@ class ImmichClient:
 
     # ---- activities (comments) --------------------------------------------
 
-    def list_comments(self, asset_id: str | None = None, album_id: str | None = None) -> list[Comment]:
-        params: dict[str, str] = {"type": "comment"}
+    def list_comments(self, *, album_id: str, asset_id: str | None = None) -> list[Comment]:
+        """GET /activities requires `albumId` -- confirmed against a live
+        Immich, which rejects a request without it with a 400 ("expected
+        string, received undefined" at path albumId). `assetId` is an
+        optional narrowing filter on top of that, so a per-asset lookup
+        still has to say which album the asset is being viewed in."""
+        params: dict[str, str] = {"type": "comment", "albumId": album_id}
         if asset_id:
             params["assetId"] = asset_id
-        if album_id:
-            params["albumId"] = album_id
         body = self._request("GET", "/activities", params=params) or []
         return [
             Comment(

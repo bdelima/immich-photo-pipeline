@@ -82,3 +82,50 @@ def test_download_asset_original_raises_immich_error_on_failed_response(tmp_path
         assert False, "expected ImmichError"
     except ImmichError as exc:
         assert "404" in str(exc)
+
+
+class RecordingSession:
+    def __init__(self, body):
+        self.headers = {}
+        self._body = body
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+
+        class Resp:
+            ok = True
+            status_code = 200
+            content = b"[]"
+            headers = {"content-type": "application/json"}
+
+            def json(_self):
+                return self._body
+
+        return Resp()
+
+
+def test_list_comments_always_sends_album_id_and_optional_asset_id():
+    # Immich 400s on GET /activities without albumId (seen live in the
+    # Review loop), so every call must carry it.
+    session = RecordingSession([{"id": "c1", "comment": "hi", "user": {"id": "u", "isOwner": False}}])
+    client = ImmichClient("http://immich", "key", session=session)
+
+    comments = client.list_comments(album_id="alb-1", asset_id="asset-1")
+
+    method, url, kwargs = session.calls[0]
+    assert (method, url) == ("GET", "http://immich/api/activities")
+    assert kwargs["params"] == {"type": "comment", "albumId": "alb-1", "assetId": "asset-1"}
+    assert [c.text for c in comments] == ["hi"]
+
+    client.list_comments(album_id="alb-1")
+    assert session.calls[1][2]["params"] == {"type": "comment", "albumId": "alb-1"}
+
+
+def test_list_comments_requires_album_id():
+    client = ImmichClient("http://immich", "key", session=RecordingSession([]))
+    try:
+        client.list_comments(asset_id="asset-1")
+        assert False, "expected TypeError"
+    except TypeError:
+        pass
