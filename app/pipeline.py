@@ -233,7 +233,7 @@ class Pipeline:
             if asset is None:
                 continue
             try:
-                comments = self.immich.list_comments(asset_id=asset.id)
+                comments = self.immich.list_comments(album_id=self.cfg.review_album_id, asset_id=asset.id)
                 acted = set(img.acted_comment_ids)
                 fresh = new_comments(comments, acted)
                 if asset.is_favorite and not img.awaiting_clarification:
@@ -315,7 +315,7 @@ class Pipeline:
                     self.immich.remove_assets_from_album(album_id, [asset.id])
                     img.home = "review"
                     continue
-                comments = self.immich.list_comments(asset_id=asset.id)
+                comments = self.immich.list_comments(album_id=album_id, asset_id=asset.id)
                 fresh = new_comments(comments, set(img.acted_comment_ids))
                 for comment in fresh:
                     if self.recipe.classify_comment_intent(comment.text) == "delete":
