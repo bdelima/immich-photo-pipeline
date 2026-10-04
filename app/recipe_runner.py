@@ -1,13 +1,43 @@
 """Runs the photo-mat-recipe skill via headless Claude Code.
 
-This is the one piece of the pipeline this PR could not exercise
-end-to-end: it needs a real Claude Pro login inside the container and a
-real Immich instance to download source photos from, neither of which
-exist in a sandbox. The subprocess contract below is written to match
-Claude Code's documented non-interactive mode (`claude -p`, `--resume
-<session-id>`, `--output-format json`); it has not been run against the
-real CLI. Treat this module as unverified until it's been exercised once
-for real.
+Verified live against a real Claude Pro session on 2026-10-04 (the
+earlier revision of this module was written against the documented
+non-interactive contract only, never run for real -- three of its
+assumptions turned out wrong, all confirmed and fixed here):
+
+1. There is no `--skill <path>` CLI flag. `claude --help` on the
+   installed CLI (2.1.289) has no such option; passing it is a hard
+   `error: unknown option '--skill'` on every invocation. Skills are
+   slash commands instead, discovered from a `.claude/skills/<name>/`
+   folder relative to the subprocess's working directory (confirmed:
+   with the skill copied to `.claude/skills/photo-mat-recipe/` and the
+   CLI launched with that directory as `cwd`, `claude -p
+   "/photo-mat-recipe ..."` picks it up and actually follows the
+   recipe's instructions; at the old bare `photo-mat-recipe/` path, the
+   model replied "The `/photo-mat-recipe` command isn't installed in
+   this session" and suggested adding it "as an organization plugin or
+   a project skill" -- i.e. exactly the `.claude/skills/` layout used
+   below).
+2. `--output-format json`'s top-level JSON is Claude Code's own generic
+   wrapper (`session_id`, `is_error`, `result`, ...) -- never the
+   recipe-specific fields (`needs_clarification`, `output_path`,
+   `question`) the old code expected to find at the top level. The
+   model's actual answer is plain text inside `result`. Confirmed live:
+   asking the CLI to "reply with ONLY this exact JSON and no other
+   text: {...}" makes it put exactly that JSON string (nothing else)
+   into `result`, every time tried -- so the fix is to put the output
+   contract in the prompt ourselves and parse `result` as a second,
+   nested JSON document, not to expect the outer wrapper to carry it.
+3. Headless `-p` mode has no human to answer a permission prompt, so
+   any tool call needing one (confirmed: a plain `Bash` call) is
+   silently denied (`permission_denials` in the JSON output) rather
+   than asked about -- which would have blocked the recipe from ever
+   actually running Python/Pillow/OpenCV against a real photo.
+   `--permission-mode bypassPermissions` fixes this; confirmed live
+   that a Bash call succeeds with it and is denied without it. Used on
+   every invocation in this module, including the trivial classify/
+   auth-check calls, since it's a no-op when nothing needs a tool and
+   it's the one way headless mode can use a tool at all.
 
 Auth: this container authenticates against a Claude Pro subscription via
 a long-lived (~1 year) OAuth token from `claude setup-token`, not an API
@@ -32,13 +62,11 @@ this container's environment, Claude Code prefers it over the
 subscription token and silently switches to metered API billing instead
 of the Pro allocation. Never set that var here.
 
-What's still unverified in this sandbox: the actual CLI invocation
-shape below (`claude -p ...`) has not been run against a real token,
-since no sandbox here can complete a browser login. That includes
-`classify_comment_intent`'s assumption that a plain-text classification
-prompt with `--output-format json` and no `--skill` flag returns JSON
-on stdout in the same shape the rest of this module already assumes for
-recipe runs -- not independently confirmed, just consistent with it.
+Still not independently confirmed: a full end-to-end recipe run against
+a real photo (the live checks above used a trivial skill-load probe and
+a `echo hello-world` Bash smoke test, not an actual image). The
+pipeline's next real poll cycle against a real photo is the first true
+exercise of the full path end to end.
 """
 from __future__ import annotations
 
@@ -54,6 +82,13 @@ log = logging.getLogger(__name__)
 
 ENV_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
+# Headless `-p` mode has nobody to answer a tool-permission prompt, so
+# anything needing one is silently denied instead (see module docstring,
+# point 3) -- confirmed live that this flag is what lets a Bash call
+# through. Applied to every invocation in this module; it's a no-op
+# when nothing needs a tool.
+_PERMISSION_MODE = "bypassPermissions"
+
 
 def resolve_oauth_token(secrets_file: str) -> str | None:
     """A CLAUDE_CODE_OAUTH_TOKEN= line in the shared secrets file always
@@ -62,6 +97,29 @@ def resolve_oauth_token(secrets_file: str) -> str | None:
     secrets.resolve_secret -- see that module for why this isn't
     duplicated per-credential."""
     return resolve_secret(secrets_file, ENV_TOKEN_VAR, os.environ.get(ENV_TOKEN_VAR))
+
+
+def _skill_name(skill_path: str) -> str:
+    """The slash command name Claude Code exposes a discovered skill
+    under is just its folder's name (confirmed live: a skill folder
+    named `photo-mat-recipe` is invoked as `/photo-mat-recipe`)."""
+    return os.path.basename(os.path.normpath(skill_path))
+
+
+def _skill_root(skill_path: str) -> str:
+    """Claude Code discovers a skill from a `.claude/skills/<name>/`
+    folder relative to the subprocess's cwd (confirmed live -- see
+    module docstring, point 1), so this walks `skill_path` back up past
+    `<name>/skills/.claude` to the project root the CLI needs to be
+    launched from. If `skill_path` isn't actually shaped that way (a
+    misconfigured RECIPE_SKILL_PATH), falls back to its parent dir --
+    discovery will then fail with a clear "command isn't installed"
+    result rather than this raising."""
+    normalized = os.path.normpath(skill_path)
+    parents = normalized.split(os.sep)
+    if len(parents) >= 3 and parents[-2] == "skills" and parents[-3] == ".claude":
+        return os.sep.join(parents[:-3]) or os.sep
+    return os.path.dirname(normalized) or "."
 
 
 def format_auth_instructions(secrets_file: str) -> str:
@@ -124,29 +182,30 @@ class RecipeRunner:
         self._claude_binary = claude_binary
         self._skill_path = skill_path
         self._secrets_file = secrets_file
+        self._skill_name = _skill_name(skill_path)
+        self._skill_root = _skill_root(skill_path)
 
     def run_single(self, source_path: str, output_path: str, note: str | None = None) -> RecipeResult:
-        prompt = (
-            f"Apply the photo-mat-recipe skill to {source_path}. "
-            f"Write the finished image to {output_path}."
-        )
+        prompt = f"Process {source_path} and write the finished image to {output_path}."
         if note:
             prompt += f" Additional instruction from the reviewer: {note}"
+        prompt += " " + _OUTPUT_CONTRACT.format(output_path=output_path)
         return self._invoke(prompt)
 
     def run_collage(self, source_paths: list[str], output_path: str, note: str | None = None) -> RecipeResult:
         joined = ", ".join(source_paths)
         prompt = (
-            f"Apply the photo-mat-recipe skill's multi-photo collage rules to "
-            f"these photos, in this order: {joined}. Write the finished "
-            f"collage to {output_path}."
+            f"Apply the multi-photo collage rules to these photos, in this "
+            f"order: {joined}. Write the finished collage to {output_path}."
         )
         if note:
             prompt += f" Additional instruction from the reviewer: {note}"
+        prompt += " " + _OUTPUT_CONTRACT.format(output_path=output_path)
         return self._invoke(prompt)
 
     def resume(self, session_id: str, answer: str) -> RecipeResult:
-        return self._invoke(answer, resume=session_id)
+        prompt = answer + " " + _OUTPUT_CONTRACT.format(output_path="the same output path as before")
+        return self._invoke(prompt, resume=session_id)
 
     def classify_comment_intent(self, comment_text: str) -> str:
         """Asks Claude whether a reviewer's comment means "delete this
@@ -154,9 +213,9 @@ class RecipeRunner:
         hand-written regex that could only ever catch a short, literal
         list of phrasings ("delete this", "remove it", ...) and would
         misread anything else (e.g. "please get rid of this one") as a
-        revision note instead. No --skill flag: this is a plain
-        classification prompt, not a photo-mat-recipe run, so it doesn't
-        need or want the recipe's own instructions.
+        revision note instead. No skill invocation here: this is a
+        plain classification prompt, not a photo-mat-recipe run, so it
+        doesn't need or want the recipe's own instructions.
 
         Returns "delete" or "revise"; defaults to "revise" on any
         failure, timeout, or unparseable response, since that's the
@@ -166,9 +225,8 @@ class RecipeRunner:
         reviewer can just try again on, while misreading a real revision
         note as "delete" would destroy the asset outright.
 
-        Same subprocess contract and unverified-until-run-for-real
-        caveat as everything else in this module -- see the module
-        docstring."""
+        The model's answer is JSON nested inside the CLI's own `result`
+        wrapper field, not top-level -- see module docstring, point 2."""
         prompt = (
             "A reviewer left this comment on a photo sitting in a review "
             f"queue: {comment_text!r}\n\n"
@@ -184,7 +242,8 @@ class RecipeRunner:
         env = os.environ.copy()
         if token:
             env[ENV_TOKEN_VAR] = token
-        cmd = [self._claude_binary, "-p", prompt, "--output-format", "json"]
+        cmd = [self._claude_binary, "-p", prompt, "--output-format", "json",
+               "--permission-mode", _PERMISSION_MODE]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
         except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -197,25 +256,26 @@ class RecipeRunner:
             )
             return "revise"
         try:
-            payload = json.loads(proc.stdout)
+            outer = json.loads(proc.stdout)
+            payload = json.loads(outer.get("result", ""))
             intent = payload.get("intent")
-        except (json.JSONDecodeError, AttributeError):
+        except (json.JSONDecodeError, AttributeError, TypeError):
             log.warning("comment-intent classification returned unparseable output; defaulting to revise")
             return "revise"
         return "delete" if intent == "delete" else "revise"
 
     def check_auth(self) -> tuple[bool, str | None]:
         """A cheap, trivial invocation used purely to confirm a session can
-        be established -- not a real recipe run. NOT VERIFIED against the
-        real CLI: the exact flags/output on a bad token are assumed, not
-        confirmed, so the failure message quality may need adjusting once
-        this runs for real."""
+        be established -- not a real recipe run. Only the exit code is
+        checked, so this doesn't depend on the result-JSON-nesting
+        details that affect the other methods."""
         token = resolve_oauth_token(self._secrets_file)
         if not token:
             return False, f"no {ENV_TOKEN_VAR}= line in {self._secrets_file}, and no {ENV_TOKEN_VAR} env var"
         env = os.environ.copy()
         env[ENV_TOKEN_VAR] = token
-        cmd = [self._claude_binary, "-p", "Reply with OK.", "--output-format", "json"]
+        cmd = [self._claude_binary, "-p", "Reply with OK.", "--output-format", "json",
+               "--permission-mode", _PERMISSION_MODE]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
         except FileNotFoundError:
@@ -231,24 +291,44 @@ class RecipeRunner:
         env = os.environ.copy()
         if token:
             env[ENV_TOKEN_VAR] = token
-        cmd = [self._claude_binary, "-p", prompt, "--output-format", "json"]
+        if resume:
+            full_prompt = prompt
+        else:
+            full_prompt = f"/{self._skill_name} {prompt}"
+        cmd = [self._claude_binary, "-p", full_prompt, "--output-format", "json",
+               "--permission-mode", _PERMISSION_MODE]
         if resume:
             cmd += ["--resume", resume]
-        else:
-            cmd += ["--skill", self._skill_path]
         log.info("running recipe: %s", cmd)
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env, cwd=self._skill_root)
         if proc.returncode != 0:
             raise RuntimeError(f"claude invocation failed ({proc.returncode}): {proc.stderr[:1000]}")
-        payload = json.loads(proc.stdout)
+        outer = json.loads(proc.stdout)
+        session_id = outer.get("session_id")
+        raw_result = outer.get("result", "")
+        try:
+            payload = json.loads(raw_result)
+        except (json.JSONDecodeError, TypeError):
+            raise RuntimeError(
+                f"recipe did not reply with the required JSON contract: {raw_result[:500]!r}"
+            )
         if payload.get("needs_clarification"):
             return RecipeResult(
                 status="needs_clarification",
                 question=payload.get("question"),
-                session_id=payload.get("session_id"),
+                session_id=session_id,
             )
         return RecipeResult(
             status="done",
             output_path=payload.get("output_path"),
-            session_id=payload.get("session_id"),
+            session_id=session_id,
         )
+
+
+_OUTPUT_CONTRACT = (
+    'When finished, reply with ONLY this exact JSON and no other text: '
+    '{{"output_path": "{output_path}"}}. If you need more information '
+    'before you can proceed, reply with ONLY this exact JSON and no '
+    'other text instead: {{"needs_clarification": true, "question": '
+    '"<your question>"}}'
+)

@@ -58,13 +58,17 @@ services:
       # and prints the token to the terminal; nothing is saved
       # automatically, so copy it into the file below yourself.
       #
-      # Uncomment to iterate on the recipe skill without rebuilding the
-      # image: RECIPE_SKILL_PATH just gets passed straight through to
-      # `claude --skill <path>`, read fresh on every invocation, so an
-      # edit to the bind-mounted file below takes effect on the very next
-      # poll cycle -- no restart needed. Leave both commented out to use
-      # the copy baked into the image at /app/photo-mat-recipe instead.
-      # RECIPE_SKILL_PATH: /skills/photo-mat-recipe
+      # RECIPE_SKILL_PATH only needs setting if you want to point at a
+      # location other than the image's own baked-in copy -- and Claude
+      # Code only discovers a skill from a `.claude/skills/<name>/`
+      # folder relative to where it's launched (confirmed live against
+      # the real CLI; there's no flag to point it at an arbitrary path),
+      # so any override must keep that same two-level shape. To iterate
+      # on the recipe without rebuilding the image, bind-mount straight
+      # over the baked-in path instead of changing RECIPE_SKILL_PATH at
+      # all -- see the volumes block below. An edit to the bind-mounted
+      # file takes effect on the very next poll cycle, no restart needed.
+      # RECIPE_SKILL_PATH: /app/.claude/skills/photo-mat-recipe
     volumes:
       - ./pipeline-data:/data
       # The one shared secrets file for this whole Immich pipeline --
@@ -102,10 +106,14 @@ services:
       # and IMMICH_EXTRA_API_KEY lines are read once at startup --
       # restart the container after adding or changing those.
       - ./secrets/immich-secrets.env:/run/secrets/immich_secrets.env:ro
-      # Pairs with RECIPE_SKILL_PATH above. The container runs as uid
+      # Uncomment to iterate on the recipe skill without rebuilding the
+      # image -- mounts straight over the image's own baked-in copy, at
+      # the exact path Claude Code discovers skills from (see
+      # RECIPE_SKILL_PATH's comment above). Leave commented out to use
+      # the copy baked into the image instead. The container runs as uid
       # 1000, so this host directory needs to be readable by that uid
       # (or just world-readable).
-      # - ./photo-mat-recipe:/skills/photo-mat-recipe
+      # - ./photo-mat-recipe:/app/.claude/skills/photo-mat-recipe
     ports:
       - "8096:8080"
     restart: unless-stopped

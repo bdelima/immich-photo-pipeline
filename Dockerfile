@@ -32,7 +32,13 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app/ app/
-COPY photo-mat-recipe/ photo-mat-recipe/
+# Claude Code only discovers a skill from a `.claude/skills/<name>/`
+# folder relative to the subprocess's working directory (confirmed live
+# against the real CLI -- see app/recipe_runner.py's module docstring);
+# there is no CLI flag to point it at an arbitrary path. WORKDIR is
+# /app, so this lands at /app/.claude/skills/photo-mat-recipe, matching
+# Config.recipe_skill_path's default.
+COPY photo-mat-recipe/ .claude/skills/photo-mat-recipe/
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh
 

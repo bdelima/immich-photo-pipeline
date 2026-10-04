@@ -104,7 +104,7 @@ class Config:
             live_album_name=_env("LIVE_ALBUM_NAME", "Live"),
             poll_interval_seconds=_env_int("POLL_INTERVAL_SECONDS", 15),
             state_path=_env("STATE_PATH", "/data/state.json"),
-            recipe_skill_path=_env("RECIPE_SKILL_PATH", "/app/photo-mat-recipe"),
+            recipe_skill_path=_env("RECIPE_SKILL_PATH", "/app/.claude/skills/photo-mat-recipe"),
             claude_binary=_env("CLAUDE_BINARY", "claude"),
             secrets_file=_env("SECRETS_FILE", "/run/secrets/immich_secrets.env"),
             claude_auth_check_interval_seconds=_env_int("CLAUDE_AUTH_CHECK_INTERVAL_SECONDS", 300),
