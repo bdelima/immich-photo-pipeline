@@ -135,7 +135,6 @@ def test_list_comments_always_sends_album_id_and_optional_asset_id():
     # Review loop), so every call must carry it.
     session = RoutedSession({
         "/activities": [{"id": "c1", "comment": "hi", "user": {"id": "u"}}],
-        "/users/me": {"id": "me"},
     })
     client = ImmichClient("http://immich", "key", session=session)
 
