@@ -25,6 +25,10 @@ class ImageState:
     home: str = "review"
     # Comment ids already acted on, so a reprocess never repeats itself.
     acted_comment_ids: list[str] = field(default_factory=list)
+    # Ids of "like" activities (the thumbs-up in a shared album) already
+    # turned into a "which album?" question, so one like asks once; a fresh
+    # like (unlike, then like again) has a new id and asks again.
+    acted_like_ids: list[str] = field(default_factory=list)
     # Set while the pipeline is waiting on a reply to its own question.
     awaiting_clarification: bool = False
     # The headless Claude Code session id, so a clarification answer can

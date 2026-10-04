@@ -37,6 +37,9 @@ class FakeAccount:
             raise ImmichError("PUT /albums/x/users -> 403")
         self.shared.append((album_id, list(user_ids), role))
 
+    def set_favorite(self, asset_id, favorite):
+        pass
+
     def create_album(self, name):
         self.created.append(name)
         album_id = f"new-{name}"
