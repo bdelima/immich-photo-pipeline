@@ -39,6 +39,15 @@ _EXT_BY_CONTENT_TYPE = {
 }
 
 
+# Marks the comments the pipeline itself posts. The author can't be used to
+# tell them apart: Immich's activity payload has no "is this you" flag, and
+# the account whose API key the pipeline runs as is often the same account a
+# person comments from -- so comparing author ids made the pipeline ignore
+# that person's comments. The text prefix works for any account and across
+# restarts.
+PIPELINE_COMMENT_PREFIX = "\U0001F916 "
+
+
 @dataclass
 class Asset:
     id: str
@@ -64,7 +73,6 @@ class ImmichClient:
     def __init__(self, base_url: str, api_key: str, session: requests.Session | None = None):
         self.base_url = base_url.rstrip("/")
         self._session = session or requests.Session()
-        self._own_user_id: str | None = None
         self._session.headers.update({
             "x-api-key": api_key,
             "Accept": "application/json",
@@ -195,17 +203,6 @@ class ImmichClient:
 
     # ---- activities (comments) --------------------------------------------
 
-    def own_user_id(self) -> str:
-        """The id of the account this client's API key belongs to (GET
-        /users/me), cached. Needed to recognize the pipeline's own comments:
-        the activity payload carries no "is this you" flag, only the
-        author's user id -- and mistaking the pipeline's own "Applied: ..."
-        note for a reviewer instruction made it revise the same photo over
-        and over, deleting the previous version each time."""
-        if self._own_user_id is None:
-            self._own_user_id = self._request("GET", "/users/me")["id"]
-        return self._own_user_id
-
     def list_comments(self, *, album_id: str, asset_id: str | None = None) -> list[Comment]:
         """GET /activities requires `albumId` -- confirmed against a live
         Immich, which rejects a request without it with a 400 ("expected
@@ -216,22 +213,21 @@ class ImmichClient:
         if asset_id:
             params["assetId"] = asset_id
         body = self._request("GET", "/activities", params=params) or []
-        if not body:
-            return []
-        # Raises ImmichError if it can't be determined, so a caller skips
-        # the item this cycle rather than treating its own posts as input.
-        own_id = self.own_user_id()
         return [
             Comment(
                 id=item["id"],
                 text=item.get("comment", ""),
                 user_id=item.get("user", {}).get("id", ""),
-                is_own=item.get("user", {}).get("id", "") == own_id,
+                is_own=item.get("comment", "").startswith(PIPELINE_COMMENT_PREFIX),
             )
             for item in body
         ]
 
     def post_comment(self, text: str, *, album_id: str, asset_id: str | None = None) -> str:
+        """Every comment the pipeline posts starts with PIPELINE_COMMENT_PREFIX,
+        which is how list_comments recognizes them as its own."""
+        if not text.startswith(PIPELINE_COMMENT_PREFIX):
+            text = PIPELINE_COMMENT_PREFIX + text
         payload: dict[str, Any] = {"albumId": album_id, "type": "comment", "comment": text}
         if asset_id:
             payload["assetId"] = asset_id
