@@ -77,6 +77,13 @@ run processed an actual image successfully (and is what surfaced the
 preamble behavior in point 2). Not independently confirmed: behavior of
 `--resume` for a clarification answer against a real session, which
 rests on the documented contract only.
+
+Reviewer-taught rules (app/rules.py) reach the recipe two ways, both as
+prompt text rather than edits to the skill: active rules are appended to
+every run as a delimited preferences block, and a revision run is also
+told it may add an optional `lesson` (plus `lesson_scope`) to its JSON
+reply, which the pipeline turns into a question to the reviewer rather than
+saving anything itself.
 """
 from __future__ import annotations
 
@@ -87,6 +94,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 
+from .rules import SCOPES, rules_prompt_block
 from .secrets import resolve_secret
 
 log = logging.getLogger(__name__)
@@ -207,6 +215,18 @@ class RecipeResult:
     output_path: str | None = None
     question: str | None = None
     session_id: str | None = None
+    # A general rule the recipe thinks is worth remembering, offered only
+    # after a revision; the pipeline asks the reviewer before saving it.
+    lesson: str | None = None
+    lesson_scope: str = "all"
+
+
+@dataclass
+class CommentIntent:
+    intent: str  # "delete" | "revise" | "teach"
+    # Only set for "teach": the generalized rule and which runs it applies to.
+    rule: str | None = None
+    scope: str = "all"
 
 
 class RecipeRunner:
@@ -217,58 +237,81 @@ class RecipeRunner:
         self._skill_name = _skill_name(skill_path)
         self._skill_root = _skill_root(skill_path)
 
-    def run_single(self, source_path: str, output_path: str, note: str | None = None) -> RecipeResult:
+    def run_single(
+        self, source_path: str, output_path: str, note: str | None = None,
+        rules: list[str] | None = None,
+    ) -> RecipeResult:
         prompt = f"Process {source_path} and write the finished image to {output_path}."
-        if note:
-            prompt += f" Additional instruction from the reviewer: {note}"
-        prompt += " " + _OUTPUT_CONTRACT.format(output_path=output_path)
-        return self._invoke(prompt)
+        return self._invoke(self._finish_prompt(prompt, output_path, note, rules))
 
-    def run_collage(self, source_paths: list[str], output_path: str, note: str | None = None) -> RecipeResult:
+    def run_collage(
+        self, source_paths: list[str], output_path: str, note: str | None = None,
+        rules: list[str] | None = None,
+    ) -> RecipeResult:
         joined = ", ".join(source_paths)
         prompt = (
             f"Apply the multi-photo collage rules to these photos, in this "
             f"order: {joined}. Write the finished collage to {output_path}."
         )
+        return self._invoke(self._finish_prompt(prompt, output_path, note, rules))
+
+    @staticmethod
+    def _finish_prompt(prompt: str, output_path: str, note: str | None, rules: list[str] | None) -> str:
+        """Appends, in order: the standing reviewer preferences (if any),
+        this run's reviewer note (if any), the reply contract, and -- only
+        for a revision, since that's when there's feedback to learn from --
+        the optional `lesson` contract."""
+        prompt += rules_prompt_block(rules or [])
         if note:
             prompt += f" Additional instruction from the reviewer: {note}"
         prompt += " " + _OUTPUT_CONTRACT.format(output_path=output_path)
-        return self._invoke(prompt)
+        if note:
+            prompt += " " + _LESSON_CONTRACT
+        return prompt
 
     def resume(self, session_id: str, answer: str) -> RecipeResult:
         prompt = answer + " " + _OUTPUT_CONTRACT.format(output_path="the same output path as before")
         return self._invoke(prompt, resume=session_id)
 
-    def classify_comment_intent(self, comment_text: str) -> str:
-        """Asks Claude whether a reviewer's comment means "delete this
-        asset outright" or "revise the image" -- this replaces a
-        hand-written regex that could only ever catch a short, literal
-        list of phrasings ("delete this", "remove it", ...) and would
-        misread anything else (e.g. "please get rid of this one") as a
-        revision note instead. No skill invocation here: this is a
-        plain classification prompt, not a photo-mat-recipe run, so it
-        doesn't need or want the recipe's own instructions.
+    def classify_comment(self, comment_text: str) -> CommentIntent:
+        """Asks Claude what a reviewer's comment means: "delete" (remove the
+        photo outright), "teach" (an explicit request that something apply
+        to FUTURE photos too, which the pipeline saves as a rule), or
+        "revise" (just change this image). This replaces a hand-written
+        regex that could only catch a short, literal list of phrasings.
+        No skill invocation: this is a plain classification prompt, not a
+        photo-mat-recipe run.
 
-        Returns "delete" or "revise"; defaults to "revise" on any
-        failure, timeout, or unparseable response, since that's the
-        existing, safer behavior already in place before this method
-        existed -- a comment misread as "revise" at worst produces a
-        confused Claude response (or needs_clarification) that the
-        reviewer can just try again on, while misreading a real revision
-        note as "delete" would destroy the asset outright.
+        Defaults to "revise" on any failure, timeout, or unparseable
+        response, and whenever "teach" comes back without a usable rule:
+        misreading a comment as "revise" at worst produces a confused
+        reply the reviewer can retry, while misreading a revision as
+        "delete" would destroy the asset and as "teach" would change every
+        future photo. "teach" is deliberately conservative -- the prompt
+        requires an explicit cue like "always" or "from now on".
 
         The model's answer is JSON nested inside the CLI's own `result`
         wrapper field, not top-level -- see module docstring, point 2."""
         prompt = (
             "A reviewer left this comment on a photo sitting in a review "
             f"queue: {comment_text!r}\n\n"
-            "Decide whether this comment is asking to delete/remove/"
-            "discard/trash this photo entirely, as opposed to a note "
-            "describing how to revise or edit the image (cropping, "
-            "color, composition, matting, or anything else that isn't a "
-            "plain request to get rid of the photo). "
-            "Reply with ONLY one of these two JSON objects, no other "
-            'text: {"intent": "delete"} or {"intent": "revise"}'
+            "Decide which ONE of these the comment is:\n"
+            "- delete: asking to delete/remove/discard/trash this photo "
+            "entirely.\n"
+            "- teach: asking for something to apply to FUTURE photos as well "
+            "as this one. Choose this ONLY when the reviewer explicitly says "
+            "so, with a cue such as always, never, from now on, next time, "
+            "going forward, in general, every time, or remember. A note "
+            "about only this photo is not teach.\n"
+            "- revise: anything else -- a note on how to change this image "
+            "(cropping, color, composition, matting, ...).\n"
+            "When in doubt, choose revise. "
+            "Reply with ONLY one JSON object, no other text: "
+            '{"intent": "delete"} or {"intent": "revise"} or '
+            '{"intent": "teach", "rule": "<the rule as one general '
+            'sentence>", "scope": "all"} where scope is "collage" if the '
+            'rule only concerns multi-photo collages, "single" if it only '
+            'concerns single-photo images, otherwise "all".'
         )
         token = resolve_oauth_token(self._secrets_file)
         env = os.environ.copy()
@@ -276,25 +319,33 @@ class RecipeRunner:
             env[ENV_TOKEN_VAR] = token
         cmd = [self._claude_binary, "-p", prompt, "--output-format", "json",
                "--permission-mode", _PERMISSION_MODE]
+        revise = CommentIntent("revise")
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            log.exception("comment-intent classification could not run; defaulting to revise")
-            return "revise"
+            log.exception("comment classification could not run; defaulting to revise")
+            return revise
         if proc.returncode != 0:
             log.warning(
-                "comment-intent classification exited %s; defaulting to revise: %s",
+                "comment classification exited %s; defaulting to revise: %s",
                 proc.returncode, (proc.stderr or "").strip()[:300],
             )
-            return "revise"
+            return revise
         try:
             outer = json.loads(proc.stdout)
             payload = _extract_json_object(outer.get("result", ""))
             intent = payload.get("intent")
+            if intent == "delete":
+                return CommentIntent("delete")
+            if intent == "teach":
+                rule = payload.get("rule")
+                if isinstance(rule, str) and rule.strip():
+                    scope = payload.get("scope")
+                    return CommentIntent("teach", rule=rule.strip(), scope=scope if scope in SCOPES else "all")
+                log.warning("comment classified as teach but with no usable rule; treating as revise")
         except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
-            log.warning("comment-intent classification returned unparseable output; defaulting to revise")
-            return "revise"
-        return "delete" if intent == "delete" else "revise"
+            log.warning("comment classification returned unparseable output; defaulting to revise")
+        return revise
 
     def check_auth(self) -> tuple[bool, str | None]:
         """A cheap, trivial invocation used purely to confirm a session can
@@ -350,10 +401,14 @@ class RecipeRunner:
                 question=payload.get("question"),
                 session_id=session_id,
             )
+        lesson = payload.get("lesson")
+        lesson_scope = payload.get("lesson_scope")
         return RecipeResult(
             status="done",
             output_path=payload.get("output_path"),
             session_id=session_id,
+            lesson=lesson.strip() if isinstance(lesson, str) and lesson.strip() else None,
+            lesson_scope=lesson_scope if lesson_scope in SCOPES else "all",
         )
 
 
@@ -363,4 +418,14 @@ _OUTPUT_CONTRACT = (
     'before you can proceed, reply with ONLY this exact JSON and no '
     'other text instead: {{"needs_clarification": true, "question": '
     '"<your question>"}}'
+)
+
+# Appended to revision prompts only. No braces on purpose: this is joined
+# onto text that has already been through str.format.
+_LESSON_CONTRACT = (
+    'If this feedback reveals a general rule that should apply to FUTURE '
+    'photos too -- not just a fix for this one -- add two fields to that '
+    'same JSON object: "lesson" (the rule, as one general sentence) and '
+    '"lesson_scope" (one of "all", "single" or "collage"). Omit both when '
+    'the feedback was specific to this photo.'
 )
