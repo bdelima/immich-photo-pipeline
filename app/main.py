@@ -12,6 +12,7 @@ from .health import HealthStore
 from .immich_client import ImmichClient, ImmichError
 from .pipeline import Pipeline
 from .recipe_runner import RecipeRunner, format_auth_instructions
+from .sharing import ensure_all_shared, resolve_user_ids
 from .secrets import resolve_secret, resolve_secret_list
 from .state import StateStore
 from .webui.server import create_app
@@ -82,7 +83,21 @@ def main() -> None:
     recipe = RecipeRunner(cfg.claude_binary, cfg.recipe_skill_path, cfg.secrets_file)
     store = StateStore(cfg.state_path)
     health = HealthStore()
-    pipeline = Pipeline(cfg, immich, recipe, store, extra_clients=extra_clients)
+    share_user_ids: list[str] = []
+    if cfg.share_albums and extra_clients:
+        share_user_ids = resolve_user_ids(immich, extra_clients)
+        # Entry queues and Review need to be visible to the other accounts
+        # (likes and comments only surface on shared albums), and so does
+        # every managed album already created. Live is only mirrored to
+        # displays, so it is left private.
+        ensure_all_shared(
+            immich,
+            [cfg.collage_album_id, cfg.wallpaper_album_id, cfg.review_album_id,
+             *store.load().watched_albums.values()],
+            share_user_ids,
+        )
+        log.info("albums shared with %d extra account(s)", len(share_user_ids))
+    pipeline = Pipeline(cfg, immich, recipe, store, extra_clients=extra_clients, share_user_ids=share_user_ids)
 
     auth_thread = threading.Thread(
         target=auth_probe_forever,

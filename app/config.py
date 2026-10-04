@@ -83,6 +83,12 @@ class Config:
     webui_host: str
     webui_port: int
 
+    # Share the pipeline's albums with the accounts behind the
+    # IMMICH_EXTRA_API_KEY lines, so those users can see them and like /
+    # comment (Immich only surfaces likes and comments on shared albums).
+    # Defaulted so code that builds a Config by hand doesn't need it.
+    share_albums: bool = True
+
     @staticmethod
     def from_env() -> "Config":
         return Config(
@@ -110,4 +116,5 @@ class Config:
             claude_auth_check_interval_seconds=_env_int("CLAUDE_AUTH_CHECK_INTERVAL_SECONDS", 300),
             webui_host=_env("WEBUI_HOST", "0.0.0.0"),
             webui_port=_env_int("WEBUI_PORT", 8080),
+            share_albums=_env("SHARE_ALBUMS", "true").strip().lower() not in ("0", "false", "no", "off"),
         )

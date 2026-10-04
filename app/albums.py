@@ -3,12 +3,8 @@ Live) by name at startup, creating any that don't exist yet. An explicit
 *_ALBUM_ID env var always wins over the name lookup, for anyone who's
 already set albums up by hand and would rather pin the id directly.
 
-Note what this does NOT do: it doesn't share a newly-created album with
-anyone. A freshly bootstrapped album is visible only to whichever Immich
-account the pipeline's API key belongs to -- sharing it with the other
-household accounts (so they can actually drop photos in, or like/comment
-on Review and the managed albums) is a one-time manual step in the Immich
-UI, same as it would be for any shared album.
+Sharing is separate: see sharing.py, which main.py runs after this to
+share the albums with the accounts behind IMMICH_EXTRA_API_KEY.
 """
 from __future__ import annotations
 

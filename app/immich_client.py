@@ -114,6 +114,25 @@ class ImmichClient:
     def list_albums(self) -> list[dict]:
         return self._request("GET", "/albums") or []
 
+    def get_my_user_id(self) -> str:
+        """The id of the account this client's API key belongs to
+        (GET /users/me)."""
+        return self._request("GET", "/users/me")["id"]
+
+    def get_album(self, album_id: str) -> dict:
+        return self._request("GET", f"/albums/{album_id}") or {}
+
+    def add_album_users(self, album_id: str, user_ids: list[str], role: str = "editor") -> None:
+        """Shares an album with other accounts (PUT /albums/{id}/users).
+        Immich rejects users who already have access, so callers should
+        pass only the missing ones -- see sharing.ensure_shared."""
+        if not user_ids:
+            return
+        self._request(
+            "PUT", f"/albums/{album_id}/users",
+            json={"albumUsers": [{"userId": uid, "role": role} for uid in user_ids]},
+        )
+
     def add_assets_to_album(self, album_id: str, asset_ids: list[str]) -> None:
         if not asset_ids:
             return
