@@ -316,7 +316,10 @@ class Pipeline:
         if intent == "delete":
             self._delete_reviewed_asset(state, lineage_id, asset.id, album_id=album_id)
             return True
-        if in_review and img.awaiting_clarification:
+        # State saved before awaiting_album existed has only the old flag,
+        # and then it always meant the album question.
+        asking_album = img.awaiting_album or (img.awaiting_clarification and not img.clarification_note)
+        if in_review and asking_album:
             answer = is_approval_reply(comment.text)
             if answer:
                 log.info("comment %s taken as the album name %r", comment.id, answer)
@@ -325,7 +328,13 @@ class Pipeline:
                 return False
         if intent == "teach":
             self._save_taught_rule(lineage_id, asset.id, album_id, verdict)
-        self._reprocess(state, lineage_id, asset.id, comment.text, target_album=album_id)
+        # A reply to the recipe's own question about this photo is the
+        # answer to it, not a new request and not an album name.
+        answering = img.awaiting_clarification and not asking_album
+        self._reprocess(
+            state, lineage_id, asset.id, comment.text, target_album=album_id,
+            answering=bool(answering),
+        )
         img.acted_comment_ids.append(comment.id)
         return False
 
@@ -448,6 +457,7 @@ class Pipeline:
         posted = self.immich.post_comment(question, album_id=self.cfg.review_album_id, asset_id=asset_id)
         self._mark_own(state.images[lineage_id], posted)
         state.images[lineage_id].awaiting_clarification = True
+        state.images[lineage_id].awaiting_album = True
 
     def _delete_reviewed_asset(self, state: PipelineState, lineage_id: str, asset_id: str, *, album_id: str) -> None:
         """A reviewer who isn't the admin Immich account -- the normal
@@ -489,6 +499,7 @@ class Pipeline:
         img = state.images[lineage_id]
         img.home = album_name
         img.awaiting_clarification = False
+        img.awaiting_album = False
         log.info("promoted %s to album %r", asset_id, album_name)
 
     # Flow 3 — a managed album: comment revises in place, unlike pulls to Review.
@@ -521,8 +532,17 @@ class Pipeline:
             except Exception:
                 log.exception("failed handling managed-album item %s; leaving it for next cycle", lineage_id)
 
-    def _reprocess(self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str) -> None:
+    def _reprocess(
+        self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str,
+        answering: bool = False,
+    ) -> None:
         img = state.images[lineage_id]
+        instruction = note
+        if answering:
+            instruction = (
+                f"{img.clarification_note} (You asked: {img.clarification_question} "
+                f"The reviewer answered: {note})"
+            )
         if img.imported:
             # No original exists to reprocess from: the "source" is the
             # already-matted image itself, and re-running the recipe on it
@@ -536,19 +556,22 @@ class Pipeline:
             )
             self._mark_own(img, posted)
             return
-        log.info("revising %s: %r", old_asset_id, note)
+        log.info("revising %s: %r", old_asset_id, instruction)
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
             src_paths = [self._download(sid, tmp_dir) for sid in img.source_asset_ids]
             out_path = os.path.join(tmp_dir, "output.jpg")
             rules = self._rules_for("collage" if len(src_paths) > 1 else "single")
-            result = self.recipe.run_collage(src_paths, out_path, note=note, rules=rules) if len(src_paths) > 1 \
-                else self.recipe.run_single(src_paths[0], out_path, note=note, rules=rules)
+            result = self.recipe.run_collage(src_paths, out_path, note=instruction, rules=rules) if len(src_paths) > 1 \
+                else self.recipe.run_single(src_paths[0], out_path, note=instruction, rules=rules)
             if result.status == "needs_clarification":
                 posted = self.immich.post_comment(result.question or "Need more information to proceed.",
                                                    album_id=target_album, asset_id=old_asset_id)
                 self._mark_own(img, posted)
                 img.awaiting_clarification = True
+                img.awaiting_album = False
+                img.clarification_note = instruction
+                img.clarification_question = result.question
                 img.claude_session_id = result.session_id
                 log.info("revising %s needs clarification; asked on the photo", old_asset_id)
                 return
@@ -567,6 +590,8 @@ class Pipeline:
             posted = self.immich.post_comment(f"Applied: {note}", album_id=target_album, asset_id=new_asset_id)
             self._mark_own(img, posted)
             img.current_asset_id = new_asset_id
+            img.awaiting_clarification = False
+            img.clarification_note = img.clarification_question = None
             log.info("revised %s -> %s", old_asset_id, new_asset_id)
             self._propose_lesson(lineage_id, new_asset_id, target_album, result)
         finally:
