@@ -16,6 +16,7 @@ from typing import Literal
 
 from .config import Config
 from .immich_client import Asset, Comment, ImmichClient, ImmichError
+from .sharing import ensure_shared
 from .recipe_runner import RecipeResult, RecipeRunner
 from .state import ImageState, PipelineState, StateStore
 
@@ -79,6 +80,7 @@ class Pipeline:
         recipe: RecipeRunner,
         store: StateStore,
         extra_clients: list[ImmichClient] = (),
+        share_user_ids: list[str] = (),
     ):
         self.cfg = config
         self.immich = immich
@@ -88,6 +90,9 @@ class Pipeline:
         # tried in order after the primary when removing an entry-queue
         # original -- see _clear_from_entry_queue for why.
         self.extra_clients = list(extra_clients)
+        # Accounts every album the pipeline creates is shared with (see
+        # sharing.py); empty means don't share.
+        self.share_user_ids = list(share_user_ids)
 
     def run_once(self) -> None:
         # Exclusive for the whole cycle so a concurrent one-off import
@@ -305,6 +310,7 @@ class Pipeline:
         if not album_id:
             album_id = self.immich.create_album(album_name)
             state.watched_albums[album_name] = album_id
+            ensure_shared(self.immich, album_id, self.share_user_ids)
         self.immich.add_assets_to_album(album_id, [asset_id])
         self.immich.remove_assets_from_album(self.cfg.review_album_id, [asset_id])
         img = state.images[lineage_id]

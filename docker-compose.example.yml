@@ -34,11 +34,13 @@ services:
       # REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
       # LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
       #
-      # These albums are shared albums once bootstrapped -- Immich still
-      # needs each household member's account invited to them by hand
-      # (Immich UI: the album's Share menu) before they can drop photos
-      # into the entry queues or like/comment on Review and the managed
-      # albums. The pipeline doesn't automate that invite step.
+      # Collage Maker, Wallpaper Maker, Review and the managed albums are
+      # shared automatically with the accounts behind each
+      # IMMICH_EXTRA_API_KEY line in the secrets file (editors: they can
+      # add photos, like and comment -- Immich only surfaces likes and
+      # comments on shared albums). Set SHARE_ALBUMS: "false" to manage
+      # sharing by hand in the Immich UI instead.
+      # SHARE_ALBUMS: "true"
       POLL_INTERVAL_SECONDS: "15"
       # Claude Pro auth: a CLAUDE_CODE_OAUTH_TOKEN= line in the shared
       # secrets file (see the volumes block) is the preferred path --

@@ -16,7 +16,7 @@ If other household members will drop photos into the entry-queue albums from the
 
 In the Immich web app, signed in as the pipeline's account: **Account Settings → API Keys → New API Key**. Give it a name like `photo-pipeline` and copy the key — Immich only shows it once.
 
-Repeat for each additional household account you want configured as an `IMMICH_EXTRA_API_KEY` fallback. That's needed because Immich won't let the pipeline's own account remove a photo from an entry-queue album unless it's the account that added it (confirmed intentional in Immich, not a bug — see `app/pipeline.py`'s `_clear_from_entry_queue`); the extra keys are tried in turn as a fallback for that one operation, nothing else.
+Repeat for each additional household account you want configured as an `IMMICH_EXTRA_API_KEY` fallback. That's needed because Immich won't let the pipeline's own account remove a photo from an entry-queue album unless it's the account that added it (confirmed intentional in Immich, not a bug — see `app/pipeline.py`'s `_clear_from_entry_queue`); the extra keys are tried in turn as a fallback for that one operation. They also tell the pipeline which accounts to share its albums with (step 6), so every household member who should take part needs one.
 
 ### 3. Create the shared secrets file
 
@@ -90,9 +90,11 @@ curl http://localhost:8096/healthz
 
 (adjust the port to match whatever you set in `docker-compose.yml`). `200` means a working Claude session; `503` means check `docker compose logs` for what's still missing.
 
-### 6. Share the albums with everyone who'll use them
+### 6. Albums are shared automatically
 
-The four albums the pipeline created are owned by its own account. Anyone else (your wife, say) who should be able to drop photos into Collage Maker/Wallpaper Maker, or like/comment on Review and the managed albums, needs to be invited to each album from the Immich UI (open the album → Share → add their account) — the pipeline doesn't automate this invite step.
+Immich only surfaces likes and comments on a *shared* album, and other accounts can't drop photos into an entry queue they can't see. So on startup the pipeline looks up which account each `IMMICH_EXTRA_API_KEY` belongs to and shares **Collage Maker, Wallpaper Maker, Review and every managed album** with them as editors (they can add photos, like and comment). Managed albums created later, by replying with a new album name, are shared when they're created. Live is left private since it only feeds your displays.
+
+This is why each household member who should take part needs an `IMMICH_EXTRA_API_KEY` line (steps 2-3), even if they never remove an original from a queue. Sharing is best-effort and safe to repeat: it only adds accounts that are missing, and a failure is logged and skipped. Two cases it can't cover: an album pinned by id that the pipeline account doesn't own (share it by hand in the Immich UI, album → Share), and an album created by the importer (step 8) — that one is shared the next time the container starts. Set `SHARE_ALBUMS=false` to turn all of this off and manage sharing yourself.
 
 ### 7. Use it
 
@@ -135,7 +137,8 @@ All settings are environment variables. Credentials can also come from the share
 | --- | --- | --- |
 | `IMMICH_URL` | *(required)* | Base URL of your Immich instance, reachable from the container. |
 | `IMMICH_API_KEY` | | The pipeline account's API key. Prefer the `IMMICH_API_KEY=` line in the secrets file; this is only the fallback. |
-| `IMMICH_EXTRA_API_KEY` | | Secrets-file only, repeatable: other household accounts' keys, tried in turn when removing an original they added from an entry queue. |
+| `IMMICH_EXTRA_API_KEY` | | Secrets-file only, repeatable: other household accounts' keys. Used to remove originals they added from an entry queue, and to work out which accounts the pipeline's albums are shared with (step 6). |
+| `SHARE_ALBUMS` | `true` | Share the pipeline's albums with the accounts behind the extra keys. Set `false` to manage sharing by hand. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | | Claude Pro token from `claude setup-token`. Prefer the secrets-file line; it's re-read periodically, so rotating it needs no restart. Never set `ANTHROPIC_API_KEY` — it would switch billing to metered API usage. |
 | `SECRETS_FILE` | `/run/secrets/immich_secrets.env` | Path of the shared secrets file inside the container. |
 | `COLLAGE_ALBUM_NAME` / `WALLPAPER_ALBUM_NAME` / `REVIEW_ALBUM_NAME` / `LIVE_ALBUM_NAME` | `Collage Maker` / `Wallpaper Maker` / `Review` / `Live` | Albums are looked up by this name at startup and created if missing. |
