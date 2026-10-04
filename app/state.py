@@ -4,6 +4,8 @@ atomically (write-temp + rename) so a crash mid-write never corrupts it.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import tempfile
@@ -28,6 +30,10 @@ class ImageState:
     # The headless Claude Code session id, so a clarification answer can
     # resume the same run instead of starting over.
     claude_session_id: str | None = None
+    # True for a photo that was already finished before the pipeline knew
+    # about it (see app/importer.py): there is no original to reprocess
+    # from, so the pipeline must never try to revise it.
+    imported: bool = False
 
 
 @dataclass
@@ -49,6 +55,23 @@ class StateStore:
     def __init__(self, path: str):
         self._path = path
         self._lock = threading.Lock()
+
+    @contextlib.contextmanager
+    def exclusive(self):
+        """Cross-process lock held around a whole load -> modify -> save
+        sequence. The poll loop's run_once() holds it for a full cycle, so
+        a separate process (the one-off importer, run via `docker exec`)
+        can't have its save overwritten by a cycle that loaded the state
+        before the import happened. flock is released by the OS if the
+        holder dies, so a crash can't wedge it."""
+        directory = os.path.dirname(self._path) or "."
+        os.makedirs(directory, exist_ok=True)
+        with open(self._path + ".lock", "a") as lock_fh:
+            fcntl.flock(lock_fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_fh, fcntl.LOCK_UN)
 
     def load(self) -> PipelineState:
         with self._lock:

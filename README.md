@@ -97,6 +97,25 @@ The four albums the pipeline created are owned by its own account. Anyone else (
 - Once something's in a managed album, **unliking** it pulls it back to Review; **commenting** on it reprocesses it in place, same as Review.
 - The small web UI at `http://<host>:<port>` (`8096` in the example compose file) picks which managed album is currently mirrored into **Live** — the one album [immich-overflight-feed/immich-frame-mirror](https://github.com/bdelima/immich-display-integrations) should point their own `ALBUM_ID` at, so your TV/display config never has to change when you switch between, say, "Everyday" and "Holiday".
 
+### 8. Import photos you already processed (optional)
+
+Photos that were finished before the pipeline existed (or outside it) can be brought under the same tracking as everything else — liking/unliking moves them between Review and managed albums, the web UI can mirror their album into Live, and a comment can delete them. There is no history to capture, so each imported photo simply becomes its own record. Run it inside the container; it's a **dry run** unless you add `--apply`:
+
+```bash
+# See what would happen (changes nothing):
+docker exec immich-photo-pipeline python -m app.import_cli --from "Screensaver" --into "Everyday"
+
+# Do it:
+docker exec immich-photo-pipeline python -m app.import_cli --from "Screensaver" --into "Everyday" --apply
+```
+
+- `--from` is an album name (or id) holding the finished photos. `--into` is a managed album name (created if it doesn't exist) or the word `review` to put them in Review for the normal like-to-promote flow.
+- Nothing is deleted, and nothing is removed from the source album — photos are only *added* to the target album, and for a managed album they are also liked (otherwise the pipeline would treat them as "pulled back" and move them to Review on the next cycle).
+- It's safe to re-run: anything already tracked is skipped, and a photo that fails (reported at the end) is skipped and can be retried.
+- If a photo can't be liked — usually because a different Immich account owns it, and Immich only lets the owner edit an asset — it is reported and skipped rather than imported half-way. Either like those photos yourself from the owning account in the Immich UI and re-run (already-liked photos need no edit), or import them into `review` instead.
+- **Imported photos can't be revised.** With no original to work from, a "make it brighter" comment would run the recipe on an already-matted image. The pipeline replies once explaining that, and leaves the photo alone. Like/unlike and "delete this" still work.
+- If you plan to mirror an album into Live afterwards, import everything you want kept *first*: picking a managed album in the web UI makes Live match it exactly.
+
 ## Releasing
 
 Releases are cut by the code session only: bump `VERSION` in a reviewed PR

@@ -90,13 +90,17 @@ class Pipeline:
         self.extra_clients = list(extra_clients)
 
     def run_once(self) -> None:
-        state = self.store.load()
-        self._flow1_wallpaper(state)
-        self._flow1_collage(state)
-        self._flow2_review(state)
-        self._flow3_managed(state)
-        self._reap_deleted(state)
-        self.store.save(state)
+        # Exclusive for the whole cycle so a concurrent one-off import
+        # (app/importer.py, a separate process) can't be overwritten by
+        # this cycle's save -- see StateStore.exclusive.
+        with self.store.exclusive():
+            state = self.store.load()
+            self._flow1_wallpaper(state)
+            self._flow1_collage(state)
+            self._flow2_review(state)
+            self._flow3_managed(state)
+            self._reap_deleted(state)
+            self.store.save(state)
 
     # Flow 1a — Wallpaper Maker: process solo, immediately.
     def _flow1_wallpaper(self, state: PipelineState) -> None:
@@ -328,6 +332,18 @@ class Pipeline:
 
     def _reprocess(self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str) -> None:
         img = state.images[lineage_id]
+        if img.imported:
+            # No original exists to reprocess from: the "source" is the
+            # already-matted image itself, and re-running the recipe on it
+            # would double-mat it and then delete the good copy. Callers
+            # mark the comment as acted on, so this is said once.
+            self.immich.post_comment(
+                "This photo was imported already finished, so there's no "
+                "original to revise it from. You can still like/unlike it to "
+                "move it between albums, or comment \"delete this\" to remove it.",
+                album_id=target_album, asset_id=old_asset_id,
+            )
+            return
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
             src_paths = [self._download(sid, tmp_dir) for sid in img.source_asset_ids]
