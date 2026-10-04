@@ -118,6 +118,9 @@ class FakeImmich:
     def list_comments(self, *, album_id, asset_id=None):
         return list(self._comments.get(asset_id, []))
 
+    def list_like_ids(self, *, album_id, asset_id):
+        return []
+
     def post_comment(self, text, *, album_id, asset_id=None):
         self.posted.append((text, album_id, asset_id))
         return f"posted-{len(self.posted)}"

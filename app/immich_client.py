@@ -223,6 +223,15 @@ class ImmichClient:
             for item in body
         ]
 
+    def list_like_ids(self, *, album_id: str, asset_id: str) -> list[str]:
+        """Ids of the "like" activities on an asset in an album. In a shared
+        album Immich's thumbs-up is an activity, not the asset's favorite
+        flag (and only an asset's owner can set that flag), so this is how
+        a household member's like on a photo shows up."""
+        params = {"type": "like", "albumId": album_id, "assetId": asset_id}
+        body = self._request("GET", "/activities", params=params) or []
+        return [item["id"] for item in body]
+
     def post_comment(self, text: str, *, album_id: str, asset_id: str | None = None) -> str:
         """Every comment the pipeline posts starts with PIPELINE_COMMENT_PREFIX,
         which is how list_comments recognizes them as its own."""

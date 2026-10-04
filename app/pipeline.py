@@ -266,9 +266,16 @@ class Pipeline:
                 comments = self.immich.list_comments(album_id=self.cfg.review_album_id, asset_id=asset.id)
                 acted = set(img.acted_comment_ids)
                 fresh = new_comments(comments, acted)
-                if asset.is_favorite and not img.awaiting_clarification:
-                    self._ask_which_album(state, lineage_id, asset.id)
-                    continue
+                if not img.awaiting_clarification:
+                    new_likes = self._new_like_ids(img, asset.id)
+                    if asset.is_favorite or new_likes:
+                        log.info(
+                            "review: like on %s (%s) -> asking which album",
+                            asset.id, "thumbs-up" if new_likes else "favorite flag",
+                        )
+                        img.acted_like_ids.extend(new_likes)
+                        self._ask_which_album(state, lineage_id, asset.id)
+                        continue
                 for comment in fresh:
                     if self._handle_fresh_comment(
                         state, lineage_id, img, asset, comment,
@@ -278,6 +285,18 @@ class Pipeline:
             except Exception:
                 log.exception("failed handling Review item %s; leaving it for next cycle", lineage_id)
 
+    def _new_like_ids(self, img: ImageState, asset_id: str) -> list[str]:
+        """Thumbs-up activities on this photo in Review that haven't been
+        acted on yet. A lookup failure just means "no likes this cycle" so
+        comments on the photo are still handled."""
+        try:
+            ids = self.immich.list_like_ids(album_id=self.cfg.review_album_id, asset_id=asset_id)
+        except ImmichError:
+            log.exception("could not look up likes on %s", asset_id)
+            return []
+        seen = set(img.acted_like_ids)
+        return [i for i in ids if i not in seen]
+
     def _handle_fresh_comment(
         self, state: PipelineState, lineage_id: str, img: ImageState, asset: Asset,
         comment: Comment, *, album_id: str, in_review: bool,
@@ -286,10 +305,12 @@ class Pipeline:
         True when the item was deleted and the caller should stop looking at
         its comments (a failed delete also stops, and is retried next cycle
         -- unchanged from before this was factored out)."""
+        log.info("comment %s on %s: %r", comment.id, asset.id, comment.text)
         if self._try_rule_commands(img, asset.id, comment, album_id):
             return False
         verdict = self.recipe.classify_comment(comment.text)
         intent = verdict.intent
+        log.info("comment %s classified as %s", comment.id, intent)
         if intent == "teach" and img.awaiting_clarification:
             intent = "revise"  # a reply to the pipeline's own question, not a new rule
         if intent == "delete":
@@ -298,6 +319,7 @@ class Pipeline:
         if in_review and img.awaiting_clarification:
             answer = is_approval_reply(comment.text)
             if answer:
+                log.info("comment %s taken as the album name %r", comment.id, answer)
                 self._promote_to_album(state, lineage_id, asset.id, answer)
                 img.acted_comment_ids.append(comment.id)
                 return False
@@ -336,6 +358,7 @@ class Pipeline:
         forget = _FORGET_RE.match(comment.text)
         if forget:
             rule_id = forget.group(1).lower()
+            log.info("comment %s: forget %s", comment.id, rule_id)
             if self.rules.set_status(rule_id, "retired"):
                 self._say(album_id, asset_id, f"Retired rule {rule_id}.")
             else:
@@ -348,6 +371,7 @@ class Pipeline:
         if pending is None:
             return False
         if _YES_RE.match(comment.text):
+            log.info("comment %s: yes to proposed rule %s", comment.id, pending.id)
             try:
                 self.rules.set_status(pending.id, "active")
             except RulesFull as exc:
@@ -355,6 +379,7 @@ class Pipeline:
             else:
                 self._say(album_id, asset_id, f"Saved rule {pending.id} ({SCOPE_LABELS[pending.scope]}). Reply \"forget {pending.id}\" to undo.")
         elif _NO_RE.match(comment.text):
+            log.info("comment %s: no to proposed rule %s", comment.id, pending.id)
             self.rules.set_status(pending.id, "retired")
             self._say(album_id, asset_id, "OK, I won't remember that.")
         else:
@@ -445,6 +470,7 @@ class Pipeline:
             except ImmichError:
                 log.exception("could not post delete-failure comment on %s", asset_id)
             return
+        log.info("deleted %s on reviewer request", asset_id)
         state.images.pop(lineage_id, None)
 
     def _promote_to_album(self, state: PipelineState, lineage_id: str, asset_id: str, album_name: str) -> None:
@@ -453,11 +479,17 @@ class Pipeline:
             album_id = self.immich.create_album(album_name)
             state.watched_albums[album_name] = album_id
             ensure_shared(self.immich, album_id, self.share_user_ids)
+        # Managed albums keep a photo only while its favorite flag is on
+        # (_flow3_managed pulls an unfavorited one back to Review). A like
+        # given as a thumbs-up activity doesn't set that flag, so set it
+        # here; the pipeline account owns the asset, so it can.
+        self.immich.set_favorite(asset_id, True)
         self.immich.add_assets_to_album(album_id, [asset_id])
         self.immich.remove_assets_from_album(self.cfg.review_album_id, [asset_id])
         img = state.images[lineage_id]
         img.home = album_name
         img.awaiting_clarification = False
+        log.info("promoted %s to album %r", asset_id, album_name)
 
     # Flow 3 — a managed album: comment revises in place, unlike pulls to Review.
     def _flow3_managed(self, state: PipelineState) -> None:
@@ -476,6 +508,7 @@ class Pipeline:
                     self.immich.add_assets_to_album(self.cfg.review_album_id, [asset.id])
                     self.immich.remove_assets_from_album(album_id, [asset.id])
                     img.home = "review"
+                    log.info("%s was unfavorited in %r -> moved back to Review", asset.id, album_id)
                     continue
                 comments = self.immich.list_comments(album_id=album_id, asset_id=asset.id)
                 fresh = new_comments(comments, set(img.acted_comment_ids))
@@ -503,6 +536,7 @@ class Pipeline:
             )
             self._mark_own(img, posted)
             return
+        log.info("revising %s: %r", old_asset_id, note)
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
             src_paths = [self._download(sid, tmp_dir) for sid in img.source_asset_ids]
@@ -516,6 +550,7 @@ class Pipeline:
                 self._mark_own(img, posted)
                 img.awaiting_clarification = True
                 img.claude_session_id = result.session_id
+                log.info("revising %s needs clarification; asked on the photo", old_asset_id)
                 return
             new_asset_id = self.immich.upload_asset(result.output_path, f"{lineage_id}.jpg")
             self.immich.add_assets_to_album(target_album, [new_asset_id])
@@ -532,6 +567,7 @@ class Pipeline:
             posted = self.immich.post_comment(f"Applied: {note}", album_id=target_album, asset_id=new_asset_id)
             self._mark_own(img, posted)
             img.current_asset_id = new_asset_id
+            log.info("revised %s -> %s", old_asset_id, new_asset_id)
             self._propose_lesson(lineage_id, new_asset_id, target_album, result)
         finally:
             _cleanup(tmp_dir)
