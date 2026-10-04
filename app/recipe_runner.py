@@ -92,7 +92,7 @@ import logging
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .rules import SCOPES, rules_prompt_block
 from .secrets import resolve_secret
@@ -223,10 +223,47 @@ class RecipeResult:
 
 @dataclass
 class CommentIntent:
-    intent: str  # "delete" | "revise" | "teach"
-    # Only set for "teach": the generalized rule and which runs it applies to.
+    """What a reviewer's comment means (see RecipeRunner.interpret_comment).
+
+    intent is one of: "revise" (change this photo), "answer" (replies to the
+    recipe's own question about the photo), "album" (names the album to put
+    it in), "delete", "teach" (a standing preference for future photos),
+    "forget" (retire a saved rule), "yes" / "no" (answers a proposed rule),
+    "unclear" (ask the reviewer to clarify) or "none" (nothing to do, e.g.
+    "thanks")."""
+    intent: str
+    # "teach": the generalized rule and which runs it applies to.
     rule: str | None = None
     scope: str = "all"
+    # "album": the album's name, resolved against the existing albums.
+    album: str | None = None
+    # "forget": the id of the rule to retire.
+    rule_id: str | None = None
+    # "unclear": the short question to ask back.
+    question: str | None = None
+
+
+@dataclass
+class CommentContext:
+    """What the interpreter needs to know besides the comment itself."""
+    # "review", or the name of the managed album the photo is in.
+    where: str = "review"
+    # The question the pipeline is waiting on: "album" (which album should
+    # this go to?), "clarification" (the recipe asked about the photo), or
+    # None.
+    awaiting: str | None = None
+    # For "clarification": the reviewer's original request and the question.
+    request: str | None = None
+    question: str | None = None
+    albums: list[str] = field(default_factory=list)
+    # Active rules as (id, text), so "stop doing the thin-bevel thing" can
+    # be matched to one.
+    rules: list[tuple[str, str]] = field(default_factory=list)
+    # A rule the pipeline proposed on this photo and is waiting on, as (id, text).
+    proposal: tuple[str, str] | None = None
+
+
+MAX_ALBUM_NAME_CHARS = 60
 
 
 class RecipeRunner:
@@ -273,79 +310,48 @@ class RecipeRunner:
         prompt = answer + " " + _OUTPUT_CONTRACT.format(output_path="the same output path as before")
         return self._invoke(prompt, resume=session_id)
 
-    def classify_comment(self, comment_text: str) -> CommentIntent:
-        """Asks Claude what a reviewer's comment means: "delete" (remove the
-        photo outright), "teach" (an explicit request that something apply
-        to FUTURE photos too, which the pipeline saves as a rule), or
-        "revise" (just change this image). This replaces a hand-written
-        regex that could only catch a short, literal list of phrasings.
-        No skill invocation: this is a plain classification prompt, not a
-        photo-mat-recipe run.
+    def interpret_comment(self, comment_text: str, ctx: CommentContext | None = None) -> CommentIntent | None:
+        """Asks Claude what a reviewer's comment means, given where the photo
+        is and what (if anything) the pipeline just asked. One call replaces
+        the old delete/revise/teach classifier and the rule that any reply
+        to the "which album?" question was an album name: the same words
+        ("yes, move it") mean different things depending on what was asked.
 
-        Defaults to "revise" on any failure, timeout, or unparseable
-        response, and whenever "teach" comes back without a usable rule:
-        misreading a comment as "revise" at worst produces a confused
-        reply the reviewer can retry, while misreading a revision as
-        "delete" would destroy the asset and as "teach" would change every
-        future photo. "teach" is deliberately conservative -- the prompt
-        requires an explicit cue like "always" or "from now on".
+        Returns None when the comment could not be interpreted at all (the
+        call failed or the reply was unusable). The caller leaves such a
+        comment for the next cycle rather than guessing, because a wrong
+        guess can delete a photo or create an album. A reply that parses
+        but doesn't make sense in context degrades to "unclear" (ask back)
+        or "revise", never to an action the context doesn't support.
 
         The model's answer is JSON nested inside the CLI's own `result`
         wrapper field, not top-level -- see module docstring, point 2."""
-        prompt = (
-            "A reviewer left this comment on a photo sitting in a review "
-            f"queue: {comment_text!r}\n\n"
-            "Decide which ONE of these the comment is:\n"
-            "- delete: asking to delete/remove/discard/trash this photo "
-            "entirely.\n"
-            "- teach: asking for something to apply to FUTURE photos as well "
-            "as this one. Choose this ONLY when the reviewer explicitly says "
-            "so, with a cue such as always, never, from now on, next time, "
-            "going forward, in general, every time, or remember. A note "
-            "about only this photo is not teach.\n"
-            "- revise: anything else -- a note on how to change this image "
-            "(cropping, color, composition, matting, ...).\n"
-            "When in doubt, choose revise. "
-            "Reply with ONLY one JSON object, no other text: "
-            '{"intent": "delete"} or {"intent": "revise"} or '
-            '{"intent": "teach", "rule": "<the rule as one general '
-            'sentence>", "scope": "all"} where scope is "collage" if the '
-            'rule only concerns multi-photo collages, "single" if it only '
-            'concerns single-photo images, otherwise "all".'
-        )
+        ctx = ctx or CommentContext()
+        prompt = _interpret_prompt(comment_text, ctx)
         token = resolve_oauth_token(self._secrets_file)
         env = os.environ.copy()
         if token:
             env[ENV_TOKEN_VAR] = token
         cmd = [self._claude_binary, "-p", prompt, "--output-format", "json",
                "--permission-mode", _PERMISSION_MODE]
-        revise = CommentIntent("revise")
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            log.exception("comment classification could not run; defaulting to revise")
-            return revise
+            log.exception("comment interpretation could not run")
+            return None
         if proc.returncode != 0:
             log.warning(
-                "comment classification exited %s; defaulting to revise: %s",
+                "comment interpretation exited %s: %s",
                 proc.returncode, (proc.stderr or "").strip()[:300],
             )
-            return revise
+            return None
         try:
             outer = json.loads(proc.stdout)
             payload = _extract_json_object(outer.get("result", ""))
-            intent = payload.get("intent")
-            if intent == "delete":
-                return CommentIntent("delete")
-            if intent == "teach":
-                rule = payload.get("rule")
-                if isinstance(rule, str) and rule.strip():
-                    scope = payload.get("scope")
-                    return CommentIntent("teach", rule=rule.strip(), scope=scope if scope in SCOPES else "all")
-                log.warning("comment classified as teach but with no usable rule; treating as revise")
+            return _intent_from_payload(payload, ctx)
         except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
-            log.warning("comment classification returned unparseable output; defaulting to revise")
-        return revise
+            log.warning("comment interpretation returned unparseable output")
+            return None
 
     def check_auth(self) -> tuple[bool, str | None]:
         """A cheap, trivial invocation used purely to confirm a session can
@@ -410,6 +416,122 @@ class RecipeRunner:
             lesson=lesson.strip() if isinstance(lesson, str) and lesson.strip() else None,
             lesson_scope=lesson_scope if lesson_scope in SCOPES else "all",
         )
+
+
+def _text(payload: dict, key: str) -> str | None:
+    value = payload.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _intent_from_payload(payload: dict, ctx: CommentContext) -> CommentIntent:
+    """Turns the model's JSON into a CommentIntent, refusing anything the
+    context doesn't support (an album with no usable name, a rule id that
+    doesn't exist, a yes with nothing proposed)."""
+    intent = payload.get("intent")
+    if intent == "delete":
+        return CommentIntent("delete")
+    if intent == "none":
+        return CommentIntent("none")
+    if intent == "teach":
+        rule = _text(payload, "rule")
+        if rule:
+            scope = payload.get("scope")
+            return CommentIntent("teach", rule=rule, scope=scope if scope in SCOPES else "all")
+        log.warning("comment interpreted as teach but with no usable rule; treating as revise")
+        return CommentIntent("revise")
+    if intent == "album":
+        name = _text(payload, "album")
+        if name:
+            name = name.strip("\"'` ")
+        if name and len(name) <= MAX_ALBUM_NAME_CHARS and "\n" not in name:
+            existing = {a.casefold(): a for a in ctx.albums}
+            return CommentIntent("album", album=existing.get(name.casefold(), name))
+        return CommentIntent("unclear", question="Which album should this go in? Reply with just the album's name.")
+    if intent == "answer":
+        return CommentIntent("answer" if ctx.awaiting == "clarification" else "revise")
+    if intent == "forget":
+        rule_id = (_text(payload, "rule_id") or "").lower()
+        if rule_id in {rid for rid, _ in ctx.rules}:
+            return CommentIntent("forget", rule_id=rule_id)
+        return CommentIntent("unclear", question='Which saved rule should I forget? Reply "forget rN" with its number.')
+    if intent in ("yes", "no"):
+        return CommentIntent(intent) if ctx.proposal else CommentIntent("none")
+    if intent == "unclear":
+        question = _text(payload, "question") or "I wasn't sure what you meant. Could you say it another way?"
+        return CommentIntent("unclear", question=question)
+    return CommentIntent("revise")
+
+
+def _interpret_prompt(comment_text: str, ctx: CommentContext) -> str:
+    where = "the Review queue" if ctx.where == "review" else f"the managed album {ctx.where!r}"
+    lines = [
+        "You interpret comments that a household member writes on a photo in "
+        "an automated photo-review pipeline. A pipeline posts edited photos "
+        f"for review; this photo is in {where}. Decide what the comment "
+        "means, using the state below. Comments are casual and may be "
+        "sloppy, so judge meaning, not keywords.",
+        "",
+        "State:",
+    ]
+    if ctx.awaiting == "album":
+        lines.append(
+            "- The pipeline just asked: \"Which album should this be promoted to?\" "
+            f"Existing albums: {', '.join(ctx.albums) or '(none yet)'}. A reply "
+            "that names, or clearly points at, an album is the answer."
+        )
+    elif ctx.awaiting == "clarification":
+        lines.append(
+            "- The pipeline just asked the reviewer about the photo itself. "
+            f"Their original request was: {ctx.request!r}. "
+            f"The question was: {ctx.question!r}."
+        )
+    else:
+        lines.append("- The pipeline is not waiting on any question.")
+    if ctx.albums and ctx.awaiting != "album":
+        lines.append(f"- Existing albums: {', '.join(ctx.albums)}.")
+    if ctx.proposal:
+        lines.append(
+            f"- The pipeline proposed saving this rule and is waiting for "
+            f"yes/no: {ctx.proposal[0]}: {ctx.proposal[1]!r}."
+        )
+    if ctx.rules:
+        lines.append("- Saved rules: " + "; ".join(f"{rid}: {text!r}" for rid, text in ctx.rules) + ".")
+    lines += [
+        "",
+        f"The comment: {comment_text!r}",
+        "",
+        "Choose exactly ONE intent:",
+        "- answer: replies to the question about the photo above (only when "
+        "that question is open and the comment answers it).",
+        "- album: asks to put/send/move this photo in an album, or names "
+        "one in reply to the album question. Give \"album\": the album's name "
+        "(use an existing album's exact name when it clearly refers to one). "
+        "Only for a photo in the Review queue.",
+        "- delete: asks to delete/remove/discard/trash this photo entirely.",
+        "- teach: asks for something to apply to FUTURE photos too, with an "
+        "explicit cue (always, never, from now on, next time, going forward, "
+        "in general, remember). Give \"rule\" (one general sentence) and "
+        "\"scope\" (\"collage\", \"single\" or \"all\"). A note about only this "
+        "photo is not teach.",
+        "- forget: asks to stop following a saved rule. Give \"rule_id\".",
+        "- yes / no: accepts / declines the proposed rule above (only when "
+        "one is waiting).",
+        "- revise: any instruction to change this image (crop, recenter, "
+        "tilt, color, mat, ...), including when it arrives while a question "
+        "is open but doesn't answer it.",
+        "- none: needs no action (thanks, \"looks great\", chatter).",
+        "- unclear: you cannot tell what is wanted, or two readings are both "
+        "plausible and a wrong guess would matter (an unwanted album, a "
+        "deletion). Give \"question\": one short question to ask the reviewer.",
+        "",
+        "Prefer unclear over guessing when the choice is between creating an "
+        "album and editing the photo, or when a deletion is possible but not "
+        "stated. Never choose album for something that reads as an edit "
+        "instruction. Reply with ONLY one JSON object, no other text, e.g. "
+        '{"intent": "revise"} or {"intent": "album", "album": "Holiday"} or '
+        '{"intent": "unclear", "question": "..."}.',
+    ]
+    return "\n".join(lines)
 
 
 _OUTPUT_CONTRACT = (
