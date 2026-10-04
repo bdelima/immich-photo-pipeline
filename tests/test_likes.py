@@ -35,6 +35,9 @@ class LikeImmich:
     def list_comments(self, *, album_id, asset_id=None):
         return []
 
+    def list_albums(self):
+        return []
+
     def list_like_ids(self, *, album_id, asset_id):
         if self.fail_likes:
             raise ImmichError("boom")

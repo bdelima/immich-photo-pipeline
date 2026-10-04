@@ -118,6 +118,9 @@ class FakeImmich:
     def list_comments(self, *, album_id, asset_id=None):
         return list(self._comments.get(asset_id, []))
 
+    def list_albums(self):
+        return list(getattr(self, "albums", []))
+
     def list_like_ids(self, *, album_id, asset_id):
         return []
 

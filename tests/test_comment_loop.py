@@ -65,6 +65,9 @@ class LoopImmich:
     def list_comments(self, *, album_id, asset_id=None):
         return list(self.comments.get(asset_id, []))
 
+    def list_albums(self):
+        return []
+
     def list_like_ids(self, *, album_id, asset_id):
         return []
 

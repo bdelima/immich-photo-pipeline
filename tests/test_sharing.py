@@ -40,6 +40,9 @@ class FakeAccount:
     def set_favorite(self, asset_id, favorite):
         pass
 
+    def list_albums(self):
+        return []
+
     def create_album(self, name):
         self.created.append(name)
         album_id = f"new-{name}"
