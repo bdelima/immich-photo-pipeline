@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.immich_client import Asset, Comment, ImmichClient
 from app.pipeline import Pipeline
-from app.recipe_runner import RecipeResult
+from app.recipe_runner import CommentIntent, RecipeResult
 from app.state import ImageState, PipelineState
 from tests.test_immich_client import RoutedSession
 
@@ -91,10 +91,10 @@ class CountingRecipe:
     def __init__(self):
         self.notes = []
 
-    def classify_comment_intent(self, text):
-        return "revise"
+    def classify_comment(self, text):
+        return CommentIntent("revise")
 
-    def run_single(self, source, output, note=None):
+    def run_single(self, source, output, note=None, **kwargs):
         self.notes.append(note)
         return RecipeResult(status="done", output_path=output)
 
