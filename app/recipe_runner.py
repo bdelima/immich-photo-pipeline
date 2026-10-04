@@ -72,11 +72,11 @@ this container's environment, Claude Code prefers it over the
 subscription token and silently switches to metered API billing instead
 of the Pro allocation. Never set that var here.
 
-Still not independently confirmed: a full end-to-end recipe run against
-a real photo (the live checks above used a trivial skill-load probe and
-a `echo hello-world` Bash smoke test, not an actual image). The
-pipeline's next real poll cycle against a real photo is the first true
-exercise of the full path end to end.
+Now confirmed end to end against a real photo: the first live recipe
+run processed an actual image successfully (and is what surfaced the
+preamble behavior in point 2). Not independently confirmed: behavior of
+`--resume` for a clarification answer against a real session, which
+rests on the documented contract only.
 """
 from __future__ import annotations
 
@@ -140,8 +140,8 @@ def _extract_json_object(text: str) -> dict:
     just a trivial one) sits between the instruction and the reply (see
     module docstring, point 2: a real recipe run prefaced its JSON with
     a one-line summary first). Tries the whole string first (the common
-    case), then falls back to the last balanced `{...}` block in it.
-    Raises ValueError if neither works, which the caller turns into a
+    case), then falls back to the span from the first `{` to the last
+    `}` in it. Raises ValueError if neither works, which the caller turns into a
     clear RuntimeError rather than silently misparsing."""
     text = text.strip()
     try:

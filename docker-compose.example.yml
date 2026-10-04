@@ -69,7 +69,17 @@ services:
       # all -- see the volumes block below. An edit to the bind-mounted
       # file takes effect on the very next poll cycle, no restart needed.
       # RECIPE_SKILL_PATH: /app/.claude/skills/photo-mat-recipe
+      #
+      # Already have finished photos to bring under tracking? Once the
+      # container is up: `docker exec immich-photo-pipeline python -m
+      # app.import_cli --from "<album>" --into "<managed album|review>"`
+      # (dry run; add --apply to do it). See the README, step 8.
     volumes:
+      # Holds state.json and the Claude Code CLI install. The container runs
+      # as uid 1000, so this host directory must be writable by it
+      # (`sudo chown -R 1000:1000 pipeline-data`); a root-owned directory
+      # fails with "mkdir: cannot create directory '/data/claude-cli':
+      # Permission denied".
       - ./pipeline-data:/data
       # The one shared secrets file for this whole Immich pipeline --
       # plain KEY=VALUE lines (see app/secrets.py), so a single
