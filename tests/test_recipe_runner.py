@@ -249,6 +249,31 @@ def test_run_single_parses_needs_clarification_from_nested_result(tmp_path):
     assert result.session_id == "sid-xyz"
 
 
+def test_run_single_tolerates_a_preamble_before_the_json(tmp_path):
+    """Reproduces the real failure seen on the first live photo run:
+    the model finished a genuine recipe run correctly but still
+    prefaced its required JSON with a one-line summary, despite being
+    told to reply with ONLY the JSON (see module docstring, point 2)."""
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
+    runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
+
+    preamble_reply = (
+        "Checked the result: the mat, bevel and subject all look right. "
+        'Finishing up now.\n\n{"output_path": "/tmp/out.jpg"}'
+    )
+
+    class FakeProc:
+        returncode = 0
+        stdout = json.dumps({"session_id": "sid-real", "result": preamble_reply})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+        result = runner.run_single("/tmp/in.jpg", "/tmp/out.jpg")
+    assert result.status == "done"
+    assert result.output_path == "/tmp/out.jpg"
+
+
 def test_run_single_raises_when_result_is_not_the_required_json(tmp_path):
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")

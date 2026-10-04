@@ -25,9 +25,19 @@ assumptions turned out wrong, all confirmed and fixed here):
    model's actual answer is plain text inside `result`. Confirmed live:
    asking the CLI to "reply with ONLY this exact JSON and no other
    text: {...}" makes it put exactly that JSON string (nothing else)
-   into `result`, every time tried -- so the fix is to put the output
-   contract in the prompt ourselves and parse `result` as a second,
-   nested JSON document, not to expect the outer wrapper to carry it.
+   into `result` for a short, trivial prompt -- so the fix is to put
+   the output contract in the prompt ourselves and parse `result` as a
+   second, nested JSON document, not to expect the outer wrapper to
+   carry it. Confirmed live AGAIN, the hard way, on the first real
+   recipe run against an actual photo: compliance isn't perfect once a
+   real multi-step task sits between the instruction and the reply --
+   the model finished a real recipe run correctly but still prefaced
+   its required JSON with a one-line summary ("Checked the result: the
+   mat, bevel and subject all look right. Finishing up now.\n\n{...}"),
+   despite the explicit "ONLY this exact JSON" instruction. `_invoke`
+   therefore extracts the trailing `{...}` block from `result` rather
+   than requiring the whole string to be pure JSON -- see
+   `_extract_json_object`.
 3. Headless `-p` mode has no human to answer a permission prompt, so
    any tool call needing one (confirmed: a plain `Bash` call) is
    silently denied (`permission_denials` in the JSON output) rather
@@ -73,6 +83,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -120,6 +131,27 @@ def _skill_root(skill_path: str) -> str:
     if len(parents) >= 3 and parents[-2] == "skills" and parents[-3] == ".claude":
         return os.sep.join(parents[:-3]) or os.sep
     return os.path.dirname(normalized) or "."
+
+
+def _extract_json_object(text: str) -> dict:
+    """Parses the required JSON reply out of a model response that may
+    not be PURELY that JSON, despite being told to reply with "ONLY"
+    it -- confirmed live that compliance slips once a real task (not
+    just a trivial one) sits between the instruction and the reply (see
+    module docstring, point 2: a real recipe run prefaced its JSON with
+    a one-line summary first). Tries the whole string first (the common
+    case), then falls back to the last balanced `{...}` block in it.
+    Raises ValueError if neither works, which the caller turns into a
+    clear RuntimeError rather than silently misparsing."""
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError("no JSON object found in reply")
+    return json.loads(match.group(0))
 
 
 def format_auth_instructions(secrets_file: str) -> str:
@@ -257,9 +289,9 @@ class RecipeRunner:
             return "revise"
         try:
             outer = json.loads(proc.stdout)
-            payload = json.loads(outer.get("result", ""))
+            payload = _extract_json_object(outer.get("result", ""))
             intent = payload.get("intent")
-        except (json.JSONDecodeError, AttributeError, TypeError):
+        except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
             log.warning("comment-intent classification returned unparseable output; defaulting to revise")
             return "revise"
         return "delete" if intent == "delete" else "revise"
@@ -307,8 +339,8 @@ class RecipeRunner:
         session_id = outer.get("session_id")
         raw_result = outer.get("result", "")
         try:
-            payload = json.loads(raw_result)
-        except (json.JSONDecodeError, TypeError):
+            payload = _extract_json_object(raw_result)
+        except (json.JSONDecodeError, ValueError, TypeError):
             raise RuntimeError(
                 f"recipe did not reply with the required JSON contract: {raw_result[:500]!r}"
             )
