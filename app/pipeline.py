@@ -266,9 +266,12 @@ class Pipeline:
                 comments = self.immich.list_comments(album_id=self.cfg.review_album_id, asset_id=asset.id)
                 acted = set(img.acted_comment_ids)
                 fresh = new_comments(comments, acted)
-                if asset.is_favorite and not img.awaiting_clarification:
-                    self._ask_which_album(state, lineage_id, asset.id)
-                    continue
+                if not img.awaiting_clarification:
+                    new_likes = self._new_like_ids(img, asset.id)
+                    if asset.is_favorite or new_likes:
+                        img.acted_like_ids.extend(new_likes)
+                        self._ask_which_album(state, lineage_id, asset.id)
+                        continue
                 for comment in fresh:
                     if self._handle_fresh_comment(
                         state, lineage_id, img, asset, comment,
@@ -277,6 +280,18 @@ class Pipeline:
                         break
             except Exception:
                 log.exception("failed handling Review item %s; leaving it for next cycle", lineage_id)
+
+    def _new_like_ids(self, img: ImageState, asset_id: str) -> list[str]:
+        """Thumbs-up activities on this photo in Review that haven't been
+        acted on yet. A lookup failure just means "no likes this cycle" so
+        comments on the photo are still handled."""
+        try:
+            ids = self.immich.list_like_ids(album_id=self.cfg.review_album_id, asset_id=asset_id)
+        except ImmichError:
+            log.exception("could not look up likes on %s", asset_id)
+            return []
+        seen = set(img.acted_like_ids)
+        return [i for i in ids if i not in seen]
 
     def _handle_fresh_comment(
         self, state: PipelineState, lineage_id: str, img: ImageState, asset: Asset,
@@ -453,6 +468,11 @@ class Pipeline:
             album_id = self.immich.create_album(album_name)
             state.watched_albums[album_name] = album_id
             ensure_shared(self.immich, album_id, self.share_user_ids)
+        # Managed albums keep a photo only while its favorite flag is on
+        # (_flow3_managed pulls an unfavorited one back to Review). A like
+        # given as a thumbs-up activity doesn't set that flag, so set it
+        # here; the pipeline account owns the asset, so it can.
+        self.immich.set_favorite(asset_id, True)
         self.immich.add_assets_to_album(album_id, [asset_id])
         self.immich.remove_assets_from_album(self.cfg.review_album_id, [asset_id])
         img = state.images[lineage_id]
