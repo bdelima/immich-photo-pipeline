@@ -83,7 +83,7 @@ services:
       # fails with "mkdir: cannot create directory '/data/claude-cli':
       # Permission denied".
       - ./pipeline-data:/data
-      # The one shared secrets file for this whole Immich pipeline -- 
+      # The one shared secrets file for this whole Immich pipeline --
       # plain KEY=VALUE lines (see app/secrets.py), so a single
       # bind-mounted file carries every credential instead of one file
       # per credential. This component reads exactly three keys from it
