@@ -321,7 +321,17 @@ class Pipeline:
             img.acted_comment_ids.append(comment.id)
             return False
         if intent == "album":
-            if in_review:
+            if in_review and self._is_reserved_album_name(verdict.album):
+                self._say(
+                    album_id, asset.id,
+                    f"\"{verdict.album}\" is one of this pipeline's own albums. Which other album should this go in?",
+                )
+            elif in_review:
+                exists = self._find_album(state, verdict.album) is not None
+                self._ack(
+                    img, album_id, asset.id,
+                    f"Got it: moving this to the album \"{verdict.album}\"" + ("." if exists else " (creating it)."),
+                )
                 self._promote_to_album(state, lineage_id, asset.id, verdict.album)
             else:
                 self._say(
@@ -343,6 +353,12 @@ class Pipeline:
         # A reply to the recipe's own question about this photo is the
         # answer to it, not a new request and not an album name.
         answering = intent == "answer" and bool(img.clarification_note)
+        if not img.imported:
+            self._ack(
+                img, album_id, asset.id,
+                ("Got it: applying your answer and re-running. " if answering else f"Got it: revising ({_short(comment.text)}). ")
+                + "This takes a minute or two.",
+            )
         self._reprocess(
             state, lineage_id, asset.id, comment.text, target_album=album_id,
             answering=answering,
@@ -376,10 +392,52 @@ class Pipeline:
             awaiting=awaiting,
             request=img.clarification_note,
             question=img.clarification_question,
-            albums=list(state.watched_albums),
+            albums=self._album_names(state),
             rules=rules,
             proposal=proposal,
         )
+
+    def _reserved_album_ids(self) -> set[str]:
+        """The pipeline's own queues; a photo is never promoted into these."""
+        names = ("collage_album_id", "wallpaper_album_id", "review_album_id", "live_album_id")
+        return {v for v in (getattr(self.cfg, n, "") for n in names) if v}
+
+    def _album_names(self, state: PipelineState) -> list[str]:
+        """Albums a photo can be promoted to: the ones the pipeline already
+        manages, then any others in Immich (made by hand, say), minus the
+        pipeline's own queues. A lookup failure just means the managed ones."""
+        names = list(state.watched_albums)
+        try:
+            reserved = self._reserved_album_ids()
+            seen = {n.casefold() for n in names}
+            for album in self.immich.list_albums():
+                name = album.get("albumName") or ""
+                if name and album.get("id") not in reserved and name.casefold() not in seen:
+                    names.append(name)
+                    seen.add(name.casefold())
+        except ImmichError:
+            log.exception("could not list Immich albums for the interpreter")
+        return names
+
+    def _find_album(self, state: PipelineState, name: str) -> tuple[str, str] | None:
+        """(actual name, id) of the album `name` refers to, ignoring case:
+        one the pipeline already manages, else an existing Immich album.
+        None means there is no such album and a new one is warranted. An
+        Immich error propagates: guessing "no such album" would create a
+        duplicate of one that exists."""
+        wanted = name.casefold()
+        for known, album_id in state.watched_albums.items():
+            if known.casefold() == wanted:
+                return known, album_id
+        reserved = self._reserved_album_ids()
+        for album in self.immich.list_albums():
+            if (album.get("albumName") or "").casefold() == wanted and album.get("id") not in reserved:
+                return album["albumName"], album["id"]
+        return None
+
+    def _is_reserved_album_name(self, name: str) -> bool:
+        names = ("collage_album_name", "wallpaper_album_name", "review_album_name", "live_album_name")
+        return name.casefold() in {getattr(self.cfg, n, "").casefold() for n in names if getattr(self.cfg, n, "")}
 
     # ---- reviewer-taught rules (see app/rules.py) -------------------------
 
@@ -388,6 +446,17 @@ class Pipeline:
             self.immich.post_comment(text, album_id=album_id, asset_id=asset_id)
         except ImmichError:
             log.exception("could not post comment on %s", asset_id)
+
+    def _ack(self, img: ImageState, album_id: str, asset_id: str, text: str) -> None:
+        """Tells the reviewer, on the photo, what the pipeline understood and
+        is about to do, so they aren't left guessing while a slow step (a
+        recipe run takes a minute or more) is under way."""
+        try:
+            posted = self.immich.post_comment(text, album_id=album_id, asset_id=asset_id)
+        except ImmichError:
+            log.exception("could not post acknowledgment on %s", asset_id)
+            return
+        self._mark_own(img, posted)
 
     def _rules_for(self, kind: str) -> list[str]:
         """Active rule texts for a run of `kind` ("single" or "collage").
@@ -539,11 +608,19 @@ class Pipeline:
         state.images.pop(lineage_id, None)
 
     def _promote_to_album(self, state: PipelineState, lineage_id: str, asset_id: str, album_name: str) -> None:
-        album_id = state.watched_albums.get(album_name)
-        if not album_id:
+        found = self._find_album(state, album_name)
+        if found:
+            # An album that already exists -- one the pipeline manages, or
+            # one made by hand in Immich -- is used as is, never duplicated.
+            album_name, album_id = found
+            if album_name not in state.watched_albums:
+                state.watched_albums[album_name] = album_id
+                log.info("adopted existing album %r (%s)", album_name, album_id)
+        else:
             album_id = self.immich.create_album(album_name)
             state.watched_albums[album_name] = album_id
             ensure_shared(self.immich, album_id, self.share_user_ids)
+            log.info("created album %r (%s)", album_name, album_id)
         # Managed albums keep a photo only while its favorite flag is on
         # (_flow3_managed pulls an unfavorited one back to Review). A like
         # given as a thumbs-up activity doesn't set that flag, so set it
@@ -663,6 +740,11 @@ class Pipeline:
             if img.current_asset_id and img.current_asset_id not in all_current_ids:
                 if img.home not in ("collage_maker_wait", "awaiting_clarification"):
                     del state.images[lineage_id]
+
+
+def _short(text: str, limit: int = 80) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _cleanup(tmp_dir: str) -> None:
