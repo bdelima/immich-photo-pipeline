@@ -98,7 +98,7 @@ class CountingRecipe:
     def __init__(self):
         self.notes = []
 
-    def classify_comment(self, text):
+    def interpret_comment(self, text, ctx=None):
         return CommentIntent("revise")
 
     def run_single(self, source, output, note=None, **kwargs):

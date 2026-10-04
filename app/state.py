@@ -31,6 +31,14 @@ class ImageState:
     acted_like_ids: list[str] = field(default_factory=list)
     # Set while the pipeline is waiting on a reply to its own question.
     awaiting_clarification: bool = False
+    # Which question that is. True: "which album should this go to?" (the
+    # next comment is an album name). False with awaiting_clarification set:
+    # the recipe asked about the photo itself (the next comment answers it).
+    awaiting_album: bool = False
+    # For a recipe question: the request that prompted it and the question,
+    # so the reply can be applied as one instruction.
+    clarification_note: str | None = None
+    clarification_question: str | None = None
     # The headless Claude Code session id, so a clarification answer can
     # resume the same run instead of starting over.
     claude_session_id: str | None = None
