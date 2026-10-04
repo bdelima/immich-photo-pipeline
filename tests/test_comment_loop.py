@@ -65,6 +65,9 @@ class LoopImmich:
     def list_comments(self, *, album_id, asset_id=None):
         return list(self.comments.get(asset_id, []))
 
+    def list_albums(self):
+        return []
+
     def list_like_ids(self, *, album_id, asset_id):
         return []
 
@@ -98,7 +101,7 @@ class CountingRecipe:
     def __init__(self):
         self.notes = []
 
-    def classify_comment(self, text):
+    def interpret_comment(self, text, ctx=None):
         return CommentIntent("revise")
 
     def run_single(self, source, output, note=None, **kwargs):

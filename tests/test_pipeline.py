@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.immich_client import Asset, Comment
-from app.pipeline import is_approval_reply, is_portrait, new_comments, plan_collage_maker
+from app.pipeline import is_portrait, new_comments, plan_collage_maker
 
 
 def make_asset(asset_id, orientation=None, favorite=False):
@@ -52,8 +52,3 @@ def test_new_comments_excludes_acted_on_and_own_posts():
     ]
     fresh = new_comments(comments, acted_on={"2"})
     assert [c.id for c in fresh] == ["1"]
-
-
-def test_is_approval_reply_rejects_blank():
-    assert is_approval_reply("  ") is None
-    assert is_approval_reply("Holiday") == "Holiday"

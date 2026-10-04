@@ -118,6 +118,9 @@ class FakeImmich:
     def list_comments(self, *, album_id, asset_id=None):
         return list(self._comments.get(asset_id, []))
 
+    def list_albums(self):
+        return list(getattr(self, "albums", []))
+
     def list_like_ids(self, *, album_id, asset_id):
         return []
 
@@ -152,7 +155,7 @@ class FakeRecipe:
         self.single_calls = []
         self.collage_calls = []
 
-    def classify_comment(self, text):
+    def interpret_comment(self, text, ctx=None):
         return self.verdict
 
     def run_single(self, source, output, note=None, rules=None):
@@ -248,14 +251,13 @@ def test_rules_reach_the_recipe_by_scope(tmp_path):
     assert recipe.collage_calls[0]["rules"] == ["everything", "only collages"]
 
 
-def test_teach_while_awaiting_an_album_answer_is_just_the_answer(tmp_path):
-    verdict = CommentIntent("teach", rule="Always Holiday.", scope="all")
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=verdict)
+def test_an_album_answer_saves_no_rule(tmp_path):
+    pipeline, immich, recipe, rules = make(tmp_path, verdict=CommentIntent("album", album="Holiday"))
     pipeline._promote_to_album = lambda state, lineage_id, asset_id, name: setattr(state.images[lineage_id], "home", name)
     state, img = state_with(awaiting=True)
     handle(pipeline, state, img, "always Holiday")
     assert rules.all() == []
-    assert img.home == "always Holiday"
+    assert img.home == "Holiday"
 
 
 def test_taught_rule_on_an_imported_photo_is_saved_but_the_photo_is_not_revised(tmp_path):
@@ -294,7 +296,7 @@ def test_forget_retires_a_rule_without_a_claude_call(tmp_path):
     state, img = state_with()
 
     class Boom:
-        def classify_comment(self, text):
+        def interpret_comment(self, text, ctx=None):
             raise AssertionError("must not call Claude for 'forget'")
 
     pipeline.recipe = Boom()
@@ -328,7 +330,7 @@ def test_revision_that_returns_a_lesson_proposes_it_and_yes_saves_it(tmp_path):
 
     # a "yes" on the new asset activates it, with no Claude call
     img.current_asset_id = "new-asset"
-    pipeline.recipe = SimpleNamespace(classify_comment=lambda t: (_ for _ in ()).throw(AssertionError("no call")))
+    pipeline.recipe = SimpleNamespace(interpret_comment=lambda t, c=None: (_ for _ in ()).throw(AssertionError("no call")))
     pipeline._handle_fresh_comment(
         state, "L", img, asset("new-asset"), comment("Yes!", "c2"), album_id="review-album", in_review=True,
     )

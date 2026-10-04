@@ -17,7 +17,7 @@ from typing import Literal
 
 from .config import Config
 from .immich_client import Asset, Comment, ImmichClient, ImmichError
-from .recipe_runner import CommentIntent, RecipeResult, RecipeRunner
+from .recipe_runner import CommentContext, CommentIntent, RecipeResult, RecipeRunner
 from .rules import SCOPE_LABELS, RulesFull, RulesStore
 from .sharing import ensure_shared
 from .state import ImageState, PipelineState, StateStore
@@ -75,14 +75,6 @@ def new_comments(comments: list[Comment], acted_on: set[str]) -> list[Comment]:
     acknowledgment or question the pipeline posted must never be read back
     as an instruction to itself)."""
     return [c for c in comments if c.id not in acted_on and not c.is_own]
-
-
-def is_approval_reply(text: str) -> str | None:
-    """A reply to the 'which album' question. Returns the named album, or
-    None if this doesn't look like an answer to that question (e.g. it's a
-    revision comment instead, which the caller should treat as one)."""
-    stripped = text.strip()
-    return stripped if stripped else None
 
 
 # ---- execution ------------------------------------------------------------
@@ -308,26 +300,144 @@ class Pipeline:
         log.info("comment %s on %s: %r", comment.id, asset.id, comment.text)
         if self._try_rule_commands(img, asset.id, comment, album_id):
             return False
-        verdict = self.recipe.classify_comment(comment.text)
+        ctx = self._comment_context(state, img, asset.id, album_id, in_review)
+        verdict = self.recipe.interpret_comment(comment.text, ctx)
+        if verdict is None:
+            # Couldn't interpret it at all (Claude unreachable, unusable
+            # reply). Leave the comment unhandled so the next cycle retries,
+            # rather than guess: a wrong guess can delete or create things.
+            log.warning("comment %s could not be interpreted; will retry next cycle", comment.id)
+            return False
         intent = verdict.intent
-        log.info("comment %s classified as %s", comment.id, intent)
-        if intent == "teach" and img.awaiting_clarification:
-            intent = "revise"  # a reply to the pipeline's own question, not a new rule
+        log.info("comment %s interpreted as %s", comment.id, intent)
         if intent == "delete":
             self._delete_reviewed_asset(state, lineage_id, asset.id, album_id=album_id)
             return True
-        if in_review and img.awaiting_clarification:
-            answer = is_approval_reply(comment.text)
-            if answer:
-                log.info("comment %s taken as the album name %r", comment.id, answer)
-                self._promote_to_album(state, lineage_id, asset.id, answer)
-                img.acted_comment_ids.append(comment.id)
-                return False
+        if intent == "none":
+            img.acted_comment_ids.append(comment.id)
+            return False
+        if intent == "unclear":
+            self._say(album_id, asset.id, verdict.question or "I wasn't sure what you meant. Could you say it another way?")
+            img.acted_comment_ids.append(comment.id)
+            return False
+        if intent == "album":
+            if in_review and self._is_reserved_album_name(verdict.album):
+                self._say(
+                    album_id, asset.id,
+                    f"\"{verdict.album}\" is one of this pipeline's own albums. Which other album should this go in?",
+                )
+            elif in_review:
+                exists = self._find_album(state, verdict.album) is not None
+                self._ack(
+                    img, album_id, asset.id,
+                    f"Got it: moving this to the album \"{verdict.album}\"" + ("." if exists else " (creating it)."),
+                )
+                self._promote_to_album(state, lineage_id, asset.id, verdict.album)
+            else:
+                self._say(
+                    album_id, asset.id,
+                    "To move this to a different album, unlike it first so it goes back to Review, then like it again.",
+                )
+            img.acted_comment_ids.append(comment.id)
+            return False
+        if intent == "forget":
+            self._forget_rule(album_id, asset.id, verdict.rule_id)
+            img.acted_comment_ids.append(comment.id)
+            return False
+        if intent in ("yes", "no"):
+            self._answer_proposal(album_id, asset.id, yes=intent == "yes")
+            img.acted_comment_ids.append(comment.id)
+            return False
         if intent == "teach":
             self._save_taught_rule(lineage_id, asset.id, album_id, verdict)
-        self._reprocess(state, lineage_id, asset.id, comment.text, target_album=album_id)
+        # A reply to the recipe's own question about this photo is the
+        # answer to it, not a new request and not an album name.
+        answering = intent == "answer" and bool(img.clarification_note)
+        if not img.imported:
+            self._ack(
+                img, album_id, asset.id,
+                ("Got it: applying your answer and re-running. " if answering else f"Got it: revising ({_short(comment.text)}). ")
+                + "This takes a minute or two.",
+            )
+        self._reprocess(
+            state, lineage_id, asset.id, comment.text, target_album=album_id,
+            answering=answering,
+        )
         img.acted_comment_ids.append(comment.id)
         return False
+
+    def _comment_context(
+        self, state: PipelineState, img: ImageState, asset_id: str, album_id: str, in_review: bool,
+    ) -> CommentContext:
+        """What the interpreter should know about this photo's situation."""
+        awaiting = None
+        # State saved before awaiting_album existed has only the old flag,
+        # and then it always meant the album question.
+        if img.awaiting_album or (img.awaiting_clarification and not img.clarification_note):
+            awaiting = "album"
+        elif img.awaiting_clarification:
+            awaiting = "clarification"
+        rules: list[tuple[str, str]] = []
+        proposal = None
+        if self.rules is not None:
+            try:
+                rules = [(r.id, r.text) for r in self.rules.all() if r.status == "active"]
+                pending = self.rules.pending_proposal_for(asset_id)
+                proposal = (pending.id, pending.text) if pending else None
+            except Exception:
+                log.exception("could not read reviewer rules for the interpreter")
+        return CommentContext(
+            where="review" if in_review else next(
+                (name for name, aid in state.watched_albums.items() if aid == album_id), "an album"),
+            awaiting=awaiting,
+            request=img.clarification_note,
+            question=img.clarification_question,
+            albums=self._album_names(state),
+            rules=rules,
+            proposal=proposal,
+        )
+
+    def _reserved_album_ids(self) -> set[str]:
+        """The pipeline's own queues; a photo is never promoted into these."""
+        names = ("collage_album_id", "wallpaper_album_id", "review_album_id", "live_album_id")
+        return {v for v in (getattr(self.cfg, n, "") for n in names) if v}
+
+    def _album_names(self, state: PipelineState) -> list[str]:
+        """Albums a photo can be promoted to: the ones the pipeline already
+        manages, then any others in Immich (made by hand, say), minus the
+        pipeline's own queues. A lookup failure just means the managed ones."""
+        names = list(state.watched_albums)
+        try:
+            reserved = self._reserved_album_ids()
+            seen = {n.casefold() for n in names}
+            for album in self.immich.list_albums():
+                name = album.get("albumName") or ""
+                if name and album.get("id") not in reserved and name.casefold() not in seen:
+                    names.append(name)
+                    seen.add(name.casefold())
+        except ImmichError:
+            log.exception("could not list Immich albums for the interpreter")
+        return names
+
+    def _find_album(self, state: PipelineState, name: str) -> tuple[str, str] | None:
+        """(actual name, id) of the album `name` refers to, ignoring case:
+        one the pipeline already manages, else an existing Immich album.
+        None means there is no such album and a new one is warranted. An
+        Immich error propagates: guessing "no such album" would create a
+        duplicate of one that exists."""
+        wanted = name.casefold()
+        for known, album_id in state.watched_albums.items():
+            if known.casefold() == wanted:
+                return known, album_id
+        reserved = self._reserved_album_ids()
+        for album in self.immich.list_albums():
+            if (album.get("albumName") or "").casefold() == wanted and album.get("id") not in reserved:
+                return album["albumName"], album["id"]
+        return None
+
+    def _is_reserved_album_name(self, name: str) -> bool:
+        names = ("collage_album_name", "wallpaper_album_name", "review_album_name", "live_album_name")
+        return name.casefold() in {getattr(self.cfg, n, "").casefold() for n in names if getattr(self.cfg, n, "")}
 
     # ---- reviewer-taught rules (see app/rules.py) -------------------------
 
@@ -336,6 +446,17 @@ class Pipeline:
             self.immich.post_comment(text, album_id=album_id, asset_id=asset_id)
         except ImmichError:
             log.exception("could not post comment on %s", asset_id)
+
+    def _ack(self, img: ImageState, album_id: str, asset_id: str, text: str) -> None:
+        """Tells the reviewer, on the photo, what the pipeline understood and
+        is about to do, so they aren't left guessing while a slow step (a
+        recipe run takes a minute or more) is under way."""
+        try:
+            posted = self.immich.post_comment(text, album_id=album_id, asset_id=asset_id)
+        except ImmichError:
+            log.exception("could not post acknowledgment on %s", asset_id)
+            return
+        self._mark_own(img, posted)
 
     def _rules_for(self, kind: str) -> list[str]:
         """Active rule texts for a run of `kind` ("single" or "collage").
@@ -357,12 +478,8 @@ class Pipeline:
             return False
         forget = _FORGET_RE.match(comment.text)
         if forget:
-            rule_id = forget.group(1).lower()
-            log.info("comment %s: forget %s", comment.id, rule_id)
-            if self.rules.set_status(rule_id, "retired"):
-                self._say(album_id, asset_id, f"Retired rule {rule_id}.")
-            else:
-                self._say(album_id, asset_id, f"I don't have a rule {rule_id}.")
+            log.info("comment %s: forget %s", comment.id, forget.group(1))
+            self._forget_rule(album_id, asset_id, forget.group(1).lower())
             img.acted_comment_ids.append(comment.id)
             return True
         if img.awaiting_clarification:
@@ -371,21 +488,37 @@ class Pipeline:
         if pending is None:
             return False
         if _YES_RE.match(comment.text):
-            log.info("comment %s: yes to proposed rule %s", comment.id, pending.id)
-            try:
-                self.rules.set_status(pending.id, "active")
-            except RulesFull as exc:
-                self._say(album_id, asset_id, f"I couldn't save that as a rule: {exc}. Retire one first (reply \"forget rN\" on any photo, or use the web UI).")
-            else:
-                self._say(album_id, asset_id, f"Saved rule {pending.id} ({SCOPE_LABELS[pending.scope]}). Reply \"forget {pending.id}\" to undo.")
+            yes = True
         elif _NO_RE.match(comment.text):
-            log.info("comment %s: no to proposed rule %s", comment.id, pending.id)
-            self.rules.set_status(pending.id, "retired")
-            self._say(album_id, asset_id, "OK, I won't remember that.")
+            yes = False
         else:
             return False
+        log.info("comment %s: %s to proposed rule %s", comment.id, "yes" if yes else "no", pending.id)
+        self._answer_proposal(album_id, asset_id, yes=yes)
         img.acted_comment_ids.append(comment.id)
         return True
+
+    def _forget_rule(self, album_id: str, asset_id: str, rule_id: str | None) -> None:
+        if self.rules is not None and rule_id and self.rules.set_status(rule_id, "retired"):
+            self._say(album_id, asset_id, f"Retired rule {rule_id}.")
+        else:
+            self._say(album_id, asset_id, f"I don't have a rule {rule_id}.")
+
+    def _answer_proposal(self, album_id: str, asset_id: str, *, yes: bool) -> None:
+        """Applies a yes/no to the rule proposed on this photo."""
+        pending = self.rules.pending_proposal_for(asset_id) if self.rules is not None else None
+        if pending is None:
+            return
+        if not yes:
+            self.rules.set_status(pending.id, "retired")
+            self._say(album_id, asset_id, "OK, I won't remember that.")
+            return
+        try:
+            self.rules.set_status(pending.id, "active")
+        except RulesFull as exc:
+            self._say(album_id, asset_id, f"I couldn't save that as a rule: {exc}. Retire one first (reply \"forget rN\" on any photo, or use the web UI).")
+        else:
+            self._say(album_id, asset_id, f"Saved rule {pending.id} ({SCOPE_LABELS[pending.scope]}). Reply \"forget {pending.id}\" to undo.")
 
     def _save_taught_rule(self, lineage_id: str, asset_id: str, album_id: str, verdict: CommentIntent) -> None:
         """Saves a rule the reviewer explicitly taught, and says exactly what
@@ -448,10 +581,11 @@ class Pipeline:
         posted = self.immich.post_comment(question, album_id=self.cfg.review_album_id, asset_id=asset_id)
         self._mark_own(state.images[lineage_id], posted)
         state.images[lineage_id].awaiting_clarification = True
+        state.images[lineage_id].awaiting_album = True
 
     def _delete_reviewed_asset(self, state: PipelineState, lineage_id: str, asset_id: str, *, album_id: str) -> None:
         """A reviewer who isn't the admin Immich account -- the normal
-        case; see RecipeRunner.classify_comment, which decides
+        case; see RecipeRunner.interpret_comment, which decides
         whether a comment means this -- can't delete an asset themselves
         from the Immich UI, so this lets them ask the pipeline to do it
         via comment instead. No extra_clients fallback needed here, unlike
@@ -474,11 +608,19 @@ class Pipeline:
         state.images.pop(lineage_id, None)
 
     def _promote_to_album(self, state: PipelineState, lineage_id: str, asset_id: str, album_name: str) -> None:
-        album_id = state.watched_albums.get(album_name)
-        if not album_id:
+        found = self._find_album(state, album_name)
+        if found:
+            # An album that already exists -- one the pipeline manages, or
+            # one made by hand in Immich -- is used as is, never duplicated.
+            album_name, album_id = found
+            if album_name not in state.watched_albums:
+                state.watched_albums[album_name] = album_id
+                log.info("adopted existing album %r (%s)", album_name, album_id)
+        else:
             album_id = self.immich.create_album(album_name)
             state.watched_albums[album_name] = album_id
             ensure_shared(self.immich, album_id, self.share_user_ids)
+            log.info("created album %r (%s)", album_name, album_id)
         # Managed albums keep a photo only while its favorite flag is on
         # (_flow3_managed pulls an unfavorited one back to Review). A like
         # given as a thumbs-up activity doesn't set that flag, so set it
@@ -489,6 +631,7 @@ class Pipeline:
         img = state.images[lineage_id]
         img.home = album_name
         img.awaiting_clarification = False
+        img.awaiting_album = False
         log.info("promoted %s to album %r", asset_id, album_name)
 
     # Flow 3 — a managed album: comment revises in place, unlike pulls to Review.
@@ -521,8 +664,17 @@ class Pipeline:
             except Exception:
                 log.exception("failed handling managed-album item %s; leaving it for next cycle", lineage_id)
 
-    def _reprocess(self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str) -> None:
+    def _reprocess(
+        self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str,
+        answering: bool = False,
+    ) -> None:
         img = state.images[lineage_id]
+        instruction = note
+        if answering:
+            instruction = (
+                f"{img.clarification_note} (You asked: {img.clarification_question} "
+                f"The reviewer answered: {note})"
+            )
         if img.imported:
             # No original exists to reprocess from: the "source" is the
             # already-matted image itself, and re-running the recipe on it
@@ -536,19 +688,22 @@ class Pipeline:
             )
             self._mark_own(img, posted)
             return
-        log.info("revising %s: %r", old_asset_id, note)
+        log.info("revising %s: %r", old_asset_id, instruction)
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
             src_paths = [self._download(sid, tmp_dir) for sid in img.source_asset_ids]
             out_path = os.path.join(tmp_dir, "output.jpg")
             rules = self._rules_for("collage" if len(src_paths) > 1 else "single")
-            result = self.recipe.run_collage(src_paths, out_path, note=note, rules=rules) if len(src_paths) > 1 \
-                else self.recipe.run_single(src_paths[0], out_path, note=note, rules=rules)
+            result = self.recipe.run_collage(src_paths, out_path, note=instruction, rules=rules) if len(src_paths) > 1 \
+                else self.recipe.run_single(src_paths[0], out_path, note=instruction, rules=rules)
             if result.status == "needs_clarification":
                 posted = self.immich.post_comment(result.question or "Need more information to proceed.",
                                                    album_id=target_album, asset_id=old_asset_id)
                 self._mark_own(img, posted)
                 img.awaiting_clarification = True
+                img.awaiting_album = False
+                img.clarification_note = instruction
+                img.clarification_question = result.question
                 img.claude_session_id = result.session_id
                 log.info("revising %s needs clarification; asked on the photo", old_asset_id)
                 return
@@ -567,6 +722,9 @@ class Pipeline:
             posted = self.immich.post_comment(f"Applied: {note}", album_id=target_album, asset_id=new_asset_id)
             self._mark_own(img, posted)
             img.current_asset_id = new_asset_id
+            img.awaiting_clarification = False
+            img.awaiting_album = False
+            img.clarification_note = img.clarification_question = None
             log.info("revised %s -> %s", old_asset_id, new_asset_id)
             self._propose_lesson(lineage_id, new_asset_id, target_album, result)
         finally:
@@ -582,6 +740,11 @@ class Pipeline:
             if img.current_asset_id and img.current_asset_id not in all_current_ids:
                 if img.home not in ("collage_maker_wait", "awaiting_clarification"):
                     del state.images[lineage_id]
+
+
+def _short(text: str, limit: int = 80) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _cleanup(tmp_dir: str) -> None:
