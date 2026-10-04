@@ -12,6 +12,7 @@ from .health import HealthStore
 from .immich_client import ImmichClient, ImmichError
 from .pipeline import Pipeline
 from .recipe_runner import RecipeRunner, format_auth_instructions
+from .rules import RulesStore
 from .sharing import ensure_all_shared, resolve_user_ids
 from .secrets import resolve_secret, resolve_secret_list
 from .state import StateStore
@@ -82,6 +83,7 @@ def main() -> None:
     log.info("resolved core albums; %d extra Immich account(s) configured", len(extra_clients))
     recipe = RecipeRunner(cfg.claude_binary, cfg.recipe_skill_path, cfg.secrets_file)
     store = StateStore(cfg.state_path)
+    rules = RulesStore(cfg.rules_path)
     health = HealthStore()
     share_user_ids: list[str] = []
     if cfg.share_albums and extra_clients:
@@ -97,7 +99,7 @@ def main() -> None:
             share_user_ids,
         )
         log.info("albums shared with %d extra account(s)", len(share_user_ids))
-    pipeline = Pipeline(cfg, immich, recipe, store, extra_clients=extra_clients, share_user_ids=share_user_ids)
+    pipeline = Pipeline(cfg, immich, recipe, store, extra_clients=extra_clients, share_user_ids=share_user_ids, rules=rules)
 
     auth_thread = threading.Thread(
         target=auth_probe_forever,
@@ -112,7 +114,7 @@ def main() -> None:
     poll_thread.start()
     log.info("poll loop started (interval=%ss)", cfg.poll_interval_seconds)
 
-    app = create_app(cfg, immich, store, health)
+    app = create_app(cfg, immich, store, health, rules=rules)
     app.run(host=cfg.webui_host, port=cfg.webui_port)
 
 

@@ -102,7 +102,7 @@ def test_check_auth_fails_when_subprocess_exits_nonzero(tmp_path):
     assert "Invalid or expired token" in err
 
 
-def test_classify_comment_intent_returns_delete_on_delete_verdict(tmp_path):
+def test_classify_comment_returns_delete_on_delete_verdict(tmp_path):
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
     runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
@@ -113,15 +113,15 @@ def test_classify_comment_intent_returns_delete_on_delete_verdict(tmp_path):
         stderr = ""
 
     with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
-        intent = runner.classify_comment_intent("delete this please")
-    assert intent == "delete"
+        intent = runner.classify_comment("delete this please")
+    assert intent.intent == "delete"
     # No skill invocation: this is a plain classification prompt, not a
     # photo-mat-recipe run, so the prompt isn't slash-prefixed.
     cmd = mock_run.call_args.args[0]
     assert not cmd[2].startswith("/photo-mat-recipe")
 
 
-def test_classify_comment_intent_returns_revise_on_revise_verdict(tmp_path):
+def test_classify_comment_returns_revise_on_revise_verdict(tmp_path):
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
     runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
@@ -132,11 +132,11 @@ def test_classify_comment_intent_returns_revise_on_revise_verdict(tmp_path):
         stderr = ""
 
     with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment_intent("make the mat darker")
-    assert intent == "revise"
+        intent = runner.classify_comment("make the mat darker")
+    assert intent.intent == "revise"
 
 
-def test_classify_comment_intent_defaults_to_revise_on_nonzero_exit(tmp_path):
+def test_classify_comment_defaults_to_revise_on_nonzero_exit(tmp_path):
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
     runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
@@ -147,11 +147,11 @@ def test_classify_comment_intent_defaults_to_revise_on_nonzero_exit(tmp_path):
         stderr = "something went wrong"
 
     with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment_intent("delete this")
-    assert intent == "revise"
+        intent = runner.classify_comment("delete this")
+    assert intent.intent == "revise"
 
 
-def test_classify_comment_intent_defaults_to_revise_on_unparseable_outer(tmp_path):
+def test_classify_comment_defaults_to_revise_on_unparseable_outer(tmp_path):
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
     runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
@@ -162,11 +162,11 @@ def test_classify_comment_intent_defaults_to_revise_on_unparseable_outer(tmp_pat
         stderr = ""
 
     with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment_intent("delete this")
-    assert intent == "revise"
+        intent = runner.classify_comment("delete this")
+    assert intent.intent == "revise"
 
 
-def test_classify_comment_intent_defaults_to_revise_on_unparseable_nested_result(tmp_path):
+def test_classify_comment_defaults_to_revise_on_unparseable_nested_result(tmp_path):
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
     runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
@@ -177,11 +177,11 @@ def test_classify_comment_intent_defaults_to_revise_on_unparseable_nested_result
         stderr = ""
 
     with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment_intent("delete this")
-    assert intent == "revise"
+        intent = runner.classify_comment("delete this")
+    assert intent.intent == "revise"
 
 
-def test_classify_comment_intent_defaults_to_revise_on_timeout(tmp_path):
+def test_classify_comment_defaults_to_revise_on_timeout(tmp_path):
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
     runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
@@ -189,8 +189,8 @@ def test_classify_comment_intent_defaults_to_revise_on_timeout(tmp_path):
     import subprocess as subprocess_module
 
     with patch("app.recipe_runner.subprocess.run", side_effect=subprocess_module.TimeoutExpired(cmd="claude", timeout=60)):
-        intent = runner.classify_comment_intent("delete this")
-    assert intent == "revise"
+        intent = runner.classify_comment("delete this")
+    assert intent.intent == "revise"
 
 
 def test_run_single_invokes_as_slash_command_with_no_skill_flag(tmp_path):
@@ -310,3 +310,125 @@ def test_resume_does_not_slash_prefix_the_prompt(tmp_path):
     assert not cmd[2].startswith("/photo-mat-recipe")
     assert "crop tighter" in cmd[2]
     assert "--resume" in cmd and "sid-abc" in cmd
+
+
+def _runner(tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
+    return RecipeRunner("claude", SKILL_PATH, str(secrets_file))
+
+
+def _classify(runner, result_obj):
+    class FakeProc:
+        returncode = 0
+        stdout = _wrapped(result_obj)
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+        return runner.classify_comment("always keep collages balanced")
+
+
+def test_classify_comment_teach_returns_rule_and_scope(tmp_path):
+    verdict = _classify(_runner(tmp_path), {"intent": "teach", "rule": " Keep collage items balanced by size. ", "scope": "collage"})
+    assert (verdict.intent, verdict.rule, verdict.scope) == ("teach", "Keep collage items balanced by size.", "collage")
+
+
+def test_classify_comment_teach_with_unknown_scope_defaults_to_all(tmp_path):
+    verdict = _classify(_runner(tmp_path), {"intent": "teach", "rule": "Prefer thin bevels.", "scope": "portraits"})
+    assert (verdict.intent, verdict.scope) == ("teach", "all")
+
+
+def test_classify_comment_teach_without_a_rule_is_treated_as_revise(tmp_path):
+    for payload in ({"intent": "teach"}, {"intent": "teach", "rule": "   "}, {"intent": "teach", "rule": 5}):
+        verdict = _classify(_runner(tmp_path), payload)
+        assert (verdict.intent, verdict.rule) == ("revise", None)
+
+
+def test_classify_comment_prompt_is_conservative_about_teach(tmp_path):
+    runner = _runner(tmp_path)
+
+    class FakeProc:
+        returncode = 0
+        stdout = _wrapped({"intent": "revise"})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
+        runner.classify_comment("too pink")
+    prompt = mock_run.call_args.args[0][2]
+    assert "When in doubt, choose revise" in prompt
+    assert "always" in prompt and "from now on" in prompt
+
+
+def _run_prompt(runner, method, *args, **kwargs):
+    class FakeProc:
+        returncode = 0
+        stdout = _wrapped({"output_path": "/tmp/out.jpg"})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
+        getattr(runner, method)(*args, **kwargs)
+    return mock_run.call_args.args[0][2]
+
+
+def test_run_single_without_rules_or_note_has_no_preferences_block_or_lesson_contract(tmp_path):
+    prompt = _run_prompt(_runner(tmp_path), "run_single", "/tmp/in.jpg", "/tmp/out.jpg")
+    assert "reviewer_preferences" not in prompt
+    assert '"lesson"' not in prompt
+
+
+def test_run_single_injects_rules_before_the_note_and_contract(tmp_path):
+    prompt = _run_prompt(
+        _runner(tmp_path), "run_single", "/tmp/in.jpg", "/tmp/out.jpg",
+        note="darker mat", rules=["Prefer thin bevels.", "Never use pure white mats."],
+    )
+    block_at = prompt.index("<reviewer_preferences>")
+    assert "- Prefer thin bevels." in prompt and "- Never use pure white mats." in prompt
+    assert block_at < prompt.index("darker mat") < prompt.index("reply with ONLY this exact JSON")
+    assert prompt.index("</reviewer_preferences>") < prompt.index("darker mat")
+
+
+def test_run_collage_injects_rules_too(tmp_path):
+    prompt = _run_prompt(
+        _runner(tmp_path), "run_collage", ["/tmp/a.jpg", "/tmp/b.jpg"], "/tmp/out.jpg",
+        rules=["Keep items balanced by size."],
+    )
+    assert "- Keep items balanced by size." in prompt
+
+
+def test_lesson_contract_is_only_offered_on_a_revision(tmp_path):
+    runner = _runner(tmp_path)
+    first = _run_prompt(runner, "run_single", "/tmp/in.jpg", "/tmp/out.jpg")
+    revision = _run_prompt(runner, "run_single", "/tmp/in.jpg", "/tmp/out.jpg", note="darker")
+    assert '"lesson"' not in first
+    assert '"lesson"' in revision and '"lesson_scope"' in revision
+
+
+def test_run_single_parses_a_proposed_lesson(tmp_path):
+    runner = _runner(tmp_path)
+
+    class FakeProc:
+        returncode = 0
+        stdout = _wrapped({"output_path": "/tmp/out.jpg", "lesson": " Use a thinner bevel on dark photos. ", "lesson_scope": "single"})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+        result = runner.run_single("/tmp/in.jpg", "/tmp/out.jpg", note="bevel too heavy")
+    assert (result.lesson, result.lesson_scope) == ("Use a thinner bevel on dark photos.", "single")
+
+
+def test_run_single_lesson_defaults_when_absent_or_malformed(tmp_path):
+    runner = _runner(tmp_path)
+    for payload, expected in (
+        ({"output_path": "/tmp/out.jpg"}, (None, "all")),
+        ({"output_path": "/tmp/out.jpg", "lesson": "  "}, (None, "all")),
+        ({"output_path": "/tmp/out.jpg", "lesson": 3}, (None, "all")),
+        ({"output_path": "/tmp/out.jpg", "lesson": "A rule.", "lesson_scope": "weird"}, ("A rule.", "all")),
+    ):
+        class FakeProc:
+            returncode = 0
+            stdout = _wrapped(payload)
+            stderr = ""
+
+        with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+            result = runner.run_single("/tmp/in.jpg", "/tmp/out.jpg", note="x")
+        assert (result.lesson, result.lesson_scope) == expected

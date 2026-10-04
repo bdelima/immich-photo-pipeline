@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>immich-photo-pipeline - recipe rules</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.1rem; }
+    h2 { font-size: 1rem; margin-top: 2rem; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #ddd; vertical-align: top; }
+    .scope { color: #555; white-space: nowrap; }
+    .muted { color: #555; }
+    input[type=text] { width: 100%; box-sizing: border-box; }
+    select, button, input { font-size: 1rem; padding: 0.35rem; }
+    #status { color: #555; }
+  </style>
+</head>
+<body>
+  <p><a href="/">&larr; Live album</a></p>
+  <h1>Recipe rules</h1>
+  <p class="muted">Standing preferences added to every photo the pipeline processes. Reviewers can teach one by commenting
+    (e.g. "from now on, keep collage items balanced by size"), or you can add one here. At most {{ limit }} can be active.</p>
+
+  <h2>Active ({{ active|length }} of {{ limit }})</h2>
+  {% if active %}
+  <table>
+    <tr><th>Id</th><th>Applies to</th><th>Rule</th><th></th></tr>
+    {% for r in active %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td class="scope">{{ scope_labels[r.scope] }}</td>
+      <td>{{ r.text }}</td>
+      <td><button data-act="retire" data-id="{{ r.id }}">Retire</button></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No rules yet.</p>
+  {% endif %}
+
+  {% if proposed %}
+  <h2>Proposed by the recipe (not in use until saved)</h2>
+  <table>
+    <tr><th>Id</th><th>Applies to</th><th>Rule</th><th></th></tr>
+    {% for r in proposed %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td class="scope">{{ scope_labels[r.scope] }}</td>
+      <td>{{ r.text }}</td>
+      <td>
+        <button data-act="activate" data-id="{{ r.id }}">Save</button>
+        <button data-act="retire" data-id="{{ r.id }}">Dismiss</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <h2>Add a rule</h2>
+  <form id="add-form">
+    <p>
+      <select name="scope">
+        {% for s in scopes %}<option value="{{ s }}">{{ scope_labels[s] }}</option>{% endfor %}
+      </select>
+    </p>
+    <p><input type="text" name="text" maxlength="300" placeholder="e.g. Keep collage items balanced by size" required></p>
+    <button type="submit">Add rule</button>
+  </form>
+  <p id="status"></p>
+
+  <script>
+    const status = document.getElementById("status");
+    async function call(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json();
+      if (res.ok) { location.reload(); } else { status.textContent = "Error: " + data.error; }
+    }
+    document.querySelectorAll("button[data-act]").forEach((b) => {
+      b.addEventListener("click", () => call(`/api/rules/${b.dataset.id}/${b.dataset.act}`));
+    });
+    document.getElementById("add-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      call("/api/rules", { text: f.get("text"), scope: f.get("scope") });
+    });
+  </script>
+</body>
+</html>

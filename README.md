@@ -106,6 +106,7 @@ This is why each household member who should take part needs an `IMMICH_EXTRA_AP
   - **Comment** "delete this" (or similar — a quick Claude call reads the intent, not an exact phrase) to remove it outright. This works even for a non-admin reviewer account, since the pipeline's own account owns everything it uploads to Review.
 - Once something's in a managed album, **unliking** it pulls it back to Review; **commenting** on it reprocesses it in place, same as Review.
 - Already have finished photos from before the pipeline? See step 8 to import them so they're tracked like everything else.
+- Want a fix to stick for every future photo, not just this one? Say so in the comment ("from now on…") — see step 9.
 - The small web UI at `http://<host>:<port>` (`8096` in the example compose file) picks which managed album is currently mirrored into **Live** — the one album [immich-overflight-feed/immich-frame-mirror](https://github.com/bdelima/immich-display-integrations) should point their own `ALBUM_ID` at, so your TV/display config never has to change when you switch between, say, "Everyday" and "Holiday".
 
 ### 8. Import photos you already processed (optional)
@@ -129,6 +130,37 @@ docker exec immich-photo-pipeline python -m app.import_cli --from "Screensaver" 
 - **Imported photos can't be revised.** With no original to work from, a "make it brighter" comment would run the recipe on an already-matted image. The pipeline replies once explaining that, and leaves the photo alone. Like/unlike and "delete this" still work.
 - If you plan to mirror an album into Live afterwards, import everything you want kept *first*: picking a managed album in the web UI makes Live match it exactly.
 
+### 9. Teach the recipe (optional)
+
+The recipe doesn't have to stay as it was written. Reviewers can teach it standing rules, which are added to the prompt on every photo the pipeline processes from then on. They are kept in a file on the `/data` volume (`rules.json`), not written into `photo-mat-recipe/SKILL.md` — the skill is baked into the image, so edits there would vanish on the next update, and nothing would review them.
+
+**Teaching one by comment.** Comment on a photo in Review or a managed album with an explicit cue — *always*, *never*, *from now on*, *next time*, *going forward*, *in general*, *every time*, *remember*:
+
+> For collages, always keep the items balanced by size.
+
+The photo is revised as usual, and the pipeline replies with exactly what it saved, so a wrong paraphrase is obvious:
+
+> Saved rule r7 (collages): "Keep collage items balanced by size." Reply "forget r7" to undo.
+
+A comment without such a cue ("too pink") is only ever a revision of that one photo. If the classifier is unsure, it chooses revision.
+
+**Rules can apply to everything, to single photos only, or to collages only.** The pipeline picks the scope from what you said ("for collages…"); you can also add or fix one on the rules page. A collage-only rule is never added to a single-photo run, and vice versa.
+
+**The recipe can suggest rules too.** After revising a photo from your feedback, the recipe may notice that the feedback was really a general rule. It then asks, on the revised photo:
+
+> Should I remember this for future single photos? "Use a thinner bevel on dark photos." Reply "yes" to save it as rule r8, or "no" to drop it.
+
+Nothing is used until you reply `yes`; a `no`, or no reply, leaves it unused. Only a bare yes/no counts, so "yes but make it darker" is treated as a normal revision. There is at most one open suggestion per photo.
+
+**Managing rules.** Reply `forget r7` on any photo, or open the web UI's **Recipe rules** page (`/rules`, linked from the main page) to add a rule, retire one, or save/dismiss a suggestion. At most 20 rules can be active at once, each up to 300 characters on one line (angle brackets are dropped); when the limit is reached, retire one first.
+
+Things worth knowing:
+
+- Rules apply to photos processed or revised *after* they're saved. To re-apply one to a photo that's already finished, comment on it.
+- Imported photos (step 8) can't be revised, but a rule taught in a comment on one is still saved and used for future photos.
+- Rules are plain data in the prompt: they're framed as preferences about the image only and can't change the reply format, file access, or the other instructions.
+- To make a rule permanent, fold it into `photo-mat-recipe/SKILL.md` through a normal reviewed change and retire it here.
+
 ## Configuration reference
 
 All settings are environment variables. Credentials can also come from the shared secrets file (see step 3), which wins over the matching variable when both are set.
@@ -146,6 +178,7 @@ All settings are environment variables. Credentials can also come from the share
 | `POLL_INTERVAL_SECONDS` | `15` | How often the poll loop runs. |
 | `CLAUDE_AUTH_CHECK_INTERVAL_SECONDS` | `300` | How often the Claude session is re-probed (each probe is a real, trivial invocation, so this is slower than polling). |
 | `STATE_PATH` | `/data/state.json` | Where tracking state is kept; keep `/data` on a persistent volume. |
+| `RULES_PATH` | `/data/rules.json` | Where reviewer-taught recipe rules are kept (step 9); keep it on the persistent `/data` volume. |
 | `RECIPE_SKILL_PATH` | `/app/.claude/skills/photo-mat-recipe` | The recipe skill. Claude Code only discovers skills from a `.claude/skills/<name>/` folder, so any override must keep that shape. |
 | `CLAUDE_BINARY` | `claude` | The Claude Code executable to run. |
 | `WEBUI_HOST` / `WEBUI_PORT` | `0.0.0.0` / `8080` | Where the web UI and `/healthz` listen inside the container. |
@@ -164,6 +197,7 @@ One thing to know before you do: choosing a managed album in the web UI makes **
 - **The first start looks stuck "installing Claude Code CLI"** — it installs from npm into `/data` once and needs outbound network for that; later starts reuse it. An `npm WARN EBADENGINE` about the Node version is harmless.
 - **A photo sits in an entry queue after being processed** — Immich only lets the account that added a photo remove it from an album. If none of the configured keys is that account, the pipeline leaves a comment saying the original is safe to delete by hand; it won't be reprocessed either way.
 - **A comment on an imported photo gets a reply saying it can't be revised** — expected; see step 8.
+- **A rule I taught isn't being applied** — check the **Recipe rules** page: it must be *active* (not a suggestion waiting for a "yes"), and its scope must match the run (a collage-only rule never reaches a single photo). Rules take effect on the next processing or revision of a photo, not retroactively.
 
 ## Releasing
 
