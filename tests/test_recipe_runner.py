@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.recipe_runner import ENV_TOKEN_VAR, RecipeRunner, format_auth_instructions, resolve_oauth_token
+from app.recipe_runner import ENV_TOKEN_VAR, CommentContext, RecipeRunner, format_auth_instructions, resolve_oauth_token
 
 SKILL_PATH = "/app/.claude/skills/photo-mat-recipe"
 
@@ -100,97 +100,6 @@ def test_check_auth_fails_when_subprocess_exits_nonzero(tmp_path):
         ok, err = runner.check_auth()
     assert ok is False
     assert "Invalid or expired token" in err
-
-
-def test_classify_comment_returns_delete_on_delete_verdict(tmp_path):
-    secrets_file = tmp_path / "secrets.env"
-    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
-    runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
-
-    class FakeProc:
-        returncode = 0
-        stdout = _wrapped({"intent": "delete"})
-        stderr = ""
-
-    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
-        intent = runner.classify_comment("delete this please")
-    assert intent.intent == "delete"
-    # No skill invocation: this is a plain classification prompt, not a
-    # photo-mat-recipe run, so the prompt isn't slash-prefixed.
-    cmd = mock_run.call_args.args[0]
-    assert not cmd[2].startswith("/photo-mat-recipe")
-
-
-def test_classify_comment_returns_revise_on_revise_verdict(tmp_path):
-    secrets_file = tmp_path / "secrets.env"
-    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
-    runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
-
-    class FakeProc:
-        returncode = 0
-        stdout = _wrapped({"intent": "revise"})
-        stderr = ""
-
-    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment("make the mat darker")
-    assert intent.intent == "revise"
-
-
-def test_classify_comment_defaults_to_revise_on_nonzero_exit(tmp_path):
-    secrets_file = tmp_path / "secrets.env"
-    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
-    runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
-
-    class FakeProc:
-        returncode = 1
-        stdout = ""
-        stderr = "something went wrong"
-
-    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment("delete this")
-    assert intent.intent == "revise"
-
-
-def test_classify_comment_defaults_to_revise_on_unparseable_outer(tmp_path):
-    secrets_file = tmp_path / "secrets.env"
-    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
-    runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
-
-    class FakeProc:
-        returncode = 0
-        stdout = "not json at all"
-        stderr = ""
-
-    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment("delete this")
-    assert intent.intent == "revise"
-
-
-def test_classify_comment_defaults_to_revise_on_unparseable_nested_result(tmp_path):
-    secrets_file = tmp_path / "secrets.env"
-    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
-    runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
-
-    class FakeProc:
-        returncode = 0
-        stdout = json.dumps({"session_id": "sid", "result": "not json either"})
-        stderr = ""
-
-    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        intent = runner.classify_comment("delete this")
-    assert intent.intent == "revise"
-
-
-def test_classify_comment_defaults_to_revise_on_timeout(tmp_path):
-    secrets_file = tmp_path / "secrets.env"
-    secrets_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=a-real-token\n")
-    runner = RecipeRunner("claude", SKILL_PATH, str(secrets_file))
-
-    import subprocess as subprocess_module
-
-    with patch("app.recipe_runner.subprocess.run", side_effect=subprocess_module.TimeoutExpired(cmd="claude", timeout=60)):
-        intent = runner.classify_comment("delete this")
-    assert intent.intent == "revise"
 
 
 def test_run_single_invokes_as_slash_command_with_no_skill_flag(tmp_path):
@@ -318,45 +227,14 @@ def _runner(tmp_path):
     return RecipeRunner("claude", SKILL_PATH, str(secrets_file))
 
 
-def _classify(runner, result_obj):
+def _interpret(runner, result_obj, ctx=None, text="a comment"):
     class FakeProc:
         returncode = 0
         stdout = _wrapped(result_obj)
         stderr = ""
 
     with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
-        return runner.classify_comment("always keep collages balanced")
-
-
-def test_classify_comment_teach_returns_rule_and_scope(tmp_path):
-    verdict = _classify(_runner(tmp_path), {"intent": "teach", "rule": " Keep collage items balanced by size. ", "scope": "collage"})
-    assert (verdict.intent, verdict.rule, verdict.scope) == ("teach", "Keep collage items balanced by size.", "collage")
-
-
-def test_classify_comment_teach_with_unknown_scope_defaults_to_all(tmp_path):
-    verdict = _classify(_runner(tmp_path), {"intent": "teach", "rule": "Prefer thin bevels.", "scope": "portraits"})
-    assert (verdict.intent, verdict.scope) == ("teach", "all")
-
-
-def test_classify_comment_teach_without_a_rule_is_treated_as_revise(tmp_path):
-    for payload in ({"intent": "teach"}, {"intent": "teach", "rule": "   "}, {"intent": "teach", "rule": 5}):
-        verdict = _classify(_runner(tmp_path), payload)
-        assert (verdict.intent, verdict.rule) == ("revise", None)
-
-
-def test_classify_comment_prompt_is_conservative_about_teach(tmp_path):
-    runner = _runner(tmp_path)
-
-    class FakeProc:
-        returncode = 0
-        stdout = _wrapped({"intent": "revise"})
-        stderr = ""
-
-    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
-        runner.classify_comment("too pink")
-    prompt = mock_run.call_args.args[0][2]
-    assert "When in doubt, choose revise" in prompt
-    assert "always" in prompt and "from now on" in prompt
+        return runner.interpret_comment(text, ctx)
 
 
 def _run_prompt(runner, method, *args, **kwargs):
@@ -432,3 +310,116 @@ def test_run_single_lesson_defaults_when_absent_or_malformed(tmp_path):
         with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
             result = runner.run_single("/tmp/in.jpg", "/tmp/out.jpg", note="x")
         assert (result.lesson, result.lesson_scope) == expected
+
+
+# ---- interpret_comment ----------------------------------------------------
+
+
+def _bad_proc(returncode=0, stdout="not json at all"):
+    class FakeProc:
+        pass
+    FakeProc.returncode, FakeProc.stdout, FakeProc.stderr = returncode, stdout, "boom"
+    return FakeProc()
+
+
+def test_interpret_returns_none_when_the_call_fails_or_is_unreadable(tmp_path):
+    runner = _runner(tmp_path)
+    import subprocess as sp
+    for proc in (_bad_proc(1, ""), _bad_proc(0, "not json at all"), _bad_proc(0, json.dumps({"result": "nope"}))):
+        with patch("app.recipe_runner.subprocess.run", return_value=proc):
+            assert runner.interpret_comment("anything") is None
+    with patch("app.recipe_runner.subprocess.run", side_effect=sp.TimeoutExpired(cmd="claude", timeout=60)):
+        assert runner.interpret_comment("anything") is None
+
+
+def test_interpret_delete_none_and_unknown(tmp_path):
+    assert _interpret(_runner(tmp_path), {"intent": "delete"}).intent == "delete"
+    assert _interpret(_runner(tmp_path), {"intent": "none"}).intent == "none"
+    assert _interpret(_runner(tmp_path), {"intent": "something-new"}).intent == "revise"
+
+
+def test_interpret_teach_returns_rule_and_scope(tmp_path):
+    verdict = _interpret(_runner(tmp_path), {"intent": "teach", "rule": " Keep collage items balanced by size. ", "scope": "collage"})
+    assert (verdict.intent, verdict.rule, verdict.scope) == ("teach", "Keep collage items balanced by size.", "collage")
+    verdict = _interpret(_runner(tmp_path), {"intent": "teach", "rule": "Prefer thin bevels.", "scope": "portraits"})
+    assert verdict.scope == "all"
+
+
+def test_interpret_teach_without_a_rule_is_treated_as_revise(tmp_path):
+    for payload in ({"intent": "teach"}, {"intent": "teach", "rule": "   "}, {"intent": "teach", "rule": 5}):
+        assert _interpret(_runner(tmp_path), payload).intent == "revise"
+
+
+def test_interpret_album_uses_the_existing_albums_exact_name(tmp_path):
+    ctx = CommentContext(awaiting="album", albums=["Holiday", "Everyday"])
+    verdict = _interpret(_runner(tmp_path), {"intent": "album", "album": "  'holiday' "}, ctx)
+    assert (verdict.intent, verdict.album) == ("album", "Holiday")
+    assert _interpret(_runner(tmp_path), {"intent": "album", "album": "Brand New"}, ctx).album == "Brand New"
+
+
+def test_interpret_album_without_a_usable_name_asks_back(tmp_path):
+    for payload in ({"intent": "album"}, {"intent": "album", "album": "x" * 200}, {"intent": "album", "album": "two\nlines"}):
+        verdict = _interpret(_runner(tmp_path), payload)
+        assert verdict.intent == "unclear" and "album" in verdict.question
+
+
+def test_interpret_answer_only_counts_when_a_question_is_open(tmp_path):
+    asked = CommentContext(awaiting="clarification", request="recenter", question="On what?")
+    assert _interpret(_runner(tmp_path), {"intent": "answer"}, asked).intent == "answer"
+    assert _interpret(_runner(tmp_path), {"intent": "answer"}, CommentContext()).intent == "revise"
+
+
+def test_interpret_forget_needs_a_known_rule(tmp_path):
+    ctx = CommentContext(rules=[("r3", "Prefer thin bevels.")])
+    assert _interpret(_runner(tmp_path), {"intent": "forget", "rule_id": "R3"}, ctx).rule_id == "r3"
+    verdict = _interpret(_runner(tmp_path), {"intent": "forget", "rule_id": "r9"}, ctx)
+    assert verdict.intent == "unclear" and "forget rN" in verdict.question
+
+
+def test_interpret_yes_no_need_a_proposal(tmp_path):
+    ctx = CommentContext(proposal=("r1", "Use thin bevels."))
+    assert _interpret(_runner(tmp_path), {"intent": "yes"}, ctx).intent == "yes"
+    assert _interpret(_runner(tmp_path), {"intent": "no"}, ctx).intent == "no"
+    assert _interpret(_runner(tmp_path), {"intent": "yes"}, CommentContext()).intent == "none"
+
+
+def test_interpret_unclear_carries_its_question_or_a_default(tmp_path):
+    verdict = _interpret(_runner(tmp_path), {"intent": "unclear", "question": "Album or crop change?"})
+    assert (verdict.intent, verdict.question) == ("unclear", "Album or crop change?")
+    assert _interpret(_runner(tmp_path), {"intent": "unclear"}).question
+
+
+def test_interpret_prompt_carries_the_context(tmp_path):
+    ctx = CommentContext(
+        where="Holiday", awaiting="clarification", request="recenter this", question="On the dog or the house?",
+        albums=["Holiday", "Everyday"], rules=[("r2", "Prefer thin bevels.")], proposal=("r5", "Keep mats pale."),
+    )
+
+    class FakeProc:
+        returncode = 0
+        stdout = _wrapped({"intent": "revise"})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
+        _runner(tmp_path).interpret_comment("yes move its crop", ctx)
+    cmd = mock_run.call_args.args[0]
+    assert not cmd[2].startswith("/photo-mat-recipe")  # a plain prompt, not a recipe run
+    prompt = cmd[2]
+    for needle in ("yes move its crop", "recenter this", "On the dog or the house?", "Holiday, Everyday",
+                   "r2", "Prefer thin bevels.", "r5", "Keep mats pale.", "managed album 'Holiday'"):
+        assert needle in prompt
+    assert "Prefer unclear over guessing" in prompt and "Never choose album for something that reads as an edit" in prompt
+
+
+def test_interpret_prompt_for_the_album_question(tmp_path):
+    ctx = CommentContext(awaiting="album", albums=["Holiday"])
+
+    class FakeProc:
+        returncode = 0
+        stdout = _wrapped({"intent": "album", "album": "Holiday"})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()) as mock_run:
+        _runner(tmp_path).interpret_comment("holiday please", ctx)
+    prompt = mock_run.call_args.args[0][2]
+    assert "Which album should this be promoted to?" in prompt and "Holiday" in prompt and "the Review queue" in prompt
