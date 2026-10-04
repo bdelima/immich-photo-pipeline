@@ -112,12 +112,17 @@ class Pipeline:
         # this cycle's save -- see StateStore.exclusive.
         with self.store.exclusive():
             state = self.store.load()
-            self._flow1_wallpaper(state)
-            self._flow1_collage(state)
-            self._flow2_review(state)
-            self._flow3_managed(state)
-            self._reap_deleted(state)
-            self.store.save(state)
+            try:
+                self._flow1_wallpaper(state)
+                self._flow1_collage(state)
+                self._flow2_review(state)
+                self._flow3_managed(state)
+                self._reap_deleted(state)
+            finally:
+                # Save even when a step fails: what earlier steps already
+                # did on Immich (comments answered, albums chosen) must be
+                # remembered, or the next cycle would redo it.
+                self.store.save(state)
 
     # Flow 1a — Wallpaper Maker: process solo, immediately.
     def _flow1_wallpaper(self, state: PipelineState) -> None:
@@ -636,17 +641,25 @@ class Pipeline:
 
     # Flow 3 — a managed album: comment revises in place, unlike pulls to Review.
     def _flow3_managed(self, state: PipelineState) -> None:
+        listings: dict[str, dict[str, Asset] | None] = {}
         for lineage_id, img in list(state.images.items()):
             if img.home in ("review", "awaiting_clarification", "collage_maker_wait") or not img.current_asset_id:
                 continue
             album_id = state.watched_albums.get(img.home)
             if not album_id:
                 continue
-            assets = {a.id: a for a in self.immich.list_album_assets(album_id)}
-            asset = assets.get(img.current_asset_id)
-            if asset is None:
-                continue
             try:
+                if album_id not in listings:
+                    listings[album_id] = self._list_managed_album(state, img.home, album_id)
+                assets = listings[album_id]
+                if assets is None:
+                    # The album was deleted in Immich and is dropped from
+                    # the managed list; this photo is back in Review (if
+                    # it still exists) -- see _list_managed_album.
+                    continue
+                asset = assets.get(img.current_asset_id)
+                if asset is None:
+                    continue
                 if not asset.is_favorite:
                     self.immich.add_assets_to_album(self.cfg.review_album_id, [asset.id])
                     self.immich.remove_assets_from_album(album_id, [asset.id])
@@ -663,6 +676,42 @@ class Pipeline:
                         break
             except Exception:
                 log.exception("failed handling managed-album item %s; leaving it for next cycle", lineage_id)
+
+    def _list_managed_album(self, state: PipelineState, name: str, album_id: str) -> dict[str, Asset] | None:
+        """The assets in a managed album, by id. None when the album no
+        longer exists in Immich (deleted by hand): it is dropped from the
+        managed list and its photos go back to Review rather than failing
+        every poll cycle. Any other failure (Immich down, a network blip)
+        propagates, so a hiccup is never mistaken for a deleted album."""
+        try:
+            return {a.id: a for a in self.immich.list_album_assets(album_id)}
+        except ImmichError as exc:
+            if not self._album_is_gone(album_id):
+                raise
+            log.warning("managed album %r (%s) no longer exists in Immich (%s); dropping it", name, album_id, exc)
+        state.watched_albums.pop(name, None)
+        for lineage_id, img in list(state.images.items()):
+            if img.home != name:
+                continue
+            try:
+                if img.current_asset_id:
+                    self.immich.add_assets_to_album(self.cfg.review_album_id, [img.current_asset_id])
+                img.home = "review"
+                img.awaiting_clarification = False
+                img.awaiting_album = False
+                log.info("%s was in the deleted album %r -> back in Review", img.current_asset_id, name)
+            except ImmichError:
+                log.exception("could not return %s to Review after album %r was deleted", lineage_id, name)
+        return None
+
+    def _album_is_gone(self, album_id: str) -> bool:
+        """True only when Immich says the album doesn't exist (or isn't
+        visible to this account, which Immich reports the same way)."""
+        try:
+            self.immich.get_album(album_id)
+        except ImmichError as exc:
+            return "not found" in str(exc).lower() or "-> 404" in str(exc)
+        return False
 
     def _reprocess(
         self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str,
@@ -733,9 +782,15 @@ class Pipeline:
     # Drop tracking for anything manually deleted from everywhere.
     def _reap_deleted(self, state: PipelineState) -> None:
         all_current_ids: set[str] = set()
-        all_current_ids |= {a.id for a in self.immich.list_album_assets(self.cfg.review_album_id)}
-        for album_id in state.watched_albums.values():
-            all_current_ids |= {a.id for a in self.immich.list_album_assets(album_id)}
+        try:
+            all_current_ids |= {a.id for a in self.immich.list_album_assets(self.cfg.review_album_id)}
+            for album_id in state.watched_albums.values():
+                all_current_ids |= {a.id for a in self.immich.list_album_assets(album_id)}
+        except ImmichError:
+            # An incomplete listing would make photos look deleted and
+            # drop them from tracking, so skip reaping this cycle.
+            log.exception("could not list every album; skipping the cleanup of deleted photos this cycle")
+            return
         for lineage_id, img in list(state.images.items()):
             if img.current_asset_id and img.current_asset_id not in all_current_ids:
                 if img.home not in ("collage_maker_wait", "awaiting_clarification"):
