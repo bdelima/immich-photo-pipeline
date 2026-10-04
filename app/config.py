@@ -83,6 +83,10 @@ class Config:
     webui_host: str
     webui_port: int
 
+    # Reviewer-taught recipe rules (see app/rules.py). Defaulted so code
+    # that builds a Config by hand doesn't have to know about it.
+    rules_path: str = "/data/rules.json"
+
     @staticmethod
     def from_env() -> "Config":
         return Config(
@@ -110,4 +114,5 @@ class Config:
             claude_auth_check_interval_seconds=_env_int("CLAUDE_AUTH_CHECK_INTERVAL_SECONDS", 300),
             webui_host=_env("WEBUI_HOST", "0.0.0.0"),
             webui_port=_env_int("WEBUI_PORT", 8080),
+            rules_path=_env("RULES_PATH", "/data/rules.json"),
         )
