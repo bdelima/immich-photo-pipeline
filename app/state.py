@@ -39,6 +39,12 @@ class ImageState:
     # so the reply can be applied as one instruction.
     clarification_note: str | None = None
     clarification_question: str | None = None
+    # The reviewer's instructions already applied to this photo, oldest
+    # first. Every revision re-runs the recipe from the original(s), so
+    # without this a later adjustment would be applied to the original
+    # arrangement and silently undo earlier ones (a swap of two photos in a
+    # collage, say). See Pipeline._reprocess.
+    revision_notes: list[str] = field(default_factory=list)
     # The headless Claude Code session id, so a clarification answer can
     # resume the same run instead of starting over.
     claude_session_id: str | None = None
