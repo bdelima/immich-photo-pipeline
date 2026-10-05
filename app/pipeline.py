@@ -333,11 +333,16 @@ class Pipeline:
                 )
             elif in_review:
                 exists = self._find_album(state, verdict.album) is not None
-                self._ack(
-                    img, album_id, asset.id,
-                    f"Got it: moving this to the album \"{verdict.album}\"" + ("." if exists else " (creating it)."),
-                )
                 self._promote_to_album(state, lineage_id, asset.id, verdict.album)
+                # Comments belong to one photo in one album, so the photo
+                # leaving Review leaves its thread behind. Say it where the
+                # photo is now, which is where the reviewer will look.
+                dest = state.watched_albums.get(img.home)
+                if dest:
+                    self._ack(
+                        img, dest, asset.id,
+                        f"Moved here from Review: this is now in the album \"{img.home}\"" + ("." if exists else " (I created it)."),
+                    )
             else:
                 self._say(
                     album_id, asset.id,
@@ -362,7 +367,7 @@ class Pipeline:
             self._ack(
                 img, album_id, asset.id,
                 ("Got it: applying your answer and re-running. " if answering else f"Got it: revising ({_short(comment.text)}). ")
-                + "This takes a minute or two.",
+                + "This takes a minute or two; I'll post the result on the new version of the photo.",
             )
         self._reprocess(
             state, lineage_id, asset.id, comment.text, target_album=album_id,
@@ -663,8 +668,13 @@ class Pipeline:
                 if not asset.is_favorite:
                     self.immich.add_assets_to_album(self.cfg.review_album_id, [asset.id])
                     self.immich.remove_assets_from_album(album_id, [asset.id])
+                    previous = img.home
                     img.home = "review"
                     log.info("%s was unfavorited in %r -> moved back to Review", asset.id, album_id)
+                    self._ack(
+                        img, self.cfg.review_album_id, asset.id,
+                        f"Moved back to Review: you unliked it in \"{previous}\". Like it again to choose an album.",
+                    )
                     continue
                 comments = self.immich.list_comments(album_id=album_id, asset_id=asset.id)
                 fresh = new_comments(comments, set(img.acted_comment_ids))
