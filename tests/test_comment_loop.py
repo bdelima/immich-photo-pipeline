@@ -148,3 +148,13 @@ def test_identical_upload_never_deletes_the_only_copy():
     assert immich.deleted == []
     assert "old" in immich.assets
     assert img.current_asset_id == "old"
+
+
+def test_every_posted_comment_logs_where_it_went(caplog):
+    import logging
+    client, _ = _client_with({"id": "new"})
+    with caplog.at_level(logging.INFO, logger="app.immich_client"):
+        client.post_comment("hello", album_id="alb-1", asset_id="asset-9")
+        client.post_comment("album note", album_id="alb-1")
+    text = caplog.text
+    assert "asset asset-9 in album alb-1" in text and "the album itself in album alb-1" in text

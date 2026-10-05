@@ -153,7 +153,8 @@ def test_an_album_made_by_hand_in_immich_is_used_not_duplicated(tmp_path):
     assert immich.created == []
     assert img.home == "Holiday" and state.watched_albums == {"Holiday": "hand-made"}
     assert ("hand-made", ["a1"]) in immich.added
-    assert any("moving this to the album \"Holiday\"." in t for t, _, _ in immich.posted)
+    assert [(a, i) for _, a, i in immich.posted] == [("hand-made", "a1")]  # said in the album it went to
+    assert "Moved here from Review" in immich.posted[0][0] and "I created" not in immich.posted[0][0]
 
 
 def test_the_name_match_ignores_case_and_uses_the_albums_own_spelling(tmp_path):
@@ -177,7 +178,8 @@ def test_a_genuinely_new_album_is_created_and_the_ack_says_so(tmp_path):
     state, img = state_with()
     handle(pipeline, state, img, "Trips")
     assert immich.created == ["Trips"]
-    assert any("(creating it)" in t for t, _, _ in immich.posted)
+    assert [(a, i) for _, a, i in immich.posted] == [("id-Trips", "a1")]
+    assert "(I created it)" in immich.posted[0][0]
 
 
 def test_the_pipelines_own_albums_are_never_promotion_targets(tmp_path):
@@ -242,7 +244,7 @@ def test_a_long_comment_is_shortened_in_the_acknowledgment(tmp_path):
     pipeline, immich, rec, rules = wired(tmp_path, CommentIntent("revise"))
     state, img = state_with()
     handle(pipeline, state, img, "make it darker " * 20)
-    assert len(immich.posted[0][0]) < 160 and "…" in immich.posted[0][0]
+    assert len(immich.posted[0][0]) < 200 and "…" in immich.posted[0][0]
 
 
 def test_an_answer_is_acknowledged_as_such(tmp_path):
@@ -275,3 +277,27 @@ def test_an_imported_photo_gets_only_the_no_original_explanation(tmp_path):
     handle(pipeline, state, img, "darker", in_review=False)
     assert [t for t, _, _ in immich.posted if "Got it" in t] == []
     assert any("no original" in t for t, _, _ in immich.posted)
+
+
+# ---- comments are posted where the photo is --------------------------------
+
+
+def test_nothing_is_left_behind_in_review_when_a_photo_moves_albums(tmp_path):
+    pipeline, immich, rec, rules = wired(tmp_path, CommentIntent("album", album="Holiday"))
+    state, img = state_with()
+    handle(pipeline, state, img, "Holiday")
+    assert all(album != "review-album" for _, album, _ in immich.posted)
+
+
+def test_unliking_in_a_managed_album_says_so_in_review(tmp_path):
+    from types import SimpleNamespace
+    from app.immich_client import Asset
+    pipeline, immich, rec, rules = wired(tmp_path, CommentIntent("none"))
+    pipeline.cfg = SimpleNamespace(review_album_id="review-album")
+    immich.list_album_assets = lambda album_id: [Asset(id="a1", original_file_name="a.jpg", is_favorite=False)]
+    state, img = state_with(home="Holiday")
+    state.watched_albums["Holiday"] = "alb-h"
+    pipeline._flow3_managed(state)
+    assert img.home == "review"
+    assert [(a, i) for _, a, i in immich.posted] == [("review-album", "a1")]
+    assert "Moved back to Review" in immich.posted[0][0] and "Holiday" in immich.posted[0][0]
