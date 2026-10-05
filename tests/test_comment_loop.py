@@ -158,3 +158,19 @@ def test_every_posted_comment_logs_where_it_went(caplog):
         client.post_comment("album note", album_id="alb-1")
     text = caplog.text
     assert "asset asset-9 in album alb-1" in text and "the album itself in album alb-1" in text
+
+
+def test_a_comment_stored_somewhere_else_is_flagged(caplog):
+    import logging
+    client, _ = _client_with({"id": "new", "assetId": None})
+    with caplog.at_level(logging.INFO, logger="app.immich_client"):
+        client.post_comment("hello", album_id="alb-1", asset_id="asset-9")
+    assert "was posted for asset asset-9 but Immich stored it on the album itself" in caplog.text
+
+
+def test_a_comment_stored_where_it_was_posted_is_not_flagged(caplog):
+    import logging
+    client, _ = _client_with({"id": "new", "assetId": "asset-9"})
+    with caplog.at_level(logging.INFO, logger="app.immich_client"):
+        client.post_comment("hello", album_id="alb-1", asset_id="asset-9")
+    assert "stored it on asset asset-9" in caplog.text and "but Immich stored" not in caplog.text
