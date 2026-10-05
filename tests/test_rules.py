@@ -121,7 +121,7 @@ class FakeImmich:
     def list_albums(self):
         return list(getattr(self, "albums", []))
 
-    def list_like_ids(self, *, album_id, asset_id):
+    def list_likes(self, *, album_id, asset_id):
         return []
 
     def post_comment(self, text, *, album_id, asset_id=None):
@@ -140,9 +140,6 @@ class FakeImmich:
 
     def add_assets_to_album(self, album_id, ids):
         self.added.append((album_id, list(ids)))
-
-    def set_favorite(self, asset_id, favorite):
-        pass
 
     def delete_assets(self, ids, force=True):
         self.deleted.extend(ids)
@@ -183,7 +180,7 @@ def comment(text, cid="c1"):
 
 
 def asset(aid="a1"):
-    return Asset(id=aid, original_file_name=f"{aid}.jpg", is_favorite=False)
+    return Asset(id=aid, original_file_name=f"{aid}.jpg")
 
 
 def state_with(home="review", imported=False, awaiting=False):

@@ -294,8 +294,9 @@ def test_unliking_in_a_managed_album_says_so_in_review(tmp_path):
     from app.immich_client import Asset
     pipeline, immich, rec, rules = wired(tmp_path, CommentIntent("none"))
     pipeline.cfg = SimpleNamespace(review_album_id="review-album")
-    immich.list_album_assets = lambda album_id: [Asset(id="a1", original_file_name="a.jpg", is_favorite=False)]
+    immich.list_album_assets = lambda album_id: [Asset(id="a1", original_file_name="a.jpg")]
     state, img = state_with(home="Holiday")
+    img.like_in_album = True  # a thumbs-up was seen there and is now gone
     state.watched_albums["Holiday"] = "alb-h"
     pipeline._flow3_managed(state)
     assert img.home == "review"
