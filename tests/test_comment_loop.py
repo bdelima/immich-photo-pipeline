@@ -71,6 +71,9 @@ class LoopImmich:
     def list_likes(self, *, album_id, asset_id):
         return []
 
+    def get_my_user_id(self):
+        return "wife"  # the pipeline runs as the account the reviewer comments from
+
     def post_comment(self, text, *, album_id, asset_id=None):
         return self._add(asset_id, text, "pipeline")
 

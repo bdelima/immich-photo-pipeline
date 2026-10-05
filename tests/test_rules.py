@@ -124,6 +124,9 @@ class FakeImmich:
     def list_likes(self, *, album_id, asset_id):
         return []
 
+    def get_my_user_id(self):
+        return "u2"  # the account the test comments come from, so they are from a known user
+
     def post_comment(self, text, *, album_id, asset_id=None):
         self.posted.append((text, album_id, asset_id))
         return f"posted-{len(self.posted)}"

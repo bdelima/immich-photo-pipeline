@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.immich_client import Asset, ImmichClient, ImmichError, Like
+from app.immich_client import Asset, Comment, ImmichClient, ImmichError, Like
 from app.pipeline import Pipeline
 from app.recipe_runner import CommentIntent
 from app.state import ImageState, PipelineState
@@ -88,7 +88,7 @@ def household(tmp_path, verdict=None, result=None):
 def review_pipeline(likes):
     immich = Account("u-bob", "Bob", {("review-album", "a1"): likes}, assets=[asset("a1")])
     pipeline = Pipeline(config=SimpleNamespace(review_album_id="review-album"), immich=immich,
-                        recipe=FakeRecipe(), store=None)
+                        recipe=FakeRecipe(), store=None, extra_clients=[Account("u-sam", "Sam", {})])
     img = ImageState(source_asset_ids=["src"], current_asset_id="a1", home="review")
     return pipeline, immich, PipelineState(images={"L": img}), img
 
@@ -153,14 +153,13 @@ def test_a_like_by_bob_is_given_again_as_bob_and_both_likes_are_kept(tmp_path):
     assert sam.liked_as == [("u-sam", "album-Holiday", "a1")]  # once, though Sam's like was listed twice
 
 
-def test_a_like_from_an_account_with_no_key_is_never_given_as_someone_else(tmp_path):
+def test_a_like_from_an_unknown_account_is_ignored_and_never_given_as_someone_else(tmp_path):
     pipeline, bob, sam, likes, _ = household(tmp_path, CommentIntent("album", album="Holiday"))
     likes[("review-album", "a1")] = [Like("l1", "u-kid", "Kid")]
     state, img = move_to_holiday(pipeline, bob)
     assert bob.liked_as == [] and sam.liked_as == []
     assert img.home == "Holiday"  # the move still happens
-    note = [t for t, _, _ in bob.posted if "Moved here" in t][0]
-    assert "couldn't carry over the thumbs-up from Kid" in note
+    assert not any("thumbs-up" in t for t, _, _ in bob.posted)  # nothing to report: it was ignored
 
 
 def test_a_failed_like_is_reported_and_does_not_stop_the_move(tmp_path):
@@ -254,3 +253,67 @@ def test_the_whole_round_trip_like_move_unlike(tmp_path):
     likes[("album-Holiday", "a1")] = []  # Sam unlikes it
     pipeline._flow3_managed(state)
     assert img.home == "review"
+
+
+# ---- accounts the pipeline doesn't know cannot drive it ------------------------
+
+
+def stranger_comment():
+    return Comment(id="c-x", text="put this in Holiday", user_id="u-stranger", is_own=False)
+
+
+def test_a_thumbs_up_from_an_unknown_account_asks_nothing():
+    pipeline, immich, state, img = review_pipeline([Like("like-1", "u-stranger", "Stranger")])
+    pipeline._flow2_review(state)
+    assert immich.posted == [] and not img.awaiting_clarification and img.acted_like_ids == []
+
+
+def test_a_known_like_still_counts_when_an_unknown_one_is_beside_it():
+    pipeline, immich, state, img = review_pipeline(
+        [Like("like-1", "u-stranger", "Stranger"), Like("like-2", "u-sam", "Sam")])
+    pipeline._flow2_review(state)
+    assert img.acted_like_ids == ["like-2"] and img.awaiting_album
+
+
+def test_a_comment_from_an_unknown_account_is_ignored_in_review():
+    pipeline, immich, state, img = review_pipeline([])
+    immich._comments = {"a1": [stranger_comment()]}
+    pipeline._flow2_review(state)
+    assert immich.posted == [] and immich.deleted == [] and img.acted_comment_ids == []
+    assert pipeline.recipe.single_calls == []
+
+
+def test_a_comment_from_an_unknown_account_is_ignored_in_a_managed_album(tmp_path):
+    pipeline, bob, likes, state, img = managed(tmp_path)
+    bob._comments = {"a1": [stranger_comment()]}
+    pipeline.recipe = FakeRecipe(CommentIntent("delete"))  # would delete the photo if it were read
+    pipeline._flow3_managed(state)
+    assert bob.deleted == [] and bob.posted == [] and "c-x" not in img.acted_comment_ids
+
+
+def test_a_comment_from_a_known_account_is_still_handled(tmp_path):
+    pipeline, bob, likes, state, img = managed(tmp_path)
+    bob._comments = {"a1": [Comment(id="c-sam", text="delete this", user_id="u-sam", is_own=False)]}
+    pipeline.recipe = FakeRecipe(CommentIntent("delete"))
+    pipeline._flow3_managed(state)
+    assert bob.deleted == ["a1"]
+
+
+def test_an_unknown_accounts_like_in_a_managed_album_is_not_seen_and_cannot_hold_a_photo(tmp_path):
+    pipeline, bob, likes, state, img = managed(tmp_path)
+    likes[("alb-h", "a1")] = [Like("l1", "u-stranger", "Stranger")]
+    pipeline._flow3_managed(state)
+    assert img.like_in_album is False  # a stranger's like is not a like
+    img.like_in_album = True  # a household like was seen earlier, and is gone now
+    pipeline._flow3_managed(state)
+    assert img.home == "review"  # the stranger's remaining like does not keep it there
+
+
+def test_when_accounts_cannot_be_resolved_nobody_is_trusted_and_it_recovers(tmp_path):
+    pipeline, immich, state, img = review_pipeline([Like("like-1", "u-bob", "Bob")])
+    immich.get_my_user_id = lambda: (_ for _ in ()).throw(ImmichError("GET /users/me -> 500"))
+    pipeline._flow2_review(state)
+    assert immich.posted == [] and not img.awaiting_clarification  # fail closed, not open
+    del immich.get_my_user_id  # Immich is back
+    pipeline._flow2_review(state)
+    assert img.awaiting_album  # keys are retried, and Bob is known again
