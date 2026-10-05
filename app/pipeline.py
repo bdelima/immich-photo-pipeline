@@ -364,6 +364,26 @@ class Pipeline:
             self._answer_proposal(album_id, asset.id, yes=intent == "yes")
             img.acted_comment_ids.append(comment.id)
             return False
+        if intent == "undo":
+            steps = min(verdict.steps, len(img.revision_notes))
+            if steps < 1:
+                self._say(
+                    album_id, asset.id,
+                    "I don't have any changes recorded on this photo to undo (I only track changes "
+                    "made since the last update). To go back, ask for the specific change reversed.",
+                )
+            else:
+                undone = img.revision_notes[-steps:]
+                self._ack(
+                    img, album_id, asset.id,
+                    f"Got it: undoing {_short('; '.join(undone))}. "
+                    "This takes a minute or two; I'll post the result on the new version of the photo.",
+                )
+                self._reprocess(
+                    state, lineage_id, asset.id, comment.text, target_album=album_id, undo_steps=steps,
+                )
+            img.acted_comment_ids.append(comment.id)
+            return False
         if intent == "teach":
             self._save_taught_rule(lineage_id, asset.id, album_id, verdict)
         # A reply to the recipe's own question about this photo is the
@@ -411,6 +431,7 @@ class Pipeline:
             albums=self._album_names(state),
             rules=rules,
             proposal=proposal,
+            history=list(img.revision_notes),
         )
 
     def _reserved_album_ids(self) -> set[str]:
@@ -731,10 +752,14 @@ class Pipeline:
 
     def _reprocess(
         self, state: PipelineState, lineage_id: str, old_asset_id: str, note: str, target_album: str,
-        answering: bool = False,
+        answering: bool = False, undo_steps: int = 0,
     ) -> None:
         img = state.images[lineage_id]
         instruction = note
+        # An undo re-runs the recipe with the adjustments minus the last
+        # `undo_steps` of them, so the photo comes out as it did before.
+        kept = img.revision_notes[:-undo_steps] if undo_steps else img.revision_notes
+        undone = img.revision_notes[len(kept):]
         if answering:
             instruction = (
                 f"{img.clarification_note} (You asked: {img.clarification_question} "
@@ -753,13 +778,16 @@ class Pipeline:
             )
             self._mark_own(img, posted)
             return
-        log.info("revising %s: %r", old_asset_id, instruction)
+        if undo_steps:
+            log.info("undoing %d adjustment(s) on %s: %r", len(undone), old_asset_id, undone)
+        else:
+            log.info("revising %s: %r", old_asset_id, instruction)
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
             src_paths = [self._download(sid, tmp_dir) for sid in img.source_asset_ids]
             out_path = os.path.join(tmp_dir, "output.jpg")
             rules = self._rules_for("collage" if len(src_paths) > 1 else "single")
-            prompt_note = _note_with_history(img.revision_notes, instruction)
+            prompt_note = _replay_note(kept) if undo_steps else _note_with_history(img.revision_notes, instruction)
             result = self.recipe.run_collage(src_paths, out_path, note=prompt_note, rules=rules) if len(src_paths) > 1 \
                 else self.recipe.run_single(src_paths[0], out_path, note=prompt_note, rules=rules)
             if result.status == "needs_clarification":
@@ -768,7 +796,7 @@ class Pipeline:
                 self._mark_own(img, posted)
                 img.awaiting_clarification = True
                 img.awaiting_album = False
-                img.clarification_note = instruction
+                img.clarification_note = f"Undo: {'; '.join(undone)}" if undo_steps else instruction
                 img.clarification_question = result.question
                 img.claude_session_id = result.session_id
                 log.info("revising %s needs clarification; asked on the photo", old_asset_id)
@@ -785,15 +813,21 @@ class Pipeline:
                 # produced a new asset -- and into the trash, not for good,
                 # so a revision someone didn't like can still be recovered.
                 self.immich.delete_assets([old_asset_id], force=False)
-            posted = self.immich.post_comment(f"Applied: {note}", album_id=target_album, asset_id=new_asset_id)
+            applied = (
+                f"Undid: {_short('; '.join(undone))}. Reply \"undo\" again to take back the one before."
+                if undo_steps else f"Applied: {note}"
+            )
+            posted = self.immich.post_comment(applied, album_id=target_album, asset_id=new_asset_id)
             self._mark_own(img, posted)
             img.current_asset_id = new_asset_id
-            img.revision_notes = (img.revision_notes + [instruction[:MAX_REVISION_NOTE_CHARS]])[-MAX_REVISION_NOTES:]
+            img.revision_notes = list(kept) if undo_steps else (
+                img.revision_notes + [instruction[:MAX_REVISION_NOTE_CHARS]])[-MAX_REVISION_NOTES:]
             img.awaiting_clarification = False
             img.awaiting_album = False
             img.clarification_note = img.clarification_question = None
             log.info("revised %s -> %s (%d adjustment(s) so far)", old_asset_id, new_asset_id, len(img.revision_notes))
-            self._propose_lesson(lineage_id, new_asset_id, target_album, result)
+            if not undo_steps:
+                self._propose_lesson(lineage_id, new_asset_id, target_album, result)
         finally:
             _cleanup(tmp_dir)
 
@@ -831,6 +865,20 @@ def _note_with_history(history: list[str], instruction: str) -> str:
         "Reproduce all of those adjustments (a rearranged or swapped layout stays as "
         "arranged unless a later step changes it), then apply this new request on top of "
         f"the result: {instruction}"
+    )
+
+
+def _replay_note(history: list[str]) -> str | None:
+    """The instruction for a re-run that should reproduce exactly the
+    adjustments in `history` and nothing more (an undo). None when there is
+    nothing to replay: the photo is processed as it was the first time."""
+    if not history:
+        return None
+    steps = " ".join(f"{i}) {note}" for i, note in enumerate(history, 1))
+    return (
+        "This image is being redone at the reviewer's request with these adjustments, in this "
+        f"order, each on top of the previous: {steps} "
+        "Apply exactly those and nothing else."
     )
 
 

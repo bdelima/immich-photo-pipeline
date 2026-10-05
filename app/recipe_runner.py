@@ -229,6 +229,7 @@ class CommentIntent:
     recipe's own question about the photo), "album" (names the album to put
     it in), "delete", "teach" (a standing preference for future photos),
     "forget" (retire a saved rule), "yes" / "no" (answers a proposed rule),
+    "undo" (take back the last adjustment(s) to this photo),
     "unclear" (ask the reviewer to clarify) or "none" (nothing to do, e.g.
     "thanks")."""
     intent: str
@@ -241,6 +242,8 @@ class CommentIntent:
     rule_id: str | None = None
     # "unclear": the short question to ask back.
     question: str | None = None
+    # "undo": how many of the most recent adjustments to take back.
+    steps: int = 1
 
 
 @dataclass
@@ -261,6 +264,9 @@ class CommentContext:
     rules: list[tuple[str, str]] = field(default_factory=list)
     # A rule the pipeline proposed on this photo and is waiting on, as (id, text).
     proposal: tuple[str, str] | None = None
+    # The adjustments already applied to this photo at the reviewer's
+    # request, oldest first (what "undo" would take back).
+    history: list[str] = field(default_factory=list)
 
 
 MAX_ALBUM_NAME_CHARS = 60
@@ -447,6 +453,13 @@ def _intent_from_payload(payload: dict, ctx: CommentContext) -> CommentIntent:
             existing = {a.casefold(): a for a in ctx.albums}
             return CommentIntent("album", album=existing.get(name.casefold(), name))
         return CommentIntent("unclear", question="Which album should this go in? Reply with just the album's name.")
+    if intent == "undo":
+        steps = payload.get("steps")
+        if isinstance(steps, str) and steps.strip().lower() in ("all", "everything"):
+            steps = len(ctx.history)
+        if not isinstance(steps, int) or isinstance(steps, bool) or steps < 1:
+            steps = 1
+        return CommentIntent("undo", steps=min(steps, max(len(ctx.history), 1)))
     if intent == "answer":
         return CommentIntent("answer" if ctx.awaiting == "clarification" else "revise")
     if intent == "forget":
@@ -494,6 +507,13 @@ def _interpret_prompt(comment_text: str, ctx: CommentContext) -> str:
             f"- The pipeline proposed saving this rule and is waiting for "
             f"yes/no: {ctx.proposal[0]}: {ctx.proposal[1]!r}."
         )
+    if ctx.history:
+        lines.append(
+            "- Adjustments already applied to this photo at the reviewer's request, "
+            "oldest first: " + " ".join(f"{i}) {note}" for i, note in enumerate(ctx.history, 1))
+        )
+    else:
+        lines.append("- No adjustments have been applied to this photo yet.")
     if ctx.rules:
         lines.append("- Saved rules: " + "; ".join(f"{rid}: {text!r}" for rid, text in ctx.rules) + ".")
     lines += [
@@ -516,6 +536,13 @@ def _interpret_prompt(comment_text: str, ctx: CommentContext) -> str:
         "- forget: asks to stop following a saved rule. Give \"rule_id\".",
         "- yes / no: accepts / declines the proposed rule above (only when "
         "one is waiting).",
+        "- undo: asks to undo / revert / take back the last change, put it back "
+        "the way it was, or go back to the original (\"undo\", \"undo that\", "
+        "\"put it back\", \"that was better before\", \"start over\"). Give "
+        "\"steps\": how many of the adjustments above to take back (default 1; "
+        "the word \"all\" for start over / back to the original). Not for "
+        "retiring a saved rule (that is forget), and not when the comment "
+        "describes a new change instead (that is revise).",
         "- revise: any instruction to change this image (crop, recenter, "
         "tilt, color, mat, ...), including when it arrives while a question "
         "is open but doesn't answer it.",
