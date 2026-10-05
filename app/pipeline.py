@@ -26,6 +26,12 @@ log = logging.getLogger(__name__)
 
 PORTRAIT = "PORTRAIT"
 
+# How many earlier reviewer instructions are replayed to the recipe on each
+# revision (the most recent ones), and how much of each is kept. Bounds the
+# prompt for a photo that has been adjusted many times.
+MAX_REVISION_NOTES = 15
+MAX_REVISION_NOTE_CHARS = 400
+
 # Replies handled without a Claude call: "forget r7" retires a rule, and
 # yes/no answers a proposed rule. Whole-comment matches only, so a longer
 # comment that happens to start with "yes" is treated as a normal revision.
@@ -753,8 +759,9 @@ class Pipeline:
             src_paths = [self._download(sid, tmp_dir) for sid in img.source_asset_ids]
             out_path = os.path.join(tmp_dir, "output.jpg")
             rules = self._rules_for("collage" if len(src_paths) > 1 else "single")
-            result = self.recipe.run_collage(src_paths, out_path, note=instruction, rules=rules) if len(src_paths) > 1 \
-                else self.recipe.run_single(src_paths[0], out_path, note=instruction, rules=rules)
+            prompt_note = _note_with_history(img.revision_notes, instruction)
+            result = self.recipe.run_collage(src_paths, out_path, note=prompt_note, rules=rules) if len(src_paths) > 1 \
+                else self.recipe.run_single(src_paths[0], out_path, note=prompt_note, rules=rules)
             if result.status == "needs_clarification":
                 posted = self.immich.post_comment(result.question or "Need more information to proceed.",
                                                    album_id=target_album, asset_id=old_asset_id)
@@ -781,10 +788,11 @@ class Pipeline:
             posted = self.immich.post_comment(f"Applied: {note}", album_id=target_album, asset_id=new_asset_id)
             self._mark_own(img, posted)
             img.current_asset_id = new_asset_id
+            img.revision_notes = (img.revision_notes + [instruction[:MAX_REVISION_NOTE_CHARS]])[-MAX_REVISION_NOTES:]
             img.awaiting_clarification = False
             img.awaiting_album = False
             img.clarification_note = img.clarification_question = None
-            log.info("revised %s -> %s", old_asset_id, new_asset_id)
+            log.info("revised %s -> %s (%d adjustment(s) so far)", old_asset_id, new_asset_id, len(img.revision_notes))
             self._propose_lesson(lineage_id, new_asset_id, target_album, result)
         finally:
             _cleanup(tmp_dir)
@@ -805,6 +813,25 @@ class Pipeline:
             if img.current_asset_id and img.current_asset_id not in all_current_ids:
                 if img.home not in ("collage_maker_wait", "awaiting_clarification"):
                     del state.images[lineage_id]
+
+
+def _note_with_history(history: list[str], instruction: str) -> str:
+    """The instruction for a recipe run, with the adjustments already made
+    to this photo in front of it. Each run starts again from the original
+    photo(s), so earlier adjustments have to be restated or they are lost;
+    an instruction like "swap the first two" only makes sense relative to
+    the arrangement the earlier ones produced. With no history the
+    instruction is passed through unchanged."""
+    if not history:
+        return instruction
+    steps = " ".join(f"{i}) {note}" for i, note in enumerate(history, 1))
+    return (
+        "This image has already been adjusted at the reviewer's request, in this order, "
+        f"each on top of the previous: {steps} "
+        "Reproduce all of those adjustments (a rearranged or swapped layout stays as "
+        "arranged unless a later step changes it), then apply this new request on top of "
+        f"the result: {instruction}"
+    )
 
 
 def _short(text: str, limit: int = 80) -> str:
