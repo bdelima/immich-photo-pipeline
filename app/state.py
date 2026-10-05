@@ -29,6 +29,11 @@ class ImageState:
     # turned into a "which album?" question, so one like asks once; a fresh
     # like (unlike, then like again) has a new id and asks again.
     acted_like_ids: list[str] = field(default_factory=list)
+    # True once a thumbs-up has been seen on this photo in its current managed
+    # album. Only then does the likes disappearing mean "unliked", so a photo
+    # that never had one there (imported, or its like could not be carried
+    # over) is never pulled back to Review by mistake.
+    like_in_album: bool = False
     # Set while the pipeline is waiting on a reply to its own question.
     awaiting_clarification: bool = False
     # Which question that is. True: "which album should this go to?" (the

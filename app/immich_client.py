@@ -2,7 +2,7 @@
 
 Covers exactly what the pipeline's state machine needs: listing an album's
 assets (via /search/metadata, since GET /albums/{id} has no assets array),
-album membership, favorite (like) state, activities (comments), asset
+album membership, activities (comments and thumbs-up likes), asset
 upload/delete, and album creation/listing. Nothing here is Immich-UI-only
 behavior; it's all documented REST endpoints.
 """
@@ -52,13 +52,20 @@ PIPELINE_COMMENT_PREFIX = "\U0001F916 "
 class Asset:
     id: str
     original_file_name: str
-    is_favorite: bool
     exif_orientation: str | None = None
     # Whose account uploaded this asset (AssetResponseDto.ownerId). Only
     # used for diagnostic logging (pipeline.py's _clear_from_entry_queue) --
     # removal itself is handled by trying each configured account's API
     # key in turn, not by predicting ownership up front.
     owner_id: str = ""
+
+
+@dataclass
+class Like:
+    """A thumbs-up: an activity on one photo in one album, made by one account."""
+    id: str
+    user_id: str
+    user_name: str = ""
 
 
 @dataclass
@@ -106,7 +113,6 @@ class ImmichClient:
                 assets.append(Asset(
                     id=item["id"],
                     original_file_name=item.get("originalFileName", ""),
-                    is_favorite=bool(item.get("isFavorite", False)),
                     exif_orientation=(item.get("exifInfo") or {}).get("orientation"),
                     owner_id=item.get("ownerId", ""),
                 ))
@@ -186,9 +192,6 @@ class ImmichClient:
                     fh.write(chunk)
         return dest_path
 
-    def set_favorite(self, asset_id: str, favorite: bool) -> None:
-        self._request("PUT", f"/assets/{asset_id}", json={"isFavorite": favorite})
-
     def delete_assets(self, asset_ids: list[str], force: bool = True) -> None:
         if not asset_ids:
             return
@@ -228,14 +231,30 @@ class ImmichClient:
             for item in body
         ]
 
-    def list_like_ids(self, *, album_id: str, asset_id: str) -> list[str]:
-        """Ids of the "like" activities on an asset in an album. In a shared
-        album Immich's thumbs-up is an activity, not the asset's favorite
-        flag (and only an asset's owner can set that flag), so this is how
-        a household member's like on a photo shows up."""
+    def list_likes(self, *, album_id: str, asset_id: str) -> list[Like]:
+        """The "like" activities on an asset in an album, with who made each.
+        In a shared album Immich's thumbs-up is an activity, not the asset's
+        favorite flag (which only the asset's owner can see), so this is how a
+        household member's like on a photo shows up. A like belongs to one
+        album and one photo, so it does not follow the photo to another album."""
         params = {"type": "like", "albumId": album_id, "assetId": asset_id}
         body = self._request("GET", "/activities", params=params) or []
-        return [item["id"] for item in body]
+        return [
+            Like(
+                id=item["id"],
+                user_id=(item.get("user") or {}).get("id", ""),
+                user_name=(item.get("user") or {}).get("name", ""),
+            )
+            for item in body
+        ]
+
+    def post_like(self, *, album_id: str, asset_id: str) -> str:
+        """Gives the photo a thumbs-up as the account this client's API key
+        belongs to; returns the activity id."""
+        body = self._request(
+            "POST", "/activities", json={"albumId": album_id, "assetId": asset_id, "type": "like"},
+        )
+        return body["id"]
 
     def post_comment(self, text: str, *, album_id: str, asset_id: str | None = None) -> str:
         """Every comment the pipeline posts starts with PIPELINE_COMMENT_PREFIX,
