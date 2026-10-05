@@ -117,6 +117,9 @@ class Pipeline:
         # yet are retried on the next use.
         self._user_clients: dict[str, ImmichClient] = {}
         self._unresolved_clients: list[ImmichClient] | None = None
+        # Activity ids from unknown accounts already logged as ignored, so a
+        # stranger's comment is reported once, not every poll cycle.
+        self._ignored_logged: set[str] = set()
 
     def run_once(self) -> None:
         # Exclusive for the whole cycle so a concurrent one-off import
@@ -274,7 +277,7 @@ class Pipeline:
             try:
                 comments = self.immich.list_comments(album_id=self.cfg.review_album_id, asset_id=asset.id)
                 acted = set(img.acted_comment_ids)
-                fresh = new_comments(comments, acted)
+                fresh = new_comments(self._from_known_accounts(comments, asset.id), acted)
                 if not img.awaiting_clarification:
                     new_likes = self._new_like_ids(img, asset.id)
                     if new_likes:
@@ -300,20 +303,55 @@ class Pipeline:
         return [like.id for like in likes or [] if like.id not in seen]
 
     def _likes(self, album_id: str, asset_id: str) -> list[Like] | None:
-        """The thumbs-ups on a photo in an album, or None if they couldn't be
-        looked up (so a failure is never mistaken for "no likes")."""
+        """The thumbs-ups on a photo in an album from accounts this pipeline
+        knows, or None if they couldn't be looked up (so a failure is never
+        mistaken for "no likes"). A like from any other account is ignored."""
         try:
-            return self.immich.list_likes(album_id=album_id, asset_id=asset_id)
+            likes = self.immich.list_likes(album_id=album_id, asset_id=asset_id)
         except ImmichError:
             log.exception("could not look up likes on %s", asset_id)
             return None
+        known = self._known_user_ids() if likes else set()
+        kept = []
+        for like in likes:
+            if like.user_id in known:
+                kept.append(like)
+            else:
+                self._log_ignored(like.id, "thumbs-up", like.user_name or like.user_id, asset_id)
+        return kept
+
+    def _known_user_ids(self) -> set[str]:
+        """The Immich accounts this pipeline knows: the one it runs as and
+        the ones with a configured API key (IMMICH_EXTRA_API_KEY). Only these
+        may drive it. If the accounts can't be resolved, nobody is known, so a
+        failure never lets a stranger through (keys are retried next time)."""
+        self._client_for_user("")  # resolves any key not resolved yet
+        return set(self._user_clients)
+
+    def _from_known_accounts(self, comments: list[Comment], asset_id: str) -> list[Comment]:
+        """Drops comments written by accounts the pipeline doesn't know."""
+        if not comments:
+            return comments
+        known = self._known_user_ids()
+        kept = []
+        for comment in comments:
+            if comment.user_id in known:
+                kept.append(comment)
+            else:
+                self._log_ignored(comment.id, "comment", comment.user_id, asset_id)
+        return kept
+
+    def _log_ignored(self, activity_id: str, kind: str, who: str, asset_id: str) -> None:
+        if activity_id not in self._ignored_logged:
+            self._ignored_logged.add(activity_id)
+            log.warning("ignoring a %s from %s on %s: not an account this pipeline knows", kind, who, asset_id)
 
     def _client_for_user(self, user_id: str) -> ImmichClient | None:
         """The configured API key's client for this Immich account, if there
         is one: the pipeline's own account or one of IMMICH_EXTRA_API_KEY."""
-        if user_id not in self._user_clients:
-            if self._unresolved_clients is None:
-                self._unresolved_clients = [self.immich, *self.extra_clients]
+        if self._unresolved_clients is None:
+            self._unresolved_clients = [self.immich, *self.extra_clients]
+        if self._unresolved_clients:
             still_unresolved = []
             for client in self._unresolved_clients:
                 try:
@@ -355,7 +393,7 @@ class Pipeline:
     def _lost_likes_note(missing: list[str]) -> str:
         return (
             " I couldn't carry over the thumbs-up from " + ", ".join(missing)
-            + ": no Immich API key is configured for that account, or Immich refused it."
+            + ": Immich refused it."
         )
 
     def _handle_fresh_comment(
@@ -777,7 +815,7 @@ class Pipeline:
                     )
                     continue
                 comments = self.immich.list_comments(album_id=album_id, asset_id=asset.id)
-                fresh = new_comments(comments, set(img.acted_comment_ids))
+                fresh = new_comments(self._from_known_accounts(comments, asset.id), set(img.acted_comment_ids))
                 for comment in fresh:
                     if self._handle_fresh_comment(
                         state, lineage_id, img, asset, comment,
