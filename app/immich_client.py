@@ -242,11 +242,19 @@ class ImmichClient:
             payload["assetId"] = asset_id
         body = self._request("POST", "/activities", json=payload)
         # Comments belong to one photo in one album; log where each one
-        # went so "it posted in the wrong place" can be checked.
+        # went (and where Immich says it stored it) so "it posted in the
+        # wrong place" can be checked from the logs.
+        stored = body.get("assetId") if isinstance(body, dict) else None
         log.info(
-            "posted comment %s on %s in album %s: %r",
-            body["id"], f"asset {asset_id}" if asset_id else "the album itself", album_id, text[:60],
+            "posted comment %s on %s in album %s (Immich stored it on %s): %r",
+            body["id"], f"asset {asset_id}" if asset_id else "the album itself", album_id,
+            f"asset {stored}" if stored else "the album itself", text[:60],
         )
+        if asset_id and stored != asset_id:
+            log.warning(
+                "comment %s was posted for asset %s but Immich stored it on %s",
+                body["id"], asset_id, f"asset {stored}" if stored else "the album itself",
+            )
         return body["id"]
 
 
