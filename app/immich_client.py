@@ -241,6 +241,12 @@ class ImmichClient:
         if asset_id:
             payload["assetId"] = asset_id
         body = self._request("POST", "/activities", json=payload)
+        # Comments belong to one photo in one album; log where each one
+        # went so "it posted in the wrong place" can be checked.
+        log.info(
+            "posted comment %s on %s in album %s: %r",
+            body["id"], f"asset {asset_id}" if asset_id else "the album itself", album_id, text[:60],
+        )
         return body["id"]
 
 
