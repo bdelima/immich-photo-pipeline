@@ -21,6 +21,7 @@ class FakeAccount:
         self.fail_share = fail_share
         self.shared = []  # (album_id, user_ids, role)
         self.created = []
+        self.activity_enabled = []
 
     def get_my_user_id(self):
         if self.fail_me:
@@ -37,11 +38,14 @@ class FakeAccount:
             raise ImmichError("PUT /albums/x/users -> 403")
         self.shared.append((album_id, list(user_ids), role))
 
+    def enable_album_activity(self, album_id):
+        self.activity_enabled.append(album_id)
+
     def set_favorite(self, asset_id, favorite):
         pass
 
     def list_albums(self):
-        return []
+        return [{"id": i, "albumName": a["albumName"]} for i, a in self.albums.items() if "albumName" in a]
 
     def create_album(self, name):
         self.created.append(name)
@@ -109,8 +113,22 @@ def test_new_managed_album_is_shared_when_promoting():
     assert state.watched_albums["Holiday"] == "new-Holiday"
 
 
-def test_promoting_into_an_existing_album_does_not_reshare():
-    owner = FakeAccount("owner")
+def test_promoting_into_an_existing_album_shares_it_too():
+    # An album made by hand is adopted, and must end up shared like the
+    # ones the pipeline creates (otherwise a thumbs-up on it vanishes).
+    owner = FakeAccount("owner", {"h1": album(users=[])})
+    cfg = SimpleNamespace(review_album_id="review")
+    pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None, share_user_ids=["wife"])
+    state = PipelineState(
+        images={"L": ImageState(source_asset_ids=["s"], current_asset_id="a1", home="review")},
+        watched_albums={"Holiday": "h1"},
+    )
+    assert pipeline._promote_to_album(state, "L", "a1", "Holiday") is True
+    assert owner.shared == [("h1", ["wife"], "editor")] and owner.created == []
+
+
+def test_an_album_already_shared_is_not_reshared_when_promoting():
+    owner = FakeAccount("owner", {"h1": album(users=["wife"])})
     cfg = SimpleNamespace(review_album_id="review")
     pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None, share_user_ids=["wife"])
     state = PipelineState(
@@ -118,7 +136,28 @@ def test_promoting_into_an_existing_album_does_not_reshare():
         watched_albums={"Holiday": "h1"},
     )
     pipeline._promote_to_album(state, "L", "a1", "Holiday")
-    assert owner.shared == [] and owner.created == []
+    assert owner.shared == []
+
+
+def test_an_album_the_pipeline_cannot_share_is_reported_not_fatal():
+    owner = FakeAccount("owner", {"h1": album(owner="someone-else")}, fail_share=True)
+    cfg = SimpleNamespace(review_album_id="review")
+    pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None, share_user_ids=["wife"])
+    state = PipelineState(
+        images={"L": ImageState(source_asset_ids=["s"], current_asset_id="a1", home="review")},
+        watched_albums={"Holiday": "h1"},
+    )
+    assert pipeline._promote_to_album(state, "L", "a1", "Holiday") is False
+    assert state.images["L"].home == "Holiday"
+
+
+def test_ensure_shared_turns_on_activity_when_it_is_off():
+    off = dict(album(users=["wife"]), isActivityEnabled=False)
+    on = dict(album(users=["wife"]), isActivityEnabled=True)
+    owner = FakeAccount("owner", {"a1": off, "a2": on, "a3": album(users=["wife"])})
+    for album_id in ("a1", "a2", "a3"):
+        assert ensure_shared(owner, album_id, ["wife"]) is True
+    assert owner.activity_enabled == ["a1"]
 
 
 def test_promoting_without_share_users_does_not_touch_sharing():
@@ -163,3 +202,7 @@ def test_client_builds_the_share_and_user_requests():
     assert (method, url) == ("PUT", "http://immich/api/albums/a1/users")
     assert kwargs["json"] == {"albumUsers": [{"userId": "u2", "role": "editor"}, {"userId": "u3", "role": "editor"}]}
     assert len(session.calls) == 2  # the empty share made no request
+    client.enable_album_activity("a1")
+    method, url, kwargs = session.calls[-1]
+    assert (method, url) == ("PATCH", "http://immich/api/albums/a1")
+    assert kwargs["json"] == {"isActivityEnabled": True}

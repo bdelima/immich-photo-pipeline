@@ -54,6 +54,9 @@ def ensure_shared(immich: ImmichClient, album_id: str, user_ids: list[str]) -> b
         return True
     try:
         album = immich.get_album(album_id)
+        if album.get("isActivityEnabled") is False:
+            immich.enable_album_activity(album_id)
+            log.info("turned on likes and comments for album %s", album_id)
         have = {au.get("user", {}).get("id") for au in album.get("albumUsers", [])}
         have.add(album.get("ownerId"))
         missing = [uid for uid in user_ids if uid not in have]
