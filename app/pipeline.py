@@ -339,7 +339,7 @@ class Pipeline:
                 )
             elif in_review:
                 exists = self._find_album(state, verdict.album) is not None
-                self._promote_to_album(state, lineage_id, asset.id, verdict.album)
+                shared = self._promote_to_album(state, lineage_id, asset.id, verdict.album)
                 # Comments belong to one photo in one album, so the photo
                 # leaving Review leaves its thread behind. Say it where the
                 # photo is now, which is where the reviewer will look.
@@ -347,7 +347,10 @@ class Pipeline:
                 if dest:
                     self._ack(
                         img, dest, asset.id,
-                        f"Moved here from Review: this is now in the album \"{img.home}\"" + ("." if exists else " (I created it)."),
+                        f"Moved here from Review: this is now in the album \"{img.home}\"" + ("." if exists else " (I created it).")
+                        + (" I couldn't share this album with the household (the pipeline account may not own it), "
+                           "so likes and comments won't show for others until it is shared by hand in Immich."
+                           if shared is False else ""),
                     )
             else:
                 self._say(
@@ -644,7 +647,12 @@ class Pipeline:
         log.info("deleted %s on reviewer request", asset_id)
         state.images.pop(lineage_id, None)
 
-    def _promote_to_album(self, state: PipelineState, lineage_id: str, asset_id: str, album_name: str) -> None:
+    def _promote_to_album(self, state: PipelineState, lineage_id: str, asset_id: str, album_name: str) -> bool:
+        """Moves the photo into the named album and returns whether that
+        album is shared with the household. Every managed album gets the same
+        sharing, whether the pipeline created it or adopted one made by hand:
+        Immich only shows likes and comments on a shared album with activity
+        on, so an unshared one makes a thumbs-up vanish."""
         found = self._find_album(state, album_name)
         if found:
             # An album that already exists -- one the pipeline manages, or
@@ -656,8 +664,8 @@ class Pipeline:
         else:
             album_id = self.immich.create_album(album_name)
             state.watched_albums[album_name] = album_id
-            ensure_shared(self.immich, album_id, self.share_user_ids)
             log.info("created album %r (%s)", album_name, album_id)
+        shared = ensure_shared(self.immich, album_id, self.share_user_ids)
         # Managed albums keep a photo only while its favorite flag is on
         # (_flow3_managed pulls an unfavorited one back to Review). A like
         # given as a thumbs-up activity doesn't set that flag, so set it
@@ -670,6 +678,7 @@ class Pipeline:
         img.awaiting_clarification = False
         img.awaiting_album = False
         log.info("promoted %s to album %r", asset_id, album_name)
+        return shared
 
     # Flow 3 — a managed album: comment revises in place, unlike pulls to Review.
     def _flow3_managed(self, state: PipelineState) -> None:

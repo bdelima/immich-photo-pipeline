@@ -142,6 +142,11 @@ class ImmichClient:
             json={"albumUsers": [{"userId": uid, "role": role} for uid in user_ids]},
         )
 
+    def enable_album_activity(self, album_id: str) -> None:
+        """Turns on likes and comments for an album (PATCH /albums/{id});
+        albums made by hand may have them off."""
+        self._request("PATCH", f"/albums/{album_id}", json={"isActivityEnabled": True})
+
     def add_assets_to_album(self, album_id: str, asset_ids: list[str]) -> None:
         if not asset_ids:
             return
