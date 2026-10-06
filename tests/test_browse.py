@@ -74,9 +74,19 @@ def test_detail_shows_history(tmp_path):
     d = client.get("/api/photos/r1").get_json()
     assert [h["step"] for h in d["history"]] == [0, 1, 2]
     assert d["history"][2]["current"] and d["history"][2]["instruction"] == "step 2"
-    assert d["other_revisions"] == 0
+    assert all(h["reverts_to_step"] is None for h in d["history"])
     assert client.get("/api/photos/nope").status_code == 404
     assert client.get("/api/photos/f1").get_json()["error"] == "boom"
+
+
+def test_detail_shows_a_revert_as_a_step(tmp_path):
+    from app.revert import revert_to
+    client, store, revisions = build(tmp_path)
+    assert revert_to(store, revisions, "r1", 0) is not None
+    d = client.get("/api/photos/r1").get_json()
+    assert [h["step"] for h in d["history"]] == [0, 1, 2, 3]
+    assert d["history"][3]["reverts_to_step"] == 0 and d["history"][3]["current"]
+    assert client.get("/media/r1/full").status_code == 200
 
 
 def test_thumbnail_is_small_and_cached(tmp_path):

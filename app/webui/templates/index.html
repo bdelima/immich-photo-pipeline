@@ -99,7 +99,7 @@ async function openViewer(i) {
     ? `<video controls autoplay src="/media/${p.id}/full"></video>`
     : `<img src="/media/${p.id}/full?v=${p.version}" alt="">`;
   const hist = p.history.map(h =>
-    `<li class="${h.current ? "current" : ""}">${h.step === 0 ? "Original result" : esc(h.instruction || "(no instruction)")}` +
+    `<li class="${h.current ? "current" : ""}">${h.step === 0 ? "Original result" : h.reverts_to_step !== null ? "Reverted to step " + h.reverts_to_step : esc(h.instruction || "(no instruction)")}` +
     (h.rules && h.rules.length ? ` <span class="note">(${h.rules.length} rule${h.rules.length > 1 ? "s" : ""})</span>` : "") + `</li>`).join("");
   $("panel").innerHTML =
     `<button class="close" onclick="closeViewer()">Close</button><h2>${esc(p.home)} · ${esc(p.status.replace("_", " "))}</h2>` +
@@ -107,7 +107,6 @@ async function openViewer(i) {
     (p.error ? `<p class="err">${esc(p.error)}</p>` : "") +
     (p.question ? `<p>Claude asks: ${esc(p.question)}</p>` : "") +
     (hist ? `<h2>History</h2><ol start="0">${hist}</ol>` : "") +
-    (p.other_revisions ? `<div class="meta">${p.other_revisions} step(s) from before a revert are kept.</div>` : "") +
     (p.legacy_notes.length ? `<h2>Earlier notes</h2><ul>${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
     `<div class="meta">${i + 1} of ${list.length} · ← → to move, Esc to close</div>`;
 }
