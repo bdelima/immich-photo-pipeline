@@ -88,6 +88,7 @@ def test_a_queued_image_is_processed_into_review(tmp_path):
     assert worker.run_one() is True and worker.run_one() is False
     photo = store.load().photos["a"]
     assert (photo.status, photo.home, photo.current, photo.immich_asset_id) == ("ready", REVIEW, 0, "up-1")
+    assert photo.published_revision == 0
     assert photo.error is None and photo.live is False and photo.trashed is False
     rev = photo.current_revision()
     assert rev.parent is None and rev.origin == "processed" and rev.instruction is None

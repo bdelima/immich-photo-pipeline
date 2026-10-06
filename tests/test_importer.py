@@ -73,7 +73,7 @@ def test_import_into_a_managed_album_makes_the_album_and_the_photos(tmp_path):
     assert lib.albums == {"Everyday": "new-Everyday"}
     a = lib.photos["a"]
     assert (a.home, a.imported, a.status, a.current, a.live) == ("Everyday", True, "ready", 0, False)
-    assert a.immich_asset_id == "up-a.jpg" and a.revisions[0].origin == "legacy"
+    assert a.immich_asset_id == "up-a.jpg" and a.revisions[0].origin == "legacy" and a.published_revision == 0
     assert open(revisions.path(a.revisions[0].file), "rb").read() == b"a"
     assert [s.asset_id for s in a.sources] == ["a"] and a.sources[0].file == ""
 
