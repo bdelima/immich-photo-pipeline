@@ -1,7 +1,6 @@
-"""The small purpose-built web UI: pick which managed album is mirrored
-into Live, and (at /rules) review the recipe rules the reviewers have
-taught -- add one, retire one, or confirm a proposed one. See the design
-doc's "Web UI v1 scope" open question for what else might land here later.
+"""The small purpose-built web UI: browsing the library (see browse.py), and
+(at /rules) the recipe rules the reviewers have taught -- add one, retire
+one, or confirm a proposed one. Actions on photos are built on top of this.
 """
 from __future__ import annotations
 
@@ -12,15 +11,20 @@ from flask import Flask, jsonify, render_template, request
 from ..config import Config
 from ..health import HealthStore
 from ..immich_client import ImmichClient
+from ..library import REVIEW, STATUS_FAILED, STATUS_PROCESSING, Library, LibraryStore
+from ..revisions import RevisionStore
 from ..rules import MAX_ACTIVE_RULES, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
-from ..state import StateStore
+from ..thumbs import ThumbCache
+from .action_routes import register_action_routes
+from .browse import register_browse_routes
 
 log = logging.getLogger(__name__)
 
 
 def create_app(
-    cfg: Config, immich: ImmichClient, store: StateStore, health: HealthStore,
-    rules: RulesStore | None = None,
+    cfg: Config, immich: ImmichClient, store: LibraryStore, health: HealthStore,
+    rules: RulesStore | None = None, revisions: RevisionStore | None = None,
+    thumbs: ThumbCache | None = None, on_change=None,
 ) -> Flask:
     app = Flask(__name__)
 
@@ -33,40 +37,32 @@ def create_app(
 
     @app.get("/")
     def index():
-        state = store.load()
-        return render_template(
-            "index.html",
-            albums=sorted(state.watched_albums.keys()),
-            live_source=state.live_source_album,
-        )
+        return render_template("index.html", overview=_overview(store.load()))
 
     @app.get("/api/albums")
     def api_albums():
-        state = store.load()
-        return jsonify({
-            "watched_albums": state.watched_albums,
-            "live_source_album": state.live_source_album,
-        })
+        return jsonify(_overview(store.load()))
 
-    @app.post("/api/live-album")
-    def set_live_album():
-        name = (request.get_json(silent=True) or {}).get("name")
-        state = store.load()
-        if name not in state.watched_albums:
-            return jsonify({"error": f"unknown album {name!r}"}), 400
-        target_album_id = state.watched_albums[name]
-        current = {a.id for a in immich.list_album_assets(target_album_id)}
-        live = {a.id for a in immich.list_album_assets(cfg.live_album_id)}
-        immich.add_assets_to_album(cfg.live_album_id, list(current - live))
-        immich.remove_assets_from_album(cfg.live_album_id, list(live - current))
-        state.live_source_album = name
-        store.save(state)
-        return jsonify({"ok": True, "live_source_album": name})
-
+    if store is not None and revisions is not None and thumbs is not None:
+        register_browse_routes(app, store, revisions, thumbs)
+        register_action_routes(app, store, revisions, cfg, on_change)
     if rules is not None:
         _register_rules_routes(app, rules)
 
     return app
+
+
+def _overview(library: Library) -> dict:
+    """Counts only: what each album holds, Review, Live, and the queue."""
+    photos = [p for p in library.photos.values() if not p.trashed]
+    return {
+        "albums": {name: len(library.in_home(name)) for name in sorted(library.album_names())},
+        "review": len([p for p in photos if p.home == REVIEW and p.status == "ready"]),
+        "live": len(library.live_photos()),
+        "processing": len([p for p in photos if p.status == STATUS_PROCESSING]),
+        "failed": len([p for p in photos if p.status == STATUS_FAILED]),
+        "trashed": len(library.trashed_photos()),
+    }
 
 
 def _rule_json(rule) -> dict:
