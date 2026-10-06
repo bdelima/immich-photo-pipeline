@@ -112,5 +112,5 @@ def _import_one(immich: ImmichClient, revisions: RevisionStore, asset: Asset, ta
         id=asset.id,
         sources=[Source(asset_id=asset.id, name=asset.original_file_name or "", owner_id=asset.owner_id or "")],
         revisions=[Revision(n=0, parent=None, file=rel, sha256=digest, origin="legacy")],
-        current=0, home=target, status=STATUS_READY, immich_asset_id=new_asset, imported=True,
+        current=0, home=target, status=STATUS_READY, immich_asset_id=new_asset, published_revision=0, imported=True,
     )

@@ -148,6 +148,11 @@ class ImmichClient:
             json={"albumUsers": [{"userId": uid, "role": role} for uid in user_ids]},
         )
 
+    def update_album_user_role(self, album_id: str, user_id: str, role: str) -> None:
+        """Changes the role of an account that already has access to an
+        album (PUT /albums/{id}/user/{userId})."""
+        self._request("PUT", f"/albums/{album_id}/user/{user_id}", json={"role": role})
+
     def enable_album_activity(self, album_id: str) -> None:
         """Turns on likes and comments for an album (PATCH /albums/{id});
         albums made by hand may have them off."""
