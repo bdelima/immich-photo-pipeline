@@ -96,6 +96,8 @@ class Config:
     # latter is its own setting so it can be bind-mounted onto a bigger disk.
     library_path: str = "/data/library.json"
     revisions_path: str = "/data/revisions"
+    # Thumbnails made for the web UI. Disposable: anything here is remade on demand.
+    thumbs_path: str = "/data/thumbs"
     # How many photos are processed at the same time. One is plenty for a
     # household; each is a Claude run.
     worker_count: int = 1
@@ -131,5 +133,6 @@ class Config:
             share_albums=_env("SHARE_ALBUMS", "true").strip().lower() not in ("0", "false", "no", "off"),
             library_path=_env("LIBRARY_PATH", "/data/library.json"),
             revisions_path=_env("REVISIONS_PATH", "/data/revisions"),
+            thumbs_path=_env("THUMBS_PATH", "/data/thumbs"),
             worker_count=max(1, _env_int("WORKER_COUNT", 1)),
         )
