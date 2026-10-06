@@ -1,5 +1,5 @@
-"""Entrypoint: runs the poll loop, the background Claude-auth probe, and
-the web UI side by side."""
+"""Entrypoint: runs the poll loop, the worker, the background Claude-auth
+probe, and the web UI side by side."""
 from __future__ import annotations
 
 import logging
@@ -8,15 +8,18 @@ import time
 
 from .albums import ensure_core_albums
 from .config import Config
+from .cycle import Cycle
 from .health import HealthStore
 from .immich_client import ImmichClient, ImmichError
-from .pipeline import Pipeline
+from .intake import Intake
+from .library import LibraryStore
 from .recipe_runner import RecipeRunner, format_auth_instructions
+from .revisions import RevisionStore
 from .rules import RulesStore
 from .sharing import ensure_all_shared, resolve_user_ids
 from .secrets import resolve_secret, resolve_secret_list
-from .state import StateStore
 from .webui.server import create_app
+from .worker import Worker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("immich-photo-pipeline")
@@ -56,15 +59,12 @@ def auth_probe_forever(recipe: RecipeRunner, health: HealthStore, secrets_file: 
         time.sleep(interval_seconds)
 
 
-def poll_forever(pipeline: Pipeline, health: HealthStore, interval_seconds: int) -> None:
+def poll_forever(cycle: Cycle, interval_seconds: int) -> None:
     while True:
-        if health.snapshot().claude_auth_ok:
-            try:
-                pipeline.run_once()
-            except Exception:
-                log.exception("poll cycle failed; will retry next interval")
-        else:
-            log.debug("skipping poll cycle: no working Claude session yet")
+        try:
+            cycle.run_once()
+        except Exception:
+            log.exception("poll cycle failed; will retry next interval")
         time.sleep(interval_seconds)
 
 
@@ -82,24 +82,28 @@ def main() -> None:
     extra_clients = [ImmichClient(cfg.immich_url, key) for key in extra_keys]
     log.info("resolved core albums; %d extra Immich account(s) configured", len(extra_clients))
     recipe = RecipeRunner(cfg.claude_binary, cfg.recipe_skill_path, cfg.secrets_file)
-    store = StateStore(cfg.state_path)
+    store = LibraryStore(cfg.library_path)
+    revisions = RevisionStore(cfg.revisions_path)
     rules = RulesStore(cfg.rules_path)
     health = HealthStore()
     share_user_ids: list[str] = []
     if cfg.share_albums and extra_clients:
         share_user_ids = resolve_user_ids(immich, extra_clients)
-        # Entry queues and Review need to be visible to the other accounts
-        # (likes and comments only surface on shared albums), and so does
-        # every managed album already created. Live is only mirrored to
-        # displays, so it is left private.
-        ensure_all_shared(
-            immich,
-            [cfg.collage_album_id, cfg.wallpaper_album_id, cfg.review_album_id,
-             *store.load().watched_albums.values()],
-            share_user_ids,
-        )
-        log.info("albums shared with %d extra account(s)", len(share_user_ids))
-    pipeline = Pipeline(cfg, immich, recipe, store, extra_clients=extra_clients, share_user_ids=share_user_ids, rules=rules)
+        # The entry queues are shared as editors so the household can drop
+        # photos into them. Every managed album is shared as viewers by the
+        # poll cycle (see cycle.py). Live is only mirrored to displays, so it
+        # is left private.
+        ensure_all_shared(immich, [cfg.collage_album_id, cfg.wallpaper_album_id], share_user_ids)
+        log.info("entry queues shared with %d extra account(s)", len(share_user_ids))
+
+    worker = Worker(
+        store, revisions, immich, recipe,
+        wallpaper_album_id=cfg.wallpaper_album_id, collage_album_id=cfg.collage_album_id,
+        extra_clients=extra_clients, rules=rules, count=cfg.worker_count,
+        can_run_recipe=lambda: health.snapshot().claude_auth_ok,
+    )
+    intake = Intake(immich, store, cfg.wallpaper_album_id, cfg.collage_album_id)
+    cycle = Cycle(immich, store, intake, worker, live_album_id=cfg.live_album_id, share_user_ids=share_user_ids)
 
     auth_thread = threading.Thread(
         target=auth_probe_forever,
@@ -108,8 +112,9 @@ def main() -> None:
     )
     auth_thread.start()
 
+    worker.start()
     poll_thread = threading.Thread(
-        target=poll_forever, args=(pipeline, health, cfg.poll_interval_seconds), daemon=True,
+        target=poll_forever, args=(cycle, cfg.poll_interval_seconds), daemon=True,
     )
     poll_thread.start()
     log.info("poll loop started (interval=%ss)", cfg.poll_interval_seconds)
