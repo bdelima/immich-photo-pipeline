@@ -58,6 +58,16 @@ def test_tree_counts(tmp_path):
     assert t["albums"] == [{"name": "Sunsets", "view": "album:Sunsets", "count": 1}]
 
 
+def test_an_album_a_photo_was_just_moved_to_is_listed_before_immich_has_it(tmp_path):
+    from app import actions
+    client, store, _ = build(tmp_path)
+    actions.move(store, ["r1"], "Beach")                    # no Immich album yet
+    t = client.get("/api/tree").get_json()
+    assert {"name": "Beach", "view": "album:Beach", "count": 1} in t["albums"]
+    assert ids(client.get("/api/photos?view=album:Beach")) == {"r1"}
+    assert t["review"] == 1
+
+
 def test_views(tmp_path):
     client, *_ = build(tmp_path)
     assert ids(client.get("/api/photos?view=review")) == {"r1", "v1"}
