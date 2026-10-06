@@ -59,12 +59,11 @@ class Source:
 
 @dataclass
 class Revision:
-    """One version of a photo. Revisions are only ever appended: reverting
-    changes which one is current, and a new revision made after a revert
-    points back at the one it was made from (`parent`). That keeps every
-    version, and makes "revert to step 5" a pointer change."""
-    # Unique and increasing for this photo. After a revert it no longer
-    # equals the step number; see Photo.step_of.
+    """One version of a photo. Revisions are only ever appended, and each one
+    is made on top of the one that was current (`parent`), so the list is a
+    plain, linear history. A revert is a new revision too: it holds a copy of
+    the image it reverts to (`reverts_to`), so "revert to step 5" adds a step
+    and nothing is ever hidden or abandoned."""
     n: int
     parent: int | None
     # Path of the image file, relative to the revision store.
@@ -77,8 +76,14 @@ class Revision:
     session_id: str | None = None
     created_at: str = field(default_factory=now_iso)
     sha256: str = ""
-    # "processed" (made by the recipe) or "legacy" (imported finished).
+    # "processed" (made by the recipe), "legacy" (imported finished),
+    # "original" (a video, untouched) or "reverted" (a copy of an earlier
+    # revision, see `reverts_to`).
     origin: str = "processed"
+    # For a revert: the revision whose image this one is a copy of. Its
+    # instruction is None; the instructions that produced the image are
+    # those of the revision it reverts to (see Photo.lineage).
+    reverts_to: int | None = None
 
 
 @dataclass
@@ -142,9 +147,9 @@ class Photo:
         return max((r.n for r in self.revisions), default=-1) + 1
 
     def chain(self, n: int | None = None) -> list[Revision]:
-        """The revisions from the first to `n` (default: the current one),
-        following parents. This is the history that a revert to `n`, or a
-        replay, reproduces."""
+        """The history up to `n` (default: the current revision), oldest
+        first, following parents. This is what the user sees as steps 0, 1,
+        2 ... Reverts are steps like any other."""
         rev = self.revision(self.current if n is None else n)
         out: list[Revision] = []
         seen: set[int] = set()
@@ -155,13 +160,45 @@ class Photo:
         out.reverse()
         return out
 
+    def content_source(self, n: int) -> int | None:
+        """The revision whose image revision `n` really is: `n` itself,
+        unless it is a revert, in which case the one it reverts to (followed
+        through further reverts)."""
+        seen: set[int] = set()
+        rev = self.revision(n)
+        while rev is not None and rev.reverts_to is not None and rev.n not in seen:
+            seen.add(rev.n)
+            rev = self.revision(rev.reverts_to)
+        return rev.n if rev is not None else None
+
+    def lineage(self, n: int | None = None) -> list[Revision]:
+        """The revisions whose instructions produced the image of revision
+        `n` (default: the current one), oldest first. A revert contributes
+        nothing of its own: its image came from the revision it reverts to,
+        so the steps it undid are left out. This is the history to replay or
+        to describe to Claude, as opposed to `chain`, which is the history
+        to show."""
+        rev = self.revision(self.current if n is None else n)
+        out: list[Revision] = []
+        seen: set[int] = set()
+        while rev is not None and rev.n not in seen:
+            seen.add(rev.n)
+            if rev.reverts_to is not None:
+                rev = self.revision(rev.reverts_to)
+                continue
+            out.append(rev)
+            rev = self.revision(rev.parent)
+        out.reverse()
+        return out
+
     def instructions(self, n: int | None = None) -> list[str]:
-        """The instructions that produced revision `n`, oldest first."""
-        return [r.instruction for r in self.chain(n) if r.instruction]
+        """The instructions that produced revision `n`'s image, oldest
+        first (see `lineage`)."""
+        return [r.instruction for r in self.lineage(n) if r.instruction]
 
     def step_of(self, n: int) -> int | None:
-        """The position of revision `n` in the current history (0 for the
-        first result). This is the number the user sees as "step 5"."""
+        """The position of revision `n` in the history (0 for the first
+        result). This is the number the user sees as "step 5"."""
         for step, rev in enumerate(self.chain()):
             if rev.n == n:
                 return step
@@ -171,11 +208,18 @@ class Photo:
         chain = self.chain()
         return chain[step] if 0 <= step < len(chain) else None
 
-    def off_branch(self) -> list[Revision]:
-        """Revisions that are not part of the current history, because the
-        photo was reverted past them."""
-        on = {r.n for r in self.chain()}
-        return [r for r in self.revisions if r.n not in on]
+    def add_revert(self, target_n: int, file: str, sha256: str = "") -> Revision:
+        """Appends a revision that is a copy of revision `target_n` (whose
+        copy is stored at `file`) and makes it current."""
+        if self.revision(target_n) is None:
+            raise ValueError(f"photo {self.id} has no revision {target_n}")
+        new = Revision(
+            n=self.next_revision_number(), parent=self.current, file=file, sha256=sha256,
+            origin="reverted", reverts_to=target_n,
+        )
+        self.revisions.append(new)
+        self.current = new.n
+        return new
 
 
 @dataclass

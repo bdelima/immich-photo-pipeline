@@ -82,16 +82,15 @@ def summary(photo: Photo) -> dict:
 
 
 def detail(photo: Photo) -> dict:
-    chain = photo.chain()
     out = summary(photo)
     out.update({
         "sources": [{"name": s.name or s.asset_id, "has_copy": bool(s.file)} for s in photo.sources],
         "history": [
             {"n": r.n, "step": step, "instruction": r.instruction, "rules": r.rules,
-             "created_at": r.created_at, "origin": r.origin, "current": r.n == photo.current}
-            for step, r in enumerate(chain)
+             "created_at": r.created_at, "origin": r.origin, "current": r.n == photo.current,
+             "reverts_to_step": photo.step_of(r.reverts_to) if r.reverts_to is not None else None}
+            for step, r in enumerate(photo.chain())
         ],
-        "other_revisions": len(photo.off_branch()),
         "legacy_notes": photo.legacy_notes,
         "trashed_from": photo.trashed_from,
     })

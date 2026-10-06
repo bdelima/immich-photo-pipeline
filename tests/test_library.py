@@ -139,21 +139,72 @@ def test_linear_history():
     assert photo.instructions(2) == ["step 1", "step 2"]
     assert photo.step_of(3) == 3
     assert photo.revision_at_step(5).n == 5 and photo.revision_at_step(9) is None
-    assert photo.next_revision_number() == 6 and photo.off_branch() == []
+    assert photo.next_revision_number() == 6
 
 
-def test_a_revision_after_a_revert_branches_without_losing_anything():
+def test_a_revert_is_a_new_step_stacked_on_top():
     photo = linear_photo(6)
-    photo.current = 2                                  # revert to step 2
-    new = rev(photo.next_revision_number(), 2, "different idea")
+    new = photo.add_revert(2, "p/revisions/6.jpg", "sha")
+    assert (new.n, new.parent, new.reverts_to, new.origin) == (6, 5, 2, "reverted")
+    assert photo.current == 6
+    assert [r.n for r in photo.chain()] == [0, 1, 2, 3, 4, 5, 6]   # nothing hidden
+    assert photo.step_of(6) == 6 and photo.step_of(4) == 4          # step numbers never move
+    assert photo.content_source(6) == 2
+
+
+def test_instructions_skip_what_a_revert_undid():
+    photo = linear_photo(6)
+    photo.add_revert(2, "p/revisions/6.jpg")
+    # The image is step 2's, so Claude is told about steps 1 and 2 only.
+    assert photo.instructions() == ["step 1", "step 2"]
+    assert [r.n for r in photo.lineage()] == [0, 1, 2]
+    # The history before the revert is unchanged.
+    assert photo.instructions(5) == ["step 1", "step 2", "step 3", "step 4", "step 5"]
+
+
+def test_a_revision_made_after_a_revert_builds_on_the_reverted_image():
+    photo = linear_photo(6)
+    photo.add_revert(2, "p/revisions/6.jpg")
+    new = rev(photo.next_revision_number(), photo.current, "different idea")
     photo.revisions.append(new)
     photo.current = new.n
-    assert new.n == 6
-    assert [r.n for r in photo.chain()] == [0, 1, 2, 6]
+    assert new.n == 7 and new.parent == 6
     assert photo.instructions() == ["step 1", "step 2", "different idea"]
-    assert photo.step_of(6) == 3 and photo.step_of(4) is None
-    assert [r.n for r in photo.off_branch()] == [3, 4, 5]
-    assert len(photo.revisions) == 7                   # nothing was deleted
+    assert [r.n for r in photo.chain()] == list(range(8))
+
+
+def test_undoing_a_revert_is_another_revert():
+    photo = linear_photo(6)
+    photo.add_revert(2, "p/revisions/6.jpg")
+    photo.add_revert(5, "p/revisions/7.jpg")
+    assert photo.current == 7 and photo.content_source(7) == 5
+    assert photo.instructions() == ["step 1", "step 2", "step 3", "step 4", "step 5"]
+    # A revert to a revert resolves to the image it ultimately is.
+    photo.add_revert(6, "p/revisions/8.jpg")
+    assert photo.content_source(8) == 2 and photo.instructions() == ["step 1", "step 2"]
+
+
+def test_revert_to_an_unknown_revision_is_refused():
+    photo = linear_photo(2)
+    with pytest.raises(ValueError):
+        photo.add_revert(9, "p/revisions/2.jpg")
+    assert len(photo.revisions) == 2 and photo.current == 1
+
+
+def test_reverts_survive_a_round_trip(tmp_path):
+    store = LibraryStore(str(tmp_path / "library.json"))
+    photo = linear_photo(3)
+    photo.add_revert(0, "p/revisions/3.jpg", "sha")
+    store.update(lambda lib: lib.photos.__setitem__("p", photo))
+    assert store.load().photos["p"] == photo
+
+
+def test_a_reverts_loop_does_not_hang():
+    photo = Photo(id="p", current=1, revisions=[
+        Revision(n=0, parent=None, file="a", reverts_to=1), Revision(n=1, parent=0, file="b", reverts_to=0),
+    ])
+    assert photo.instructions() == []
+    assert photo.content_source(1) == 1
 
 
 def test_chain_of_a_photo_with_no_revisions_is_empty():
