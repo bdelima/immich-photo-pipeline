@@ -19,13 +19,20 @@ import os
 from flask import Flask, abort, jsonify, request, send_file
 
 from ..library import (
-    REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
+    INBOX, REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
     Library, LibraryStore, Photo,
 )
 from ..revisions import RevisionStore, RevisionStoreError
 from ..thumbs import ThumbCache
 
 _QUEUE_STATUSES = (STATUS_PROCESSING, STATUS_AWAITING_ANSWER, STATUS_FAILED)
+
+
+def album_names(library: Library) -> list[str]:
+    """Every managed album: those that exist in Immich, and any a photo has
+    just been moved to whose Immich album the poll cycle hasn't made yet."""
+    homes = {p.home for p in library.photos.values() if not p.trashed} - {INBOX, REVIEW}
+    return sorted(set(library.albums) | homes)
 
 
 def photos_in_view(library: Library, view: str) -> list[Photo] | None:
@@ -39,7 +46,7 @@ def photos_in_view(library: Library, view: str) -> list[Photo] | None:
         photos = [p for p in live if p.status in _QUEUE_STATUSES]
     elif view == "trash":
         photos = library.trashed_photos()
-    elif view.startswith("album:") and view[len("album:"):] in library.albums:
+    elif view.startswith("album:") and view[len("album:"):] in album_names(library):
         name = view[len("album:"):]
         photos = [p for p in live if p.home == name and p.status == STATUS_READY]
     else:
@@ -55,7 +62,7 @@ def tree(library: Library) -> dict:
         "queue": count("queue"),
         "review": count("review"),
         "live": count("live"),
-        "albums": [{"name": n, "view": f"album:{n}", "count": count(f"album:{n}")} for n in library.album_names()],
+        "albums": [{"name": n, "view": f"album:{n}", "count": count(f"album:{n}")} for n in album_names(library)],
         "trash": count("trash"),
     }
 

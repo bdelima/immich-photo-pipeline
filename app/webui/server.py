@@ -15,6 +15,7 @@ from ..library import REVIEW, STATUS_FAILED, STATUS_PROCESSING, Library, Library
 from ..revisions import RevisionStore
 from ..rules import MAX_ACTIVE_RULES, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
 from ..thumbs import ThumbCache
+from .action_routes import register_action_routes
 from .browse import register_browse_routes
 
 log = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 def create_app(
     cfg: Config, immich: ImmichClient, store: LibraryStore, health: HealthStore,
     rules: RulesStore | None = None, revisions: RevisionStore | None = None,
-    thumbs: ThumbCache | None = None,
+    thumbs: ThumbCache | None = None, on_change=None,
 ) -> Flask:
     app = Flask(__name__)
 
@@ -44,6 +45,7 @@ def create_app(
 
     if store is not None and revisions is not None and thumbs is not None:
         register_browse_routes(app, store, revisions, thumbs)
+        register_action_routes(app, store, revisions, cfg, on_change)
     if rules is not None:
         _register_rules_routes(app, rules)
 

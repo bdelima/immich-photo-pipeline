@@ -264,8 +264,11 @@ class Worker:
         else:
             asset_id = photo.immich_asset_id
 
+        published = photo.current
+
         def done(p: Photo) -> None:
             p.immich_asset_id = asset_id
+            p.published_revision = published
             p.status = STATUS_READY
             p.error = None
             p.question = None
