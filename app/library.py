@@ -115,6 +115,13 @@ class Photo:
     # pipeline account owns). None while there is no result yet, and while
     # trashed.
     immich_asset_id: str | None = None
+    # The revision that asset shows. When it differs from `current`, the
+    # photo needs publishing again (see publish.py).
+    published_revision: int | None = None
+    # Assets this photo no longer uses (an older revision's upload, or the
+    # asset of a photo that was trashed), waiting to be moved to Immich's
+    # trash. Kept until Immich has done it, so a failure is retried.
+    stale_asset_ids: list[str] = field(default_factory=list)
     # While status is awaiting_answer: Claude's question, and the headless
     # session to resume with the answer.
     question: str | None = None
