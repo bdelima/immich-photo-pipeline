@@ -91,6 +91,11 @@ class Config:
     # comment (Immich only surfaces likes and comments on shared albums).
     # Defaulted so code that builds a Config by hand doesn't need it.
     share_albums: bool = True
+    # The library of photos and their revisions (app/library.py), and the
+    # directory holding every revision's image file (app/revisions.py). The
+    # latter is its own setting so it can be bind-mounted onto a bigger disk.
+    library_path: str = "/data/library.json"
+    revisions_path: str = "/data/revisions"
 
     @staticmethod
     def from_env() -> "Config":
@@ -121,4 +126,6 @@ class Config:
             webui_port=_env_int("WEBUI_PORT", 8080),
             rules_path=_env("RULES_PATH", "/data/rules.json"),
             share_albums=_env("SHARE_ALBUMS", "true").strip().lower() not in ("0", "false", "no", "off"),
+            library_path=_env("LIBRARY_PATH", "/data/library.json"),
+            revisions_path=_env("REVISIONS_PATH", "/data/revisions"),
         )
