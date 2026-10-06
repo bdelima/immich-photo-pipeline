@@ -41,9 +41,6 @@ class FakeAccount:
     def enable_album_activity(self, album_id):
         self.activity_enabled.append(album_id)
 
-    def set_favorite(self, asset_id, favorite):
-        pass
-
     def list_albums(self):
         return [{"id": i, "albumName": a["albumName"]} for i, a in self.albums.items() if "albumName" in a]
 

@@ -19,7 +19,7 @@ class AlbumImmich:
         self.gone = set(gone)      # deleted: listing fails and get_album says not found
         self.broken = set(broken)  # listing fails but the album exists
         self.added = []
-        self.assets = {"review": [], "alb-ok": [Asset(id="b1", original_file_name="b.jpg", is_favorite=True)]}
+        self.assets = {"review": [], "alb-ok": [Asset(id="b1", original_file_name="b.jpg")]}
 
     def list_album_assets(self, album_id):
         if album_id in self.gone or album_id in self.broken:
@@ -34,10 +34,13 @@ class AlbumImmich:
     def list_comments(self, *, album_id, asset_id=None):
         return []
 
+    def list_likes(self, *, album_id, asset_id):
+        return []
+
     def add_assets_to_album(self, album_id, ids):
         self.added.append((album_id, list(ids)))
         for i in ids:
-            self.assets.setdefault(album_id, []).append(Asset(id=i, original_file_name=f"{i}.jpg", is_favorite=True))
+            self.assets.setdefault(album_id, []).append(Asset(id=i, original_file_name=f"{i}.jpg"))
 
 
 class MemoryStore:

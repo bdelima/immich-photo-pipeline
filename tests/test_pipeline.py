@@ -7,9 +7,8 @@ from app.immich_client import Asset, Comment
 from app.pipeline import is_portrait, new_comments, plan_collage_maker
 
 
-def make_asset(asset_id, orientation=None, favorite=False):
-    return Asset(id=asset_id, original_file_name=f"{asset_id}.jpg",
-                 is_favorite=favorite, exif_orientation=orientation)
+def make_asset(asset_id, orientation=None):
+    return Asset(id=asset_id, original_file_name=f"{asset_id}.jpg", exif_orientation=orientation)
 
 
 def test_is_portrait_detects_rotated_exif():

@@ -64,7 +64,7 @@ def test_try_remove_from_album_fails_when_no_client_can():
 def test_clear_from_entry_queue_comments_when_all_clients_fail():
     primary = RecordingClient(succeeds=False)
     pipeline = make_pipeline(primary, [])
-    asset = Asset(id="a1", original_file_name="a1.jpg", is_favorite=False, owner_id="someone-else")
+    asset = Asset(id="a1", original_file_name="a1.jpg", owner_id="someone-else")
     pipeline._clear_from_entry_queue("album-1", [asset])
     assert len(primary.comments) == 1
     text, album_id, asset_id = primary.comments[0]
@@ -76,7 +76,7 @@ def test_clear_from_entry_queue_comments_when_all_clients_fail():
 def test_clear_from_entry_queue_does_not_comment_when_removal_succeeds():
     primary = RecordingClient(succeeds=True)
     pipeline = make_pipeline(primary, [])
-    asset = Asset(id="a1", original_file_name="a1.jpg", is_favorite=False, owner_id="me")
+    asset = Asset(id="a1", original_file_name="a1.jpg", owner_id="me")
     pipeline._clear_from_entry_queue("album-1", [asset])
     assert primary.comments == []
 

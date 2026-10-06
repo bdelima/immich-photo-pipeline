@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .config import Config
-from .immich_client import Asset, Comment, ImmichClient, ImmichError
+from .immich_client import Asset, Comment, ImmichClient, ImmichError, Like
 from .recipe_runner import CommentContext, CommentIntent, RecipeResult, RecipeRunner
 from .rules import SCOPE_LABELS, RulesFull, RulesStore
 from .sharing import ensure_shared
@@ -111,6 +111,15 @@ class Pipeline:
         # Accounts every album the pipeline creates is shared with (see
         # sharing.py); empty means don't share.
         self.share_user_ids = list(share_user_ids)
+        # Which Immich account each configured API key belongs to, so a
+        # thumbs-up can be given again as the account that originally gave it
+        # (see _carry_likes). Filled in lazily; keys that can't be resolved
+        # yet are retried on the next use.
+        self._user_clients: dict[str, ImmichClient] = {}
+        self._unresolved_clients: list[ImmichClient] | None = None
+        # Activity ids from unknown accounts already logged as ignored, so a
+        # stranger's comment is reported once, not every poll cycle.
+        self._ignored_logged: set[str] = set()
 
     def run_once(self) -> None:
         # Exclusive for the whole cycle so a concurrent one-off import
@@ -268,14 +277,11 @@ class Pipeline:
             try:
                 comments = self.immich.list_comments(album_id=self.cfg.review_album_id, asset_id=asset.id)
                 acted = set(img.acted_comment_ids)
-                fresh = new_comments(comments, acted)
+                fresh = new_comments(self._from_known_accounts(comments, asset.id), acted)
                 if not img.awaiting_clarification:
                     new_likes = self._new_like_ids(img, asset.id)
-                    if asset.is_favorite or new_likes:
-                        log.info(
-                            "review: like on %s (%s) -> asking which album",
-                            asset.id, "thumbs-up" if new_likes else "favorite flag",
-                        )
+                    if new_likes:
+                        log.info("review: thumbs-up on %s -> asking which album", asset.id)
                         img.acted_like_ids.extend(new_likes)
                         self._ask_which_album(state, lineage_id, asset.id)
                         continue
@@ -292,13 +298,103 @@ class Pipeline:
         """Thumbs-up activities on this photo in Review that haven't been
         acted on yet. A lookup failure just means "no likes this cycle" so
         comments on the photo are still handled."""
+        likes = self._likes(self.cfg.review_album_id, asset_id)
+        seen = set(img.acted_like_ids)
+        return [like.id for like in likes or [] if like.id not in seen]
+
+    def _likes(self, album_id: str, asset_id: str) -> list[Like] | None:
+        """The thumbs-ups on a photo in an album from accounts this pipeline
+        knows, or None if they couldn't be looked up (so a failure is never
+        mistaken for "no likes"). A like from any other account is ignored."""
         try:
-            ids = self.immich.list_like_ids(album_id=self.cfg.review_album_id, asset_id=asset_id)
+            likes = self.immich.list_likes(album_id=album_id, asset_id=asset_id)
         except ImmichError:
             log.exception("could not look up likes on %s", asset_id)
-            return []
-        seen = set(img.acted_like_ids)
-        return [i for i in ids if i not in seen]
+            return None
+        known = self._known_user_ids() if likes else set()
+        kept = []
+        for like in likes:
+            if like.user_id in known:
+                kept.append(like)
+            else:
+                self._log_ignored(like.id, "thumbs-up", like.user_name or like.user_id, asset_id)
+        return kept
+
+    def _known_user_ids(self) -> set[str]:
+        """The Immich accounts this pipeline knows: the one it runs as and
+        the ones with a configured API key (IMMICH_EXTRA_API_KEY). Only these
+        may drive it. If the accounts can't be resolved, nobody is known, so a
+        failure never lets a stranger through (keys are retried next time)."""
+        self._client_for_user("")  # resolves any key not resolved yet
+        return set(self._user_clients)
+
+    def _from_known_accounts(self, comments: list[Comment], asset_id: str) -> list[Comment]:
+        """Drops comments written by accounts the pipeline doesn't know."""
+        if not comments:
+            return comments
+        known = self._known_user_ids()
+        kept = []
+        for comment in comments:
+            if comment.user_id in known:
+                kept.append(comment)
+            else:
+                self._log_ignored(comment.id, "comment", comment.user_id, asset_id)
+        return kept
+
+    def _log_ignored(self, activity_id: str, kind: str, who: str, asset_id: str) -> None:
+        if activity_id not in self._ignored_logged:
+            self._ignored_logged.add(activity_id)
+            log.warning("ignoring a %s from %s on %s: not an account this pipeline knows", kind, who, asset_id)
+
+    def _client_for_user(self, user_id: str) -> ImmichClient | None:
+        """The configured API key's client for this Immich account, if there
+        is one: the pipeline's own account or one of IMMICH_EXTRA_API_KEY."""
+        if self._unresolved_clients is None:
+            self._unresolved_clients = [self.immich, *self.extra_clients]
+        if self._unresolved_clients:
+            still_unresolved = []
+            for client in self._unresolved_clients:
+                try:
+                    self._user_clients.setdefault(client.get_my_user_id(), client)
+                except ImmichError:
+                    log.warning("could not tell which Immich account an API key belongs to", exc_info=True)
+                    still_unresolved.append(client)
+            self._unresolved_clients = still_unresolved
+        return self._user_clients.get(user_id)
+
+    def _carry_likes(self, album_id: str, asset_id: str, likes: list[Like]) -> list[str]:
+        """Gives the photo a thumbs-up again, in the album it is now in, as each
+        account that had given one. A like belongs to one album and one photo,
+        so it is lost whenever the photo moves or is replaced by a revision.
+        Each like is given as the account that made it, never as another one,
+        so that account can still take it back. Returns the names of accounts
+        whose like could not be carried over (no configured key, or Immich
+        refused)."""
+        missing: list[str] = []
+        done: set[str] = set()
+        for like in likes:
+            if like.user_id in done:
+                continue
+            done.add(like.user_id)
+            client = self._client_for_user(like.user_id)
+            if client is None:
+                log.warning("no configured API key for %s (%s); their thumbs-up on %s was not carried over",
+                            like.user_name or "an account", like.user_id, asset_id)
+                missing.append(like.user_name or "an account")
+                continue
+            try:
+                client.post_like(album_id=album_id, asset_id=asset_id)
+            except ImmichError:
+                log.exception("could not carry %s's thumbs-up over to %s", like.user_name or like.user_id, asset_id)
+                missing.append(like.user_name or "an account")
+        return missing
+
+    @staticmethod
+    def _lost_likes_note(missing: list[str]) -> str:
+        return (
+            " I couldn't carry over the thumbs-up from " + ", ".join(missing)
+            + ": Immich refused it."
+        )
 
     def _handle_fresh_comment(
         self, state: PipelineState, lineage_id: str, img: ImageState, asset: Asset,
@@ -339,15 +435,19 @@ class Pipeline:
                 )
             elif in_review:
                 exists = self._find_album(state, verdict.album) is not None
+                # Read the thumbs-ups before the move: they stay behind in Review.
+                likes = self._likes(album_id, asset.id) or []
                 shared = self._promote_to_album(state, lineage_id, asset.id, verdict.album)
                 # Comments belong to one photo in one album, so the photo
                 # leaving Review leaves its thread behind. Say it where the
                 # photo is now, which is where the reviewer will look.
                 dest = state.watched_albums.get(img.home)
                 if dest:
+                    missing = self._carry_likes(dest, asset.id, likes)
                     self._ack(
                         img, dest, asset.id,
                         f"Moved here from Review: this is now in the album \"{img.home}\"" + ("." if exists else " (I created it).")
+                        + (self._lost_likes_note(missing) if missing else "")
                         + (" I couldn't share this album with the household (the pipeline account may not own it), "
                            "so likes and comments won't show for others until it is shared by hand in Immich."
                            if shared is False else ""),
@@ -666,15 +766,11 @@ class Pipeline:
             state.watched_albums[album_name] = album_id
             log.info("created album %r (%s)", album_name, album_id)
         shared = ensure_shared(self.immich, album_id, self.share_user_ids)
-        # Managed albums keep a photo only while its favorite flag is on
-        # (_flow3_managed pulls an unfavorited one back to Review). A like
-        # given as a thumbs-up activity doesn't set that flag, so set it
-        # here; the pipeline account owns the asset, so it can.
-        self.immich.set_favorite(asset_id, True)
         self.immich.add_assets_to_album(album_id, [asset_id])
         self.immich.remove_assets_from_album(self.cfg.review_album_id, [asset_id])
         img = state.images[lineage_id]
         img.home = album_name
+        img.like_in_album = False
         img.awaiting_clarification = False
         img.awaiting_album = False
         log.info("promoted %s to album %r", asset_id, album_name)
@@ -701,19 +797,25 @@ class Pipeline:
                 asset = assets.get(img.current_asset_id)
                 if asset is None:
                     continue
-                if not asset.is_favorite:
+                likes = self._likes(album_id, asset.id)
+                if likes:
+                    img.like_in_album = True
+                elif likes is not None and img.like_in_album:
+                    # A thumbs-up was there and is now gone: unliked, so the
+                    # photo goes back to Review.
                     self.immich.add_assets_to_album(self.cfg.review_album_id, [asset.id])
                     self.immich.remove_assets_from_album(album_id, [asset.id])
                     previous = img.home
                     img.home = "review"
-                    log.info("%s was unfavorited in %r -> moved back to Review", asset.id, album_id)
+                    img.like_in_album = False
+                    log.info("%s was unliked in %r -> moved back to Review", asset.id, album_id)
                     self._ack(
                         img, self.cfg.review_album_id, asset.id,
                         f"Moved back to Review: you unliked it in \"{previous}\". Like it again to choose an album.",
                     )
                     continue
                 comments = self.immich.list_comments(album_id=album_id, asset_id=asset.id)
-                fresh = new_comments(comments, set(img.acted_comment_ids))
+                fresh = new_comments(self._from_known_accounts(comments, asset.id), set(img.acted_comment_ids))
                 for comment in fresh:
                     if self._handle_fresh_comment(
                         state, lineage_id, img, asset, comment,
@@ -791,6 +893,9 @@ class Pipeline:
             log.info("undoing %d adjustment(s) on %s: %r", len(undone), old_asset_id, undone)
         else:
             log.info("revising %s: %r", old_asset_id, instruction)
+        # The new version is a new photo, so any thumbs-ups on this one are
+        # lost with it; read them now to give them again on the new one.
+        likes = (self._likes(target_album, old_asset_id) or []) if img.home != "review" else []
         tmp_dir = tempfile.mkdtemp(prefix="pipeline-")
         try:
             src_paths = [self._download(sid, tmp_dir) for sid in img.source_asset_ids]
@@ -812,8 +917,9 @@ class Pipeline:
                 return
             new_asset_id = self.immich.upload_asset(result.output_path, f"{lineage_id}.jpg")
             self.immich.add_assets_to_album(target_album, [new_asset_id])
+            lost_likes = self._carry_likes(target_album, new_asset_id, likes) if likes else []
             if img.home != "review":
-                self.immich.set_favorite(new_asset_id, True)
+                img.like_in_album = False  # seen again next cycle, once the like is on the new photo
             if new_asset_id != old_asset_id:
                 # Immich answers an upload of identical bytes with the id of
                 # the copy it already has. Deleting "the old one" then would
@@ -826,6 +932,8 @@ class Pipeline:
                 f"Undid: {_short('; '.join(undone))}. Reply \"undo\" again to take back the one before."
                 if undo_steps else f"Applied: {note}"
             )
+            if lost_likes:
+                applied += self._lost_likes_note(lost_likes)
             posted = self.immich.post_comment(applied, album_id=target_album, asset_id=new_asset_id)
             self._mark_own(img, posted)
             img.current_asset_id = new_asset_id

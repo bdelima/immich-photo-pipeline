@@ -46,7 +46,7 @@ class LoopImmich:
 
     def __init__(self, own_detection_works=True):
         self.comments = {}  # asset_id -> [Comment]
-        self.assets = {"old": Asset(id="old", original_file_name="x.jpg", is_favorite=False)}
+        self.assets = {"old": Asset(id="old", original_file_name="x.jpg")}
         self.deleted = []
         self.uploads = 0
         self.own_detection_works = own_detection_works
@@ -68,8 +68,11 @@ class LoopImmich:
     def list_albums(self):
         return []
 
-    def list_like_ids(self, *, album_id, asset_id):
+    def list_likes(self, *, album_id, asset_id):
         return []
+
+    def get_my_user_id(self):
+        return "wife"  # the pipeline runs as the account the reviewer comments from
 
     def post_comment(self, text, *, album_id, asset_id=None):
         return self._add(asset_id, text, "pipeline")
@@ -82,13 +85,10 @@ class LoopImmich:
     def upload_asset(self, path, name):
         self.uploads += 1
         new_id = f"new{self.uploads}"
-        self.assets[new_id] = Asset(id=new_id, original_file_name=name, is_favorite=False)
+        self.assets[new_id] = Asset(id=new_id, original_file_name=name)
         return new_id
 
     def add_assets_to_album(self, album_id, ids):
-        pass
-
-    def set_favorite(self, asset_id, favorite):
         pass
 
     def delete_assets(self, ids, force=True):

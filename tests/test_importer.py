@@ -13,11 +13,10 @@ from app.state import ImageState, PipelineState, StateStore
 
 
 class FakeImmich:
-    def __init__(self, assets, albums=None, fail_favorite_for=()):
+    def __init__(self, assets, albums=None, fail_add_for=()):
         self._assets = assets
         self._albums = albums or []
-        self.fail_favorite_for = set(fail_favorite_for)
-        self.favorited = []
+        self.fail_add_for = set(fail_add_for)
         self.added = []  # (album_id, [ids])
         self.created = []
         self.comments = []
@@ -34,12 +33,9 @@ class FakeImmich:
         self.created.append(name)
         return f"new-{name}"
 
-    def set_favorite(self, asset_id, favorite):
-        if asset_id in self.fail_favorite_for:
-            raise ImmichError("403 not the owner")
-        self.favorited.append(asset_id)
-
     def add_assets_to_album(self, album_id, ids):
+        if set(ids) & self.fail_add_for:
+            raise ImmichError("403 not allowed")
         self.added.append((album_id, list(ids)))
 
     def remove_assets_from_album(self, album_id, ids):
@@ -53,8 +49,8 @@ class FakeImmich:
         return "c1"
 
 
-def asset(i, fav=False):
-    return Asset(id=i, original_file_name=f"{i}.jpg", is_favorite=fav)
+def asset(i):
+    return Asset(id=i, original_file_name=f"{i}.jpg")
 
 
 def run(immich, store, target="Everyday", apply=True):
@@ -69,16 +65,15 @@ def test_dry_run_changes_nothing(tmp_path):
     immich = FakeImmich([asset("a"), asset("b")])
     report = run(immich, store, apply=False)
     assert report.dry_run and report.imported_ids == ["a", "b"]
-    assert immich.added == [] and immich.favorited == [] and immich.created == []
+    assert immich.added == [] and immich.created == []
     assert not os.path.exists(str(tmp_path / "state.json"))
 
 
-def test_import_into_managed_album_likes_adds_and_tracks(tmp_path):
+def test_import_into_managed_album_adds_and_tracks(tmp_path):
     store = StateStore(str(tmp_path / "state.json"))
-    immich = FakeImmich([asset("a"), asset("b", fav=True)])
+    immich = FakeImmich([asset("a"), asset("b")])
     report = run(immich, store)
     assert report.imported_ids == ["a", "b"]
-    assert immich.favorited == ["a"]  # already-liked one isn't touched
     assert immich.created == ["Everyday"]
     assert immich.added == [("new-Everyday", ["a"]), ("new-Everyday", ["b"])]
     state = store.load()
@@ -97,11 +92,10 @@ def test_import_into_existing_album_reuses_it(tmp_path):
     assert immich.added == [("have-it", ["a"])]
 
 
-def test_import_into_review_does_not_like(tmp_path):
+def test_import_into_review_adds_to_review(tmp_path):
     store = StateStore(str(tmp_path / "state.json"))
     immich = FakeImmich([asset("a")])
     run(immich, store, target="review")
-    assert immich.favorited == []
     assert immich.added == [("review-id", ["a"])]
     assert store.load().images["a"].home == "review"
 
@@ -118,13 +112,13 @@ def test_already_tracked_assets_are_skipped_and_rerun_is_idempotent(tmp_path):
     assert second.imported_ids == [] and sorted(second.already_tracked) == ["a", "b"]
 
 
-def test_favorite_failure_skips_the_photo_and_is_reported(tmp_path):
+def test_a_photo_that_cannot_be_added_is_skipped_and_reported(tmp_path):
     store = StateStore(str(tmp_path / "state.json"))
-    immich = FakeImmich([asset("a"), asset("b")], fail_favorite_for={"a"})
+    immich = FakeImmich([asset("a"), asset("b")], fail_add_for={"a"})
     report = run(immich, store)
     assert report.imported_ids == ["b"]
     assert [aid for aid, _ in report.failed] == ["a"]
-    assert ("new-Everyday", ["a"]) not in immich.added  # never added, so never bounced to Review
+    assert ("new-Everyday", ["a"]) not in immich.added
     assert "a" not in store.load().images
 
 

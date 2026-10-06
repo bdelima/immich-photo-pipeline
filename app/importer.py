@@ -16,8 +16,7 @@ recipe would double-mat it and then delete the good copy.
 Safety properties:
   * Dry-run by default; nothing is touched unless `apply=True`.
   * Never removes anything from the source album and never deletes an
-    asset -- it only adds album membership, (for a managed target) sets
-    the like flag, and records state.
+    asset -- it only adds album membership and records state.
   * Idempotent: anything already tracked is skipped, so re-running after a
     partial failure is safe.
   * Per-photo failures are reported and skipped, not fatal.
@@ -73,12 +72,9 @@ def import_existing(
     name of a managed album (created and registered as a watched album if
     it doesn't exist yet).
 
-    A managed target needs each photo to be liked (the managed-album flow
-    treats an un-liked photo as "pulled back to Review" and moves it on the
-    next cycle), so the like flag is set first. If that fails -- typically
-    because the asset belongs to a different Immich account and Immich only
-    lets the owner edit it -- the photo is skipped and reported, rather than
-    being added and then immediately bounced to Review.
+    An imported photo has no thumbs-up in its managed album, so it simply
+    stays there: the pipeline only moves a photo back to Review when it has
+    seen a like on it in that album and the like is later taken away.
     """
     # Hold the cross-process state lock for the whole load -> save when
     # actually writing, so a running poll cycle can't overwrite the result
@@ -111,8 +107,6 @@ def import_existing(
 
         for asset in candidates:
             try:
-                if target != REVIEW and not asset.is_favorite:
-                    immich.set_favorite(asset.id, True)
                 immich.add_assets_to_album(target_album_id, [asset.id])
             except ImmichError as exc:
                 log.warning("could not import %s: %s", asset.id, exc)
