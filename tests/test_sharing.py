@@ -4,10 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.immich_client import ImmichClient, ImmichError
-from app.pipeline import Pipeline
 from app.sharing import ensure_all_shared, ensure_shared, resolve_user_ids
-from app.state import ImageState, PipelineState
-from types import SimpleNamespace
 
 
 class FakeAccount:
@@ -71,6 +68,18 @@ def test_resolve_user_ids_returns_nothing_if_owner_lookup_fails():
     assert resolve_user_ids(FakeAccount("owner", fail_me=True), [FakeAccount("wife")]) == []
 
 
+def test_ensure_shared_can_share_as_viewers():
+    owner = FakeAccount("owner", {"a1": album(users=[])})
+    ensure_shared(owner, "a1", ["wife"], "viewer")
+    assert owner.shared == [("a1", ["wife"], "viewer")]
+
+
+def test_ensure_all_shared_passes_the_role_on():
+    owner = FakeAccount("owner", {"a1": album(users=[])})
+    ensure_all_shared(owner, ["a1"], ["wife"], "viewer")
+    assert owner.shared == [("a1", ["wife"], "viewer")]
+
+
 def test_ensure_shared_adds_only_missing_users_as_editors():
     owner = FakeAccount("owner", {"a1": album(users=["wife"])})
     assert ensure_shared(owner, "a1", ["wife", "kid"]) is True
@@ -100,54 +109,6 @@ def test_ensure_all_shared_skips_blank_and_duplicate_ids():
     assert owner.shared == [("a1", ["wife"], "editor"), ("a2", ["wife"], "editor")]
 
 
-def test_new_managed_album_is_shared_when_promoting():
-    owner = FakeAccount("owner")
-    cfg = SimpleNamespace(review_album_id="review")
-    pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None, share_user_ids=["wife"])
-    state = PipelineState(images={"L": ImageState(source_asset_ids=["s"], current_asset_id="a1", home="review")})
-    pipeline._promote_to_album(state, "L", "a1", "Holiday")
-    assert owner.shared == [("new-Holiday", ["wife"], "editor")]
-    assert state.watched_albums["Holiday"] == "new-Holiday"
-
-
-def test_promoting_into_an_existing_album_shares_it_too():
-    # An album made by hand is adopted, and must end up shared like the
-    # ones the pipeline creates (otherwise a thumbs-up on it vanishes).
-    owner = FakeAccount("owner", {"h1": album(users=[])})
-    cfg = SimpleNamespace(review_album_id="review")
-    pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None, share_user_ids=["wife"])
-    state = PipelineState(
-        images={"L": ImageState(source_asset_ids=["s"], current_asset_id="a1", home="review")},
-        watched_albums={"Holiday": "h1"},
-    )
-    assert pipeline._promote_to_album(state, "L", "a1", "Holiday") is True
-    assert owner.shared == [("h1", ["wife"], "editor")] and owner.created == []
-
-
-def test_an_album_already_shared_is_not_reshared_when_promoting():
-    owner = FakeAccount("owner", {"h1": album(users=["wife"])})
-    cfg = SimpleNamespace(review_album_id="review")
-    pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None, share_user_ids=["wife"])
-    state = PipelineState(
-        images={"L": ImageState(source_asset_ids=["s"], current_asset_id="a1", home="review")},
-        watched_albums={"Holiday": "h1"},
-    )
-    pipeline._promote_to_album(state, "L", "a1", "Holiday")
-    assert owner.shared == []
-
-
-def test_an_album_the_pipeline_cannot_share_is_reported_not_fatal():
-    owner = FakeAccount("owner", {"h1": album(owner="someone-else")}, fail_share=True)
-    cfg = SimpleNamespace(review_album_id="review")
-    pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None, share_user_ids=["wife"])
-    state = PipelineState(
-        images={"L": ImageState(source_asset_ids=["s"], current_asset_id="a1", home="review")},
-        watched_albums={"Holiday": "h1"},
-    )
-    assert pipeline._promote_to_album(state, "L", "a1", "Holiday") is False
-    assert state.images["L"].home == "Holiday"
-
-
 def test_ensure_shared_turns_on_activity_when_it_is_off():
     off = dict(album(users=["wife"]), isActivityEnabled=False)
     on = dict(album(users=["wife"]), isActivityEnabled=True)
@@ -155,15 +116,6 @@ def test_ensure_shared_turns_on_activity_when_it_is_off():
     for album_id in ("a1", "a2", "a3"):
         assert ensure_shared(owner, album_id, ["wife"]) is True
     assert owner.activity_enabled == ["a1"]
-
-
-def test_promoting_without_share_users_does_not_touch_sharing():
-    owner = FakeAccount("owner")
-    cfg = SimpleNamespace(review_album_id="review")
-    pipeline = Pipeline(config=cfg, immich=owner, recipe=None, store=None)
-    state = PipelineState(images={"L": ImageState(source_asset_ids=["s"], current_asset_id="a1", home="review")})
-    pipeline._promote_to_album(state, "L", "a1", "Holiday")
-    assert owner.shared == []
 
 
 # ---- the real client's requests --------------------------------------------
