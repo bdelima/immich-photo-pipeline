@@ -7,6 +7,9 @@ useless to everyone else until it's shared. The accounts to share with are
 exactly the ones configured as IMMICH_EXTRA_API_KEY: each key identifies
 its account via GET /users/me, so no user ids need configuring by hand.
 
+An album that is already shared keeps the role it has: only accounts that
+have no access yet are added.
+
 Everything here is best-effort. Failing to share (an album the pipeline
 doesn't own because its id was pinned, a key that's been revoked) is logged
 and skipped; it never stops the pipeline from running.
@@ -19,10 +22,11 @@ from .immich_client import ImmichClient, ImmichError
 
 log = logging.getLogger(__name__)
 
-# Editors can add photos to the album and like/comment on them, which is
-# everything the household does; viewers couldn't drop photos into an
-# entry queue.
+# Entry queues are shared as editors, so the household can drop photos into
+# them. Every other album is the pipeline's own output and is shared as
+# viewers: they can look (and like), but cannot add or remove anything.
 ROLE = "editor"
+VIEWER = "viewer"
 
 
 def resolve_user_ids(owner: ImmichClient, extra_clients: list[ImmichClient]) -> list[str]:
@@ -46,10 +50,15 @@ def resolve_user_ids(owner: ImmichClient, extra_clients: list[ImmichClient]) -> 
     return ids
 
 
-def ensure_shared(immich: ImmichClient, album_id: str, user_ids: list[str]) -> bool:
+def ensure_shared(
+    immich: ImmichClient, album_id: str, user_ids: list[str], role: str = ROLE, *, convert: bool = False,
+) -> bool:
     """Makes sure every account in user_ids has access to the album, adding
     only the missing ones (Immich errors on a user who already has access).
-    Returns True if the album is shared with everyone afterwards."""
+    With `convert`, an account that already has access under a different
+    role is changed to `role` (used to turn editor-shared output albums into
+    viewer-shared ones). Returns True if the album is shared with everyone
+    afterwards."""
     if not user_ids:
         return True
     try:
@@ -57,11 +66,17 @@ def ensure_shared(immich: ImmichClient, album_id: str, user_ids: list[str]) -> b
         if album.get("isActivityEnabled") is False:
             immich.enable_album_activity(album_id)
             log.info("turned on likes and comments for album %s", album_id)
-        have = {au.get("user", {}).get("id") for au in album.get("albumUsers", [])}
+        roles = {au.get("user", {}).get("id"): au.get("role") for au in album.get("albumUsers", [])}
+        have = set(roles)
         have.add(album.get("ownerId"))
+        if convert:
+            for uid in user_ids:
+                if uid in roles and roles[uid] != role:
+                    immich.update_album_user_role(album_id, uid, role)
+                    log.info("changed account %s on album %s from %s to %s", uid, album_id, roles[uid], role)
         missing = [uid for uid in user_ids if uid not in have]
         if missing:
-            immich.add_album_users(album_id, missing, ROLE)
+            immich.add_album_users(album_id, missing, role)
             log.info("shared album %s with %d account(s)", album_id, len(missing))
         return True
     except ImmichError:
@@ -72,7 +87,7 @@ def ensure_shared(immich: ImmichClient, album_id: str, user_ids: list[str]) -> b
         return False
 
 
-def ensure_all_shared(immich: ImmichClient, album_ids: list[str], user_ids: list[str]) -> None:
+def ensure_all_shared(immich: ImmichClient, album_ids: list[str], user_ids: list[str], role: str = ROLE) -> None:
     for album_id in dict.fromkeys(album_ids):
         if album_id:
-            ensure_shared(immich, album_id, user_ids)
+            ensure_shared(immich, album_id, user_ids, role)
