@@ -21,8 +21,11 @@ WORKDIR /app
 # into the /data volume on first start instead, the same thing a user would do
 # by hand, and it persists across restarts. Distro nodejs/npm (not a hard-coded
 # x64 tarball) so the multi-arch build also works on arm64.
+# imagemagick and tesseract-ocr: command-line image tools (and the OCR engine
+# behind pytesseract) for the recipe's Claude runs. ffmpeg is deliberately not
+# installed: the distro build is GPL-enabled, and nothing here needs it yet.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+    && apt-get install -y --no-install-recommends nodejs npm ca-certificates imagemagick tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CLAUDE_CLI_PREFIX=/data/claude-cli \
