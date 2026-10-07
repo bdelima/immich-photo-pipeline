@@ -29,6 +29,7 @@ import threading
 import time
 from typing import Callable
 
+from . import chat
 from .immich_client import ImmichClient, ImmichError
 from .library import (
     REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
@@ -61,6 +62,7 @@ class Worker:
         rules: RulesStore | None = None,
         count: int = 1,
         can_run_recipe: Callable[[], bool] = lambda: True,
+        on_change: Callable[[], None] | None = None,
     ):
         self.store = store
         self.revisions = revisions
@@ -69,6 +71,7 @@ class Worker:
         self.rules = rules
         self.count = max(1, count)
         self.can_run_recipe = can_run_recipe
+        self.on_change = on_change
         self.extra_clients = list(extra_clients)
         self._queue_albums = {"wallpaper": wallpaper_album_id, "collage": collage_album_id}
         self._lock = threading.Lock()
@@ -109,7 +112,20 @@ class Worker:
                 self._wake.clear()
 
     def run_one(self) -> bool:
-        """Claims and processes one photo. Returns False if there was none."""
+        """Does one unit of work: a reviewer's chat message if one is waiting
+        (they are answering a person, so they go first), otherwise a queued
+        photo. Returns False if there was nothing to do."""
+        chat_id = self._claim_chat()
+        if chat_id is not None:
+            try:
+                if chat.run_job(self.store, self.revisions, self.recipe, self.rules, chat_id):
+                    self.wake()  # a first result still has to be published
+                    if self.on_change is not None:
+                        self.on_change()
+            finally:
+                with self._lock:
+                    self._active.discard(chat_id)
+            return True
         photo_id = self._claim()
         if photo_id is None:
             return False
@@ -128,6 +144,25 @@ class Worker:
 
     def pending(self) -> list[str]:
         return [p.id for p in self._queued()]
+
+    def _claim_chat(self) -> str | None:
+        """The photo whose oldest chat message has waited longest, if the
+        recipe can run (every message is read by Claude)."""
+        if not self.can_run_recipe():
+            return None
+        waiting = []
+        for photo in self.store.load().photos.values():
+            message = chat.next_open_message(photo)
+            if message is None or photo.trashed or photo.status not in (STATUS_READY, STATUS_AWAITING_ANSWER):
+                continue
+            waiting.append((message.at, message.id, photo.id))
+        waiting.sort()
+        with self._lock:
+            for _, _, photo_id in waiting:
+                if photo_id not in self._active:
+                    self._active.add(photo_id)
+                    return photo_id
+        return None
 
     def _needs_claude(self, photo: Photo) -> bool:
         return photo.media_type == "image" and photo.current_revision() is None
