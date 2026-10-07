@@ -192,6 +192,8 @@ def revert(store: LibraryStore, revisions: RevisionStore, photo_id: str, step) -
     why = _movable(photo)
     if why:
         raise ActionError(f"can't revert: {why}")
+    if photo.busy:
+        raise ActionError("can't revert: it is being revised")
     target = photo.revision_at_step(step)
     if target is None:
         raise ActionError(f"there is no step {step}")
