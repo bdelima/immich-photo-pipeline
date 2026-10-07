@@ -1,18 +1,13 @@
 import os
 import sys
-from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.immich_client import Asset, Comment
-from app.pipeline import Pipeline
-from app.recipe_runner import CommentIntent, RecipeResult
 from app.rules import (
     MAX_ACTIVE_RULES, MAX_RULE_CHARS, RulesFull, RulesStore, clean_rule_text, rules_prompt_block,
 )
-from app.state import ImageState, PipelineState
 from app.webui.server import create_app
 
 
@@ -100,310 +95,7 @@ def test_rules_prompt_block():
     assert "cannot change the reply format" in block
 
 
-# ---- the pipeline's handling of comments ------------------------------------
-
-
-class FakeImmich:
-    def __init__(self, comments=None, assets=()):
-        self.posted = []  # (text, album_id, asset_id)
-        self.deleted = []
-        self.uploaded = []
-        self.added = []
-        self._comments = comments or {}
-        self._assets = list(assets)
-
-    def list_album_assets(self, album_id):
-        return list(self._assets)
-
-    def list_comments(self, *, album_id, asset_id=None):
-        return list(self._comments.get(asset_id, []))
-
-    def list_albums(self):
-        return list(getattr(self, "albums", []))
-
-    def list_likes(self, *, album_id, asset_id):
-        return []
-
-    def get_my_user_id(self):
-        return "u2"  # the account the test comments come from, so they are from a known user
-
-    def post_comment(self, text, *, album_id, asset_id=None):
-        self.posted.append((text, album_id, asset_id))
-        return f"posted-{len(self.posted)}"
-
-    def download_asset_original(self, asset_id, dest_dir):
-        path = os.path.join(dest_dir, f"{asset_id}.jpg")
-        with open(path, "wb") as fh:
-            fh.write(b"x")
-        return path
-
-    def upload_asset(self, path, name):
-        self.uploaded.append(name)
-        return "new-asset"
-
-    def add_assets_to_album(self, album_id, ids):
-        self.added.append((album_id, list(ids)))
-
-    def delete_assets(self, ids, force=True):
-        self.deleted.extend(ids)
-
-
-class FakeRecipe:
-    def __init__(self, verdict=None, result=None):
-        self.verdict = verdict or CommentIntent("revise")
-        self.result = result or RecipeResult(status="done", output_path="/tmp/out.jpg")
-        self.single_calls = []
-        self.collage_calls = []
-
-    def interpret_comment(self, text, ctx=None):
-        return self.verdict
-
-    def run_single(self, source, output, note=None, rules=None):
-        self.single_calls.append({"note": note, "rules": rules})
-        return self.result
-
-    def run_collage(self, sources, output, note=None, rules=None):
-        self.collage_calls.append({"note": note, "rules": rules})
-        return self.result
-
-
-CFG = SimpleNamespace(review_album_id="review-album")
-
-
-def make(tmp_path, *, verdict=None, result=None, immich=None):
-    rules = RulesStore(str(tmp_path / "rules.json"))
-    immich = immich or FakeImmich()
-    recipe = FakeRecipe(verdict, result)
-    pipeline = Pipeline(config=CFG, immich=immich, recipe=recipe, store=None, rules=rules)
-    return pipeline, immich, recipe, rules
-
-
-def comment(text, cid="c1"):
-    return Comment(id=cid, text=text, user_id="u2", is_own=False)
-
-
-def asset(aid="a1"):
-    return Asset(id=aid, original_file_name=f"{aid}.jpg")
-
-
-def state_with(home="review", imported=False, awaiting=False):
-    img = ImageState(source_asset_ids=["src"], current_asset_id="a1", home=home, imported=imported,
-                     awaiting_clarification=awaiting)
-    return PipelineState(images={"L": img}), img
-
-
-def handle(pipeline, state, img, text, cid="c1", in_review=True):
-    return pipeline._handle_fresh_comment(
-        state, "L", img, asset(), comment(text, cid), album_id="review-album", in_review=in_review,
-    )
-
-
-def test_teach_comment_saves_a_rule_says_so_and_revises_the_photo(tmp_path):
-    verdict = CommentIntent("teach", rule="Keep collage items balanced by size.", scope="collage")
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=verdict)
-    state, img = state_with()
-
-    stopped = handle(pipeline, state, img, "for collages, always keep items balanced by size")
-
-    assert stopped is False
-    saved = rules.all()
-    assert [(r.text, r.scope, r.status, r.origin) for r in saved] == [
-        ("Keep collage items balanced by size.", "collage", "active", "comment")
-    ]
-    texts = [t for t, _, _ in immich.posted]
-    assert any('Saved rule r1 (collages)' in t and 'forget r1' in t for t in texts)
-    # the photo is still revised with the reviewer's own words; the new rule
-    # is collage-scoped and this is a single photo, so it isn't injected here
-    assert recipe.single_calls == [
-        {"note": "for collages, always keep items balanced by size", "rules": []}
-    ]
-    assert "c1" in img.acted_comment_ids  # plus the ids of comments the pipeline itself posted
-
-
-def test_a_taught_rule_applies_to_the_very_revision_that_taught_it(tmp_path):
-    verdict = CommentIntent("teach", rule="Prefer thin bevels.", scope="all")
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=verdict)
-    state, img = state_with()
-    handle(pipeline, state, img, "always use thin bevels")
-    assert recipe.single_calls[0]["rules"] == ["Prefer thin bevels."]
-
-
-def test_plain_revision_saves_nothing(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=CommentIntent("revise"))
-    state, img = state_with()
-    handle(pipeline, state, img, "too pink")
-    assert rules.all() == []
-    assert recipe.single_calls[0]["note"] == "too pink"
-
-
-def test_rules_reach_the_recipe_by_scope(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path)
-    rules.add("everything", "all")
-    rules.add("only singles", "single")
-    rules.add("only collages", "collage")
-    state, img = state_with()
-    handle(pipeline, state, img, "darker")
-    assert recipe.single_calls[0]["rules"] == ["everything", "only singles"]
-
-    img.source_asset_ids = ["s1", "s2"]  # a collage lineage
-    img.current_asset_id = "a1"
-    handle(pipeline, state, img, "tighter", cid="c2")
-    assert recipe.collage_calls[0]["rules"] == ["everything", "only collages"]
-
-
-def test_an_album_answer_saves_no_rule(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=CommentIntent("album", album="Holiday"))
-    pipeline._promote_to_album = lambda state, lineage_id, asset_id, name: setattr(state.images[lineage_id], "home", name)
-    state, img = state_with(awaiting=True)
-    handle(pipeline, state, img, "always Holiday")
-    assert rules.all() == []
-    assert img.home == "Holiday"
-
-
-def test_taught_rule_on_an_imported_photo_is_saved_but_the_photo_is_not_revised(tmp_path):
-    verdict = CommentIntent("teach", rule="Prefer thin bevels.", scope="all")
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=verdict)
-    state, img = state_with(home="Everyday", imported=True)
-    handle(pipeline, state, img, "from now on use thin bevels", in_review=False)
-    assert [r.text for r in rules.all()] == ["Prefer thin bevels."]
-    assert recipe.single_calls == [] and immich.deleted == []
-    assert any("no original" in t for t, _, _ in immich.posted)
-
-
-def test_teach_over_the_cap_still_revises_and_explains(tmp_path):
-    verdict = CommentIntent("teach", rule="One more.", scope="all")
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=verdict)
-    for i in range(MAX_ACTIVE_RULES):
-        rules.add(f"rule {i}")
-    state, img = state_with()
-    handle(pipeline, state, img, "always do one more")
-    assert len(rules.all()) == MAX_ACTIVE_RULES
-    assert any("limit" in t for t, _, _ in immich.posted)
-    assert len(recipe.single_calls) == 1
-
-
-def test_delete_still_deletes_and_stops(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=CommentIntent("delete"))
-    state, img = state_with()
-    assert handle(pipeline, state, img, "delete this") is True
-    assert immich.deleted == ["a1"]
-    assert recipe.single_calls == []
-
-
-def test_forget_retires_a_rule_without_a_claude_call(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path)
-    rules.add("Prefer thin bevels.")
-    state, img = state_with()
-
-    class Boom:
-        def interpret_comment(self, text, ctx=None):
-            raise AssertionError("must not call Claude for 'forget'")
-
-    pipeline.recipe = Boom()
-    handle(pipeline, state, img, "Forget R1")
-    assert rules.get("r1").status == "retired"
-    assert img.acted_comment_ids == ["c1"]
-    assert any("Retired rule r1" in t for t, _, _ in immich.posted)
-
-
-def test_forget_unknown_rule_says_so(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path)
-    state, img = state_with()
-    handle(pipeline, state, img, "forget r9")
-    assert any("don't have a rule r9" in t for t, _, _ in immich.posted)
-
-
-def test_revision_that_returns_a_lesson_proposes_it_and_yes_saves_it(tmp_path):
-    result = RecipeResult(status="done", output_path="/tmp/out.jpg",
-                          lesson="Use a thinner bevel on dark photos.", lesson_scope="single")
-    pipeline, immich, recipe, rules = make(tmp_path, result=result)
-    state, img = state_with()
-
-    handle(pipeline, state, img, "bevel too heavy")
-
-    # the proposal is parked, not active, and posted on the NEW asset
-    proposal = rules.all()[0]
-    assert (proposal.status, proposal.origin, proposal.source_asset_id) == ("proposed", "proposed", "new-asset")
-    assert rules.active_texts("single") == []
-    ask = [p for p in immich.posted if "Should I remember" in p[0]]
-    assert ask and ask[0][2] == "new-asset" and 'rule r1' in ask[0][0]
-
-    # a "yes" on the new asset activates it, with no Claude call
-    img.current_asset_id = "new-asset"
-    pipeline.recipe = SimpleNamespace(interpret_comment=lambda t, c=None: (_ for _ in ()).throw(AssertionError("no call")))
-    pipeline._handle_fresh_comment(
-        state, "L", img, asset("new-asset"), comment("Yes!", "c2"), album_id="review-album", in_review=True,
-    )
-    assert rules.get("r1").status == "active"
-    assert rules.active_texts("single") == ["Use a thinner bevel on dark photos."]
-    assert "c2" in img.acted_comment_ids
-
-
-def test_no_drops_a_proposal(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path)
-    rules.add("An idea.", "all", status="proposed", lineage_id="L", source_asset_id="a1")
-    state, img = state_with()
-    handle(pipeline, state, img, "no")
-    assert rules.get("r1").status == "retired"
-    assert rules.active_texts("single") == []
-
-
-def test_other_comments_do_not_resolve_a_pending_proposal(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path, verdict=CommentIntent("revise"))
-    rules.add("An idea.", "all", status="proposed", lineage_id="L", source_asset_id="a1")
-    state, img = state_with()
-    handle(pipeline, state, img, "yes but make it darker")  # not a bare yes: a normal revision
-    assert rules.get("r1").status == "proposed"
-    assert recipe.single_calls[0]["note"] == "yes but make it darker"
-
-
-def test_yes_over_the_cap_explains_and_leaves_the_proposal(tmp_path):
-    pipeline, immich, recipe, rules = make(tmp_path)
-    for i in range(MAX_ACTIVE_RULES):
-        rules.add(f"rule {i}")
-    rules.add("An idea.", "all", status="proposed", lineage_id="L", source_asset_id="a1")
-    state, img = state_with()
-    handle(pipeline, state, img, "yes")
-    assert rules.get(f"r{MAX_ACTIVE_RULES + 1}").status == "proposed"
-    assert any("limit" in t for t, _, _ in immich.posted)
-
-
-def test_unusable_lesson_is_ignored(tmp_path):
-    result = RecipeResult(status="done", output_path="/tmp/out.jpg", lesson="x" * (MAX_RULE_CHARS + 5))
-    pipeline, immich, recipe, rules = make(tmp_path, result=result)
-    state, img = state_with()
-    handle(pipeline, state, img, "darker")
-    assert rules.all() == []
-    assert not any("Should I remember" in t for t, _, _ in immich.posted)
-
-
-def test_pipeline_without_a_rules_store_still_works(tmp_path):
-    immich = FakeImmich()
-    recipe = FakeRecipe(verdict=CommentIntent("teach", rule="A rule.", scope="all"))
-    pipeline = Pipeline(config=CFG, immich=immich, recipe=recipe, store=None)
-    state, img = state_with()
-    handle(pipeline, state, img, "always do a thing")
-    assert recipe.single_calls == [{"note": "always do a thing", "rules": []}]
-
-
-def test_rules_file_that_cannot_be_read_does_not_stop_processing(tmp_path):
-    path = tmp_path / "rules.json"
-    path.write_text("{ not json")
-    pipeline = Pipeline(config=CFG, immich=FakeImmich(), recipe=FakeRecipe(), store=None, rules=RulesStore(str(path)))
-    assert pipeline._rules_for("single") == []
-
-
-def test_flow2_review_wires_comments_to_the_handler(tmp_path):
-    verdict = CommentIntent("teach", rule="Prefer thin bevels.", scope="all")
-    immich = FakeImmich(comments={"a1": [comment("from now on use thin bevels")]}, assets=[asset("a1")])
-    pipeline, _, recipe, rules = make(tmp_path, verdict=verdict, immich=immich)
-    state, img = state_with()
-    pipeline._flow2_review(state)
-    assert [r.text for r in rules.all()] == ["Prefer thin bevels."]
-    assert "c1" in img.acted_comment_ids  # plus the ids of comments the pipeline itself posted
-
-
-# ---- the web UI ---------------------------------------------------------------
+# ---- the web UI's rules page and routes -------------------------------------
 
 
 def client_for(tmp_path):
@@ -445,3 +137,23 @@ def test_api_add_rule_returns_409_when_full(tmp_path):
     for i in range(MAX_ACTIVE_RULES):
         rules.add(f"rule {i}")
     assert client.post("/api/rules", json={"text": "one more"}).status_code == 409
+
+
+def test_overview_counts_what_the_library_holds(tmp_path):
+    from app.library import LibraryStore, Photo
+
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    store.update(lambda lib: (
+        lib.albums.update({"Holiday": "h"}),
+        lib.photos.update(
+            a=Photo(id="a", home="Holiday", live=True), b=Photo(id="b", home="Holiday", trashed=True),
+            c=Photo(id="c", home="review"), d=Photo(id="d", status="processing"),
+            e=Photo(id="e", status="failed"),
+        ),
+    ))
+    app = create_app(None, None, store, None)
+    client = app.test_client()
+    body = client.get("/api/albums").get_json()
+    assert body == {"albums": {"Holiday": 1}, "review": 1, "live": 1, "processing": 1, "failed": 1, "trashed": 1}
+    assert client.get("/").status_code == 200
+    assert client.post("/api/live-album", json={"name": "Holiday"}).status_code in (404, 405)
