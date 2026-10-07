@@ -49,6 +49,16 @@
     #viewer li .note { color: var(--muted); font-weight: 400; font-size: .8rem; }
     .meta { color: var(--muted); font-size: .85rem; }
     .err { color: #c33; }
+    #chatlog { max-height: 16rem; overflow-y: auto; margin: 0 0 .5rem; display: flex; flex-direction: column; gap: .35rem; }
+    #chatlog .m { padding: .35rem .5rem; border-radius: .5rem; font-size: .85rem; max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #chatlog .user { align-self: flex-end; background: #2b6cb033; }
+    #chatlog .claude { align-self: flex-start; background: #8883; }
+    #chatlog .m small { display: block; color: var(--muted); font-size: .7rem; }
+    #chatlog .failed small { color: #c33; }
+    #chatform textarea { width: 100%; box-sizing: border-box; min-height: 3.2rem; resize: vertical; font: inherit; }
+    #chatform .row { display: flex; gap: .5rem; align-items: center; margin-top: .3rem; }
+    .proposal { border: 1px solid #8886; border-radius: .5rem; padding: .5rem; margin: .5rem 0; font-size: .85rem; }
+    .proposal button { margin-right: .4rem; }
   </style>
 </head>
 <body>
@@ -171,8 +181,61 @@ function tile(p, i) {
   return `<div class="tile${on ? " sel" : ""}" data-i="${i}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""}>${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
          `${p.live ? `<span class="badge live">live</span>` : ""}</div>`;
 }
+function chatHtml(p) {
+  const labels = { queued: "waiting", working: "working on it…", failed: "failed" };
+  return p.chat.map(m =>
+    `<div class="m ${m.role}${m.state === "failed" ? " failed" : ""}">${esc(m.text)}` +
+    (m.role === "user" && labels[m.state] ? `<small>${labels[m.state]}</small>` : "") + `</div>`).join("");
+}
+let poll = null;
+function stopPoll() { if (poll) { clearTimeout(poll); poll = null; } }
+// While a photo's messages are being handled, keep its conversation fresh.
+// Only the transcript is redrawn, so whatever is being typed is kept. When
+// the work is over, the grid and viewer are reloaded to show the new image.
+function watchChat(id) {
+  stopPoll();
+  poll = setTimeout(async () => {
+    poll = null;
+    if (open < 0 || list[open]?.id !== id) return;
+    let p;
+    try { p = await api("/api/photos/" + id); } catch (e) { return watchChat(id); }
+    if (p.busy) {
+      const log = $("chatlog");
+      if (log) { log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight; }
+      return watchChat(id);
+    }
+    await select(view, true);
+    const i = list.findIndex(x => x.id === id);
+    if (i >= 0) openViewer(i);
+    else if (p.status === "awaiting_answer") say("Claude has a question about that photo. It is in the Queue.");
+  }, 3000);
+}
+async function sendChat(id) {
+  const box = $("chattext"), text = box.value.trim();
+  if (!text) return;
+  $("chatsend").disabled = true;
+  const r = await fetch("/api/photos/" + id + "/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) { say(out.error || "That didn't send.", true); $("chatsend").disabled = false; return; }
+  box.value = "";
+  say("");
+  const i = open;
+  const p = await api("/api/photos/" + id);
+  const log = $("chatlog");
+  log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight;
+  $("chatsend").disabled = false;
+  if (i >= 0) watchChat(id);
+}
+async function decide(ruleId, id, accept) {
+  const r = await fetch("/api/rules/" + ruleId + (accept ? "/activate" : "/retire"), { method: "POST" });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) say(out.error || "That didn't work.", true);
+  const i = list.findIndex(x => x.id === id);
+  if (i >= 0) openViewer(i);
+}
 async function openViewer(i) {
   if (i < 0 || i >= list.length) return;
+  stopPoll();
   open = i;
   const p = await api("/api/photos/" + list[i].id);
   $("viewer").classList.add("open");
@@ -182,19 +245,35 @@ async function openViewer(i) {
   const hist = p.history.map(h =>
     `<li class="${h.current ? "current" : ""}">${h.step === 0 ? "Original result" : h.reverts_to_step !== null ? "Reverted to step " + h.reverts_to_step : esc(h.instruction || "(no instruction)")}` +
     (h.rules && h.rules.length ? ` <span class="note">(${h.rules.length} rule${h.rules.length > 1 ? "s" : ""})</span>` : "") +
-    (!h.current && !p.trashed && p.status === "ready" ? `<button onclick="revertTo('${p.id}', ${h.step})">Revert to this</button>` : "") + `</li>`).join("");
+    (!h.current && !p.trashed && p.status === "ready" && !p.busy ? `<button onclick="revertTo('${p.id}', ${h.step})">Revert to this</button>` : "") + `</li>`).join("");
+  const chat = p.chat_blocked && !p.chat.length
+    ? `<h2>Changes</h2><p class="meta">${esc(p.chat_blocked)}</p>`
+    : `<h2>Changes</h2><div id="chatlog">${chatHtml(p)}</div>` +
+      (p.proposal ? `<div class="proposal">Remember for future photos: &ldquo;${esc(p.proposal.text)}&rdquo;<br>` +
+        `<button onclick="decide('${p.proposal.id}', '${p.id}', true)">Accept</button><button onclick="decide('${p.proposal.id}', '${p.id}', false)">Dismiss</button></div>` : "") +
+      (p.chat_blocked ? `<p class="meta">${esc(p.chat_blocked)}</p>` :
+        `<div id="chatform"><textarea id="chattext" maxlength="1000" placeholder="${p.question ? "Answer Claude…" : "Describe a change…"}"></textarea>` +
+        `<div class="row"><button id="chatsend" onclick="sendChat('${p.id}')">Send</button><span class="meta">Ctrl+Enter to send</span></div></div>`);
   $("panel").innerHTML =
     `<button class="close" onclick="closeViewer()">Close</button><h2>${esc(p.home)} · ${esc(p.status.replace("_", " "))}</h2>` +
     `<div class="meta">${p.live ? "Live · " : ""}${esc(p.kind)}${p.imported ? " · imported, can't be modified" : ""}</div>` +
     (p.error ? `<p class="err">${esc(p.error)}</p>` : "") +
     (p.question ? `<p>Claude asks: ${esc(p.question)}</p>` : "") +
+    chat +
     (hist ? `<h2>History</h2><ol start="0">${hist}</ol>` : "") +
     (p.legacy_notes.length ? `<h2>Earlier notes</h2><ul>${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
     `<div class="meta">${i + 1} of ${list.length} · ← → to move, Esc to close</div>`;
+  const log = $("chatlog");
+  if (log) log.scrollTop = log.scrollHeight;
+  const box = $("chattext");
+  if (box) box.onkeydown = e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(p.id); } };
+  if (p.busy) watchChat(p.id);
 }
-function closeViewer() { open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
+function closeViewer() { stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
 document.addEventListener("keydown", e => {
   if (open < 0) return;
+  const typing = ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName);
+  if (typing && e.key !== "Escape") return;
   if (e.key === "Escape") closeViewer();
   else if (e.key === "ArrowRight") openViewer(open + 1);
   else if (e.key === "ArrowLeft") openViewer(open - 1);
