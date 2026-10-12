@@ -58,6 +58,7 @@ class Worker:
         *,
         wallpaper_album_id: str,
         collage_album_id: str,
+        import_album_id: str = "",
         extra_clients: list[ImmichClient] = (),
         rules: RulesStore | None = None,
         count: int = 1,
@@ -73,7 +74,7 @@ class Worker:
         self.can_run_recipe = can_run_recipe
         self.on_change = on_change
         self.extra_clients = list(extra_clients)
-        self._queue_albums = {"wallpaper": wallpaper_album_id, "collage": collage_album_id}
+        self._queue_albums = {"wallpaper": wallpaper_album_id, "collage": collage_album_id, "import": import_album_id}
         self._lock = threading.Lock()
         self._active: set[str] = set()
         self._immich_failures: dict[str, int] = {}
@@ -165,7 +166,7 @@ class Worker:
         return None
 
     def _needs_claude(self, photo: Photo) -> bool:
-        return photo.media_type == "image" and photo.current_revision() is None
+        return photo.media_type == "image" and not photo.imported and photo.current_revision() is None
 
     def _claim(self) -> str | None:
         photos = self._queued()
@@ -221,7 +222,8 @@ class Worker:
         try:
             if photo.current_revision() is None:
                 photo = self._copy_sources(photo, tmp)
-                if photo.media_type == "video":
+                if photo.media_type == "video" or photo.imported:
+                    # Kept exactly as it was added: no recipe.
                     result_path = self.revisions.path(photo.sources[0].file)
                     instruction_rules: list[str] = []
                     session_id = None
@@ -277,7 +279,7 @@ class Worker:
     ) -> None:
         n = photo.next_revision_number()
         rel, digest = self.revisions.save_revision(photo.id, n, result_path)
-        origin = "original" if photo.media_type == "video" else "processed"
+        origin = "original" if photo.media_type == "video" or photo.imported else "processed"
 
         def record(p: Photo) -> None:
             p.revisions.append(Revision(
