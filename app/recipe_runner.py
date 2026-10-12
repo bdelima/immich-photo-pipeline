@@ -312,8 +312,11 @@ class RecipeRunner:
             prompt += " " + _LESSON_CONTRACT
         return prompt
 
-    def resume(self, session_id: str, answer: str) -> RecipeResult:
-        prompt = answer + " " + _OUTPUT_CONTRACT.format(output_path="the same output path as before")
+    def resume(self, session_id: str, answer: str, output_path: str | None = None) -> RecipeResult:
+        """Answers a question the recipe asked. `output_path` is where the
+        finished image should go; the directory used before the question may
+        be gone by now, so a caller with a fresh one passes it here."""
+        prompt = answer + " " + _OUTPUT_CONTRACT.format(output_path=output_path or "the same output path as before")
         return self._invoke(prompt, resume=session_id)
 
     def interpret_comment(self, comment_text: str, ctx: CommentContext | None = None) -> CommentIntent | None:

@@ -104,18 +104,19 @@ def main() -> None:
         ensure_all_shared(immich, [cfg.collage_album_id, cfg.wallpaper_album_id], share_user_ids)
         log.info("entry queues shared with %d extra account(s)", len(share_user_ids))
 
+    poll_wake = threading.Event()
     worker = Worker(
         store, revisions, immich, recipe,
         wallpaper_album_id=cfg.wallpaper_album_id, collage_album_id=cfg.collage_album_id,
         extra_clients=extra_clients, rules=rules, count=cfg.worker_count,
         can_run_recipe=lambda: health.snapshot().claude_auth_ok,
+        on_change=poll_wake.set,
     )
     intake = Intake(immich, store, cfg.wallpaper_album_id, cfg.collage_album_id)
     cycle = Cycle(
         immich, store, intake, worker, live_album_id=cfg.live_album_id, share_user_ids=share_user_ids,
         revisions=revisions,
     )
-    poll_wake = threading.Event()
 
     auth_thread = threading.Thread(
         target=auth_probe_forever,
@@ -133,7 +134,7 @@ def main() -> None:
 
     app = create_app(
         cfg, immich, store, health, rules=rules, revisions=revisions, thumbs=ThumbCache(cfg.thumbs_path),
-        on_change=poll_wake.set,
+        on_change=poll_wake.set, on_job=worker.wake,
     )
     app.run(host=cfg.webui_host, port=cfg.webui_port)
 

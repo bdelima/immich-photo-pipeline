@@ -18,11 +18,13 @@ import os
 
 from flask import Flask, abort, jsonify, request, send_file
 
+from .. import chat
 from ..library import (
     INBOX, REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
     Library, LibraryStore, Photo,
 )
 from ..revisions import RevisionStore, RevisionStoreError
+from ..rules import RulesStore
 from ..thumbs import ThumbCache
 
 _QUEUE_STATUSES = (STATUS_PROCESSING, STATUS_AWAITING_ANSWER, STATUS_FAILED)
@@ -85,11 +87,22 @@ def summary(photo: Photo) -> dict:
         "version": rev.n if rev else None,
         "question": photo.question,
         "error": photo.error,
+        # A chat message of this photo is waiting for, or being handled by,
+        # the worker.
+        "busy": photo.busy,
     }
 
 
-def detail(photo: Photo) -> dict:
+def detail(photo: Photo, rules: RulesStore | None = None) -> dict:
     out = summary(photo)
+    proposal = None
+    if rules is not None:
+        try:
+            found = rules.pending_proposal_for(photo.id)
+        except Exception:
+            found = None
+        if found is not None:
+            proposal = {"id": found.id, "text": found.text, "scope": found.scope}
     out.update({
         "sources": [{"name": s.name or s.asset_id, "has_copy": bool(s.file)} for s in photo.sources],
         "history": [
@@ -100,11 +113,18 @@ def detail(photo: Photo) -> dict:
         ],
         "legacy_notes": photo.legacy_notes,
         "trashed_from": photo.trashed_from,
+        "chat": [{"id": m.id, "role": m.role, "text": m.text, "state": m.state, "at": m.at} for m in photo.chat],
+        # Why chat is off for this photo (None when it is on).
+        "chat_blocked": chat.blocked_reason(photo),
+        "proposal": proposal,
     })
     return out
 
 
-def register_browse_routes(app: Flask, store: LibraryStore, revisions: RevisionStore, thumbs: ThumbCache) -> None:
+def register_browse_routes(
+    app: Flask, store: LibraryStore, revisions: RevisionStore, thumbs: ThumbCache,
+    rules: RulesStore | None = None,
+) -> None:
     def photo_or_404(photo_id: str) -> Photo:
         photo = store.load().photos.get(photo_id)
         if photo is None:
@@ -138,7 +158,7 @@ def register_browse_routes(app: Flask, store: LibraryStore, revisions: RevisionS
 
     @app.get("/api/photos/<photo_id>")
     def api_photo(photo_id: str):
-        return jsonify(detail(photo_or_404(photo_id)))
+        return jsonify(detail(photo_or_404(photo_id), rules))
 
     @app.get("/media/<photo_id>/thumb")
     def media_thumb(photo_id: str):

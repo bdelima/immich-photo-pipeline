@@ -86,6 +86,25 @@ class Revision:
     reverts_to: int | None = None
 
 
+# States of a reviewer's chat message (see chat.py).
+CHAT_QUEUED = "queued"      # waiting for the worker
+CHAT_WORKING = "working"    # the worker is on it
+CHAT_DONE = "done"
+CHAT_FAILED = "failed"
+
+
+@dataclass
+class ChatMessage:
+    """One line of a photo's chat. A reviewer's message ("user") starts out
+    queued and ends done or failed; Claude's replies and the pipeline's
+    notices ("claude") are always done."""
+    id: int
+    role: str          # "user" | "claude"
+    text: str
+    state: str = CHAT_DONE
+    at: str = field(default_factory=now_iso)
+
+
 @dataclass
 class Photo:
     # Stable for the photo's whole life. For a photo carried over from the
@@ -126,6 +145,11 @@ class Photo:
     # session to resume with the answer.
     question: str | None = None
     session_id: str | None = None
+    # While status is awaiting_answer after a revision request: that request,
+    # which the answered revision records as its instruction.
+    pending_instruction: str | None = None
+    # The photo's chat, oldest first (see chat.py).
+    chat: list[ChatMessage] = field(default_factory=list)
     # While status is failed.
     error: str | None = None
     # The instructions the old pipeline recorded for a photo carried over
@@ -152,6 +176,21 @@ class Photo:
 
     def next_revision_number(self) -> int:
         return max((r.n for r in self.revisions), default=-1) + 1
+
+    # ---- chat ------------------------------------------------------------
+
+    def open_messages(self) -> list[ChatMessage]:
+        """The reviewer's messages that are still waiting for, or being
+        handled by, the worker, oldest first."""
+        return [m for m in self.chat if m.role == "user" and m.state in (CHAT_QUEUED, CHAT_WORKING)]
+
+    @property
+    def busy(self) -> bool:
+        """True while a chat message of this photo is queued or being handled."""
+        return bool(self.open_messages())
+
+    def next_message_id(self) -> int:
+        return max((m.id for m in self.chat), default=0) + 1
 
     def chain(self, n: int | None = None) -> list[Revision]:
         """The history up to `n` (default: the current revision), oldest
@@ -263,9 +302,10 @@ def _build(cls, data: dict[str, Any]):
 
 
 def _photo_from_dict(data: dict[str, Any]) -> Photo:
-    photo = _build(Photo, {k: v for k, v in data.items() if k not in ("sources", "revisions")})
+    photo = _build(Photo, {k: v for k, v in data.items() if k not in ("sources", "revisions", "chat")})
     photo.sources = [_build(Source, s) for s in data.get("sources", [])]
     photo.revisions = [_build(Revision, r) for r in data.get("revisions", [])]
+    photo.chat = [_build(ChatMessage, m) for m in data.get("chat", [])]
     return photo
 
 

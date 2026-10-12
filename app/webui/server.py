@@ -17,6 +17,7 @@ from ..rules import MAX_ACTIVE_RULES, SCOPE_LABELS, SCOPES, RulesFull, RulesStor
 from ..thumbs import ThumbCache
 from .action_routes import register_action_routes
 from .browse import register_browse_routes
+from .chat_routes import register_chat_routes
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ log = logging.getLogger(__name__)
 def create_app(
     cfg: Config, immich: ImmichClient, store: LibraryStore, health: HealthStore,
     rules: RulesStore | None = None, revisions: RevisionStore | None = None,
-    thumbs: ThumbCache | None = None, on_change=None,
+    thumbs: ThumbCache | None = None, on_change=None, on_job=None,
 ) -> Flask:
     app = Flask(__name__)
 
@@ -44,8 +45,9 @@ def create_app(
         return jsonify(_overview(store.load()))
 
     if store is not None and revisions is not None and thumbs is not None:
-        register_browse_routes(app, store, revisions, thumbs)
+        register_browse_routes(app, store, revisions, thumbs, rules)
         register_action_routes(app, store, revisions, cfg, on_change)
+        register_chat_routes(app, store, on_job)
     if rules is not None:
         _register_rules_routes(app, rules)
 
