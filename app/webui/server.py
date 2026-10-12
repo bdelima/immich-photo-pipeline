@@ -1,8 +1,6 @@
-"""The small purpose-built web UI: an overview of the library (what is in
-each album, in Review and in Live, and what is still being processed), and
+"""The small purpose-built web UI: browsing the library (see browse.py), and
 (at /rules) the recipe rules the reviewers have taught -- add one, retire
-one, or confirm a proposed one. Browsing, thumbnails and the actions on
-photos are built on top of this.
+one, or confirm a proposed one. Actions on photos are built on top of this.
 """
 from __future__ import annotations
 
@@ -14,14 +12,18 @@ from ..config import Config
 from ..health import HealthStore
 from ..immich_client import ImmichClient
 from ..library import REVIEW, STATUS_FAILED, STATUS_PROCESSING, Library, LibraryStore
+from ..revisions import RevisionStore
 from ..rules import MAX_ACTIVE_RULES, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
+from ..thumbs import ThumbCache
+from .browse import register_browse_routes
 
 log = logging.getLogger(__name__)
 
 
 def create_app(
     cfg: Config, immich: ImmichClient, store: LibraryStore, health: HealthStore,
-    rules: RulesStore | None = None,
+    rules: RulesStore | None = None, revisions: RevisionStore | None = None,
+    thumbs: ThumbCache | None = None,
 ) -> Flask:
     app = Flask(__name__)
 
@@ -40,6 +42,8 @@ def create_app(
     def api_albums():
         return jsonify(_overview(store.load()))
 
+    if store is not None and revisions is not None and thumbs is not None:
+        register_browse_routes(app, store, revisions, thumbs)
     if rules is not None:
         _register_rules_routes(app, rules)
 

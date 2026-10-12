@@ -16,6 +16,7 @@ from .library import LibraryStore
 from .recipe_runner import RecipeRunner, format_auth_instructions
 from .revisions import RevisionStore
 from .rules import RulesStore
+from .thumbs import ThumbCache
 from .sharing import ensure_all_shared, resolve_user_ids
 from .secrets import resolve_secret, resolve_secret_list
 from .webui.server import create_app
@@ -119,7 +120,9 @@ def main() -> None:
     poll_thread.start()
     log.info("poll loop started (interval=%ss)", cfg.poll_interval_seconds)
 
-    app = create_app(cfg, immich, store, health, rules=rules)
+    app = create_app(
+        cfg, immich, store, health, rules=rules, revisions=revisions, thumbs=ThumbCache(cfg.thumbs_path),
+    )
     app.run(host=cfg.webui_host, port=cfg.webui_port)
 
 
