@@ -17,7 +17,8 @@ from .albums import ensure_home_albums
 from .immich_client import ImmichClient
 from .intake import Intake
 from .library import LibraryStore
-from .projection import sync_albums, sync_live
+from .notes import sync_notes
+from .projection import sync_albums, sync_live, sync_review
 from .publish import publish_pending, tidy_stale
 from .revisions import RevisionStore
 from .sharing import VIEWER, ensure_shared
@@ -37,6 +38,8 @@ class Cycle:
         live_album_id: str,
         share_user_ids: list[str] = (),
         revisions: RevisionStore | None = None,
+        review_album_id: str = "",
+        pipeline_url: str = "",
     ):
         self.immich = immich
         self.store = store
@@ -45,6 +48,8 @@ class Cycle:
         self.live_album_id = live_album_id
         self.share_user_ids = list(share_user_ids)
         self.revisions = revisions
+        self.review_album_id = review_album_id
+        self.pipeline_url = pipeline_url
         # Managed albums already shared, so each is checked once, not every cycle.
         self._shared: set[str] = set()
 
@@ -55,7 +60,12 @@ class Cycle:
         if self.revisions is not None:
             self._step("publishing images", lambda: publish_pending(self.immich, self.store, self.revisions))
         self._step("updating Live", lambda: sync_live(self.immich, self.store.load(), self.live_album_id))
+        if self.review_album_id:
+            self._step("updating Review", lambda: sync_review(self.immich, self.store.load(), self.review_album_id))
         self._step("updating albums", lambda: sync_albums(self.immich, self.store.load()))
+        if self.pipeline_url:
+            self._step("updating album notes", lambda: sync_notes(
+                self.immich, self.store.load(), self.pipeline_url, self.live_album_id, self.review_album_id))
         # Last, so an asset is out of every album before it goes to the trash.
         self._step("clearing old copies", lambda: tidy_stale(self.immich, self.store))
 
@@ -66,7 +76,11 @@ class Cycle:
     def _share(self) -> None:
         if not self.share_user_ids:
             return
-        for album_id in self.store.load().albums.values():
+        # Live and Review are output albums like the managed ones: the
+        # household can look at them, not change them.
+        album_ids = list(self.store.load().albums.values())
+        album_ids += [a for a in (self.live_album_id, self.review_album_id) if a]
+        for album_id in dict.fromkeys(album_ids):
             if album_id in self._shared:
                 continue
             # convert: an output album shared as editor before this version
