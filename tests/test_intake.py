@@ -58,8 +58,8 @@ from app.library import Library, LibraryStore, Photo, Source
 
 
 class QueuesImmich:
-    def __init__(self, wallpaper=(), collage=(), fail=()):
-        self.queues = {"wp": list(wallpaper), "co": list(collage)}
+    def __init__(self, wallpaper=(), collage=(), fail=(), imports=()):
+        self.queues = {"wp": list(wallpaper), "co": list(collage), "im": list(imports)}
         self.fail = set(fail)
 
     def list_album_assets(self, album_id):
@@ -74,7 +74,7 @@ def named(asset_id, name=None, orientation=None):
 
 def scanner(tmp_path, **kw):
     store = LibraryStore(str(tmp_path / "lib.json"))
-    return Intake(QueuesImmich(**kw), store, "wp", "co"), store
+    return Intake(QueuesImmich(**kw), store, "wp", "co", "im"), store
 
 
 def test_each_new_wallpaper_original_becomes_a_queued_photo(tmp_path):
@@ -138,3 +138,19 @@ def test_a_queue_that_cannot_be_listed_is_skipped_for_now(tmp_path):
     assert intake.scan() == ["b"]
     intake.immich.fail.clear()
     assert intake.scan() == ["a"]
+
+
+def test_import_only_originals_become_imported_photos_that_need_no_recipe(tmp_path):
+    intake, store = scanner(tmp_path, imports=[named("i1"), named("i2", "clip.mov")])
+    assert intake.scan() == ["i1", "i2"]
+    photo, video = store.load().photos["i1"], store.load().photos["i2"]
+    assert (photo.kind, photo.media_type, photo.status, photo.queue, photo.home, photo.imported) == (
+        "single", "image", "processing", "import", "inbox", True)
+    assert video.media_type == "video" and video.imported
+    assert intake.scan() == []                                 # never picked up twice
+
+
+def test_without_an_import_album_nothing_is_scanned_for_it(tmp_path):
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    intake = Intake(QueuesImmich(imports=[named("i1")]), store, "wp", "co")
+    assert intake.scan() == []
