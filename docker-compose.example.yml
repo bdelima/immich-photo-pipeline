@@ -37,9 +37,15 @@ services:
       # Collage Maker and Wallpaper Maker are shared automatically with the
       # accounts behind each IMMICH_EXTRA_API_KEY line in the secrets file
       # (as editors, so they can add photos), and every managed album the
-      # pipeline creates is shared with them as viewers. Set SHARE_ALBUMS:
+      # pipeline creates, plus Review and Live, is shared with them as
+      # viewers. Set SHARE_ALBUMS:
       # "false" to manage sharing by hand in the Immich UI instead.
       # SHARE_ALBUMS: "true"
+      # The address people use to reach this web UI. When set, the note on
+      # each managed album in Immich (and on Review and Live) says the album
+      # is view-only and gives this address, opening the matching view. Leave
+      # it out and no notes are written.
+      # PIPELINE_URL: "https://immich-pipeline.example.com"
       POLL_INTERVAL_SECONDS: "15"
       # How many photos are processed at once (each is a Claude run).
       # WORKER_COUNT: "1"
