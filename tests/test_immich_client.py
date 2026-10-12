@@ -156,3 +156,21 @@ def test_list_comments_requires_album_id():
         assert False, "expected TypeError"
     except TypeError:
         pass
+
+
+def test_restore_assets_posts_ids_to_the_trash_restore_endpoint():
+    session = RecordingSession({})
+    ImmichClient("http://immich", "k", session=session).restore_assets(["a", "b"])
+    method, url, kwargs = session.calls[-1]
+    assert method == "POST" and url.endswith("/api/trash/restore/assets")
+    assert kwargs["json"] == {"ids": ["a", "b"]}
+
+
+def test_get_asset_returns_none_when_immich_does_not_have_it():
+    class Missing:
+        headers = {}
+
+        def request(self, method, url, **kwargs):
+            return FakeResponse(False, status_code=404, text="not found")
+
+    assert ImmichClient("http://immich", "k", session=Missing()).get_asset("gone") is None

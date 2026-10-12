@@ -16,12 +16,29 @@ class FakeImmich:
         self.deleted = []
         self.fail_upload = False
         self.fail_delete = False
+        self.trashed = set()       # asset ids sitting in Immich's trash
+        self.gone = set()          # asset ids Immich no longer has
+        self.restored = []
+        self.dedupe = {}           # bytes -> asset id, like Immich's checksum match
 
     def upload_asset(self, path, name):
         if self.fail_upload:
             raise ImmichError("POST /assets -> 500")
-        self.uploads.append((open(path, "rb").read(), name))
-        return f"asset-{len(self.uploads)}"
+        data = open(path, "rb").read()
+        self.uploads.append((data, name))
+        if data in self.dedupe and self.dedupe[data] not in self.gone:
+            return self.dedupe[data]
+        self.dedupe[data] = f"asset-{len(self.uploads)}"
+        return self.dedupe[data]
+
+    def get_asset(self, asset_id):
+        if asset_id in self.gone:
+            return None
+        return {"id": asset_id, "isTrashed": asset_id in self.trashed}
+
+    def restore_assets(self, ids):
+        self.restored.extend(ids)
+        self.trashed -= set(ids)
 
     def delete_assets(self, ids, force=True):
         if self.fail_delete:
@@ -142,3 +159,72 @@ def test_trash_then_restore_round_trip(tmp_path):
     publish_pending(immich, store, revisions)
     photo = p(store)
     assert photo.immich_asset_id == "asset-1" and photo.published_revision == 0 and not photo.trashed
+
+
+def test_a_revert_that_gets_a_trashed_asset_back_restores_it(tmp_path):
+    store, revisions = build(tmp_path, asset="asset-1", published=0, current=0, steps=1)
+    immich = FakeImmich()
+    immich.dedupe[b"image 0"] = "asset-1"
+    # Photo moved on, asset-1 went to Immich's trash, then the photo reverted to identical bytes.
+    store.update_photo("p", lambda x: (setattr(x, "immich_asset_id", "asset-2"),
+                                       setattr(x, "published_revision", 1)))
+    immich.trashed.add("asset-1")
+    publish_pending(immich, store, revisions)
+    photo = p(store)
+    assert photo.immich_asset_id == "asset-1" and immich.restored == ["asset-1"]
+    assert "asset-1" not in photo.stale_asset_ids and photo.stale_asset_ids == ["asset-2"]
+    tidy_stale(immich, store)
+    assert immich.deleted == [(["asset-2"], False)]
+
+
+def test_an_asset_that_is_still_queued_stale_is_unqueued_when_it_comes_back(tmp_path):
+    store, revisions = build(tmp_path, asset="asset-2", published=1, current=0, steps=2, stale_asset_ids=["asset-1"])
+    immich = FakeImmich()
+    immich.dedupe[b"image 0"] = "asset-1"
+    publish_pending(immich, store, revisions)
+    photo = p(store)
+    assert photo.immich_asset_id == "asset-1" and "asset-1" not in photo.stale_asset_ids
+    tidy_stale(immich, store)
+    assert all("asset-1" not in ids for ids, _ in immich.deleted)
+
+
+def test_when_the_immich_trash_was_emptied_the_item_is_uploaded_again(tmp_path):
+    store, revisions = build(tmp_path, asset="asset-2", published=1, current=0, steps=2)
+    immich = FakeImmich()
+    immich.dedupe[b"image 0"] = "asset-1"
+    immich.gone.add("asset-1")                     # emptied: upload makes a new asset
+    publish_pending(immich, store, revisions)
+    photo = p(store)
+    assert photo.immich_asset_id != "asset-1" and photo.immich_asset_id.startswith("asset-")
+    assert immich.restored == []
+
+
+def test_restore_failing_for_a_vanished_asset_falls_back_to_uploading_again(tmp_path):
+    store, revisions = build(tmp_path, asset=None, published=None, steps=1)
+    immich = FakeImmich()
+    immich.dedupe[b"image 0"] = "asset-9"
+    immich.trashed.add("asset-9")
+
+    def failing_restore(ids):
+        immich.gone.add("asset-9")                 # emptied between the check and the restore
+        raise ImmichError("POST /trash/restore/assets -> 400")
+    immich.restore_assets = failing_restore
+    publish_pending(immich, store, revisions)
+    assert p(store).immich_asset_id not in (None, "asset-9")
+
+
+def test_a_failed_restore_of_a_live_asset_is_retried_not_recorded(tmp_path):
+    store, revisions = build(tmp_path, asset=None, published=None, steps=1)
+    immich = FakeImmich()
+    immich.dedupe[b"image 0"] = "asset-9"
+    immich.trashed.add("asset-9")
+    immich.restore_assets = lambda ids: (_ for _ in ()).throw(ImmichError("POST /trash/restore/assets -> 500"))
+    assert publish_pending(immich, store, revisions) == []
+    assert p(store).immich_asset_id is None
+
+
+def test_tidy_never_trashes_an_asset_another_photo_shows(tmp_path):
+    store, revisions = build(tmp_path, asset="shared", published=0, stale_asset_ids=["shared", "x"])
+    immich = FakeImmich()
+    assert tidy_stale(immich, store) == 1
+    assert immich.deleted == [(["x"], False)] and p(store).stale_asset_ids == []
