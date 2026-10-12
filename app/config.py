@@ -106,6 +106,11 @@ class Config:
     # pipeline-managed Immich album links back to the matching view here
     # (see app/notes.py). Empty means no notes are written.
     pipeline_url: str = ""
+    # The third entry queue: originals dropped here are managed (browsed,
+    # moved, promoted, trashed) but never reprocessed. Resolved or created
+    # by name at startup, like the other queues; an id always wins.
+    import_album_id: str = ""
+    import_album_name: str = "Import Only"
 
     @staticmethod
     def from_env() -> "Config":
@@ -141,4 +146,6 @@ class Config:
             thumbs_path=_env("THUMBS_PATH", "/data/thumbs"),
             worker_count=max(1, _env_int("WORKER_COUNT", 1)),
             pipeline_url=_env("PIPELINE_URL").strip().rstrip("/"),
+            import_album_id=_env("IMPORT_ALBUM_ID"),
+            import_album_name=_env("IMPORT_ALBUM_NAME", "Import Only"),
         )
