@@ -83,10 +83,11 @@ def test_albums_for_every_home_are_created_shared_as_viewers_and_filled(tmp_path
     ))
     cycle.run_once()
     assert immich.created == ["Holiday"] and store.load().albums == {"Holiday": "new-Holiday"}
-    assert immich.shared == [("new-Holiday", ["wife"], "viewer")]
+    both = [("new-Holiday", ["wife"], "viewer"), ("LIVE", ["wife"], "viewer")]
+    assert immich.shared == both
     assert immich.contents["new-Holiday"] == {"im-a"}      # Review is state only: no album for it
     cycle.run_once()
-    assert immich.shared == [("new-Holiday", ["wife"], "viewer")]    # checked once, not every cycle
+    assert immich.shared == both    # checked once, not every cycle
 
 
 def test_live_follows_the_promoted_flags(tmp_path):
@@ -114,7 +115,7 @@ def test_an_album_that_could_not_be_shared_is_tried_again_next_cycle(tmp_path):
     cycle.run_once()
     immich.fail_share = False
     cycle.run_once()
-    assert immich.shared == [("new-Holiday", ["wife"], "viewer")]
+    assert immich.shared == [("new-Holiday", ["wife"], "viewer"), ("LIVE", ["wife"], "viewer")]
 
 
 def test_a_step_that_fails_does_not_stop_the_others(tmp_path):
@@ -203,9 +204,9 @@ def test_an_editor_shared_output_album_is_converted_to_viewer(tmp_path):
     immich.users = ["wife"]
     cycle, store = stocked(tmp_path, immich)
     cycle.run_once()
-    assert immich.role_changes == [("new-Holiday", "wife", "viewer")]
+    assert immich.role_changes == [("new-Holiday", "wife", "viewer"), ("LIVE", "wife", "viewer")]
     cycle.run_once()
-    assert len(immich.role_changes) == 1
+    assert len(immich.role_changes) == 2
 
 
 def test_without_a_revision_store_the_cycle_still_runs(tmp_path):
@@ -214,3 +215,18 @@ def test_without_a_revision_store_the_cycle_still_runs(tmp_path):
     store.update(lambda lib: lib.photos.update(a=Photo(id="a", home="Holiday", immich_asset_id="im-a")))
     cycle.run_once()
     assert immich.contents["new-Holiday"] == {"im-a"}
+
+
+def test_live_is_shared_as_viewers_even_with_an_empty_library(tmp_path):
+    immich = FakeImmich()
+    cycle, _, _ = build(tmp_path, immich)
+    cycle.run_once()
+    assert immich.shared == [("LIVE", ["wife"], "viewer")]
+
+
+def test_live_is_not_shared_when_it_has_no_id_yet(tmp_path):
+    immich = FakeImmich()
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    cycle = Cycle(immich, store, Intake(immich, store, "wp", "co"), FakeWorker(), live_album_id="", share_user_ids=["wife"])
+    cycle.run_once()
+    assert immich.shared == []

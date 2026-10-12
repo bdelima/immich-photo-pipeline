@@ -66,7 +66,12 @@ class Cycle:
     def _share(self) -> None:
         if not self.share_user_ids:
             return
-        for album_id in self.store.load().albums.values():
+        # Live is an output album like the managed ones: the household can
+        # look at it, not change it.
+        album_ids = list(self.store.load().albums.values())
+        if self.live_album_id:
+            album_ids.append(self.live_album_id)
+        for album_id in dict.fromkeys(album_ids):
             if album_id in self._shared:
                 continue
             # convert: an output album shared as editor before this version
