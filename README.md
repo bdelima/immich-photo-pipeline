@@ -1,6 +1,6 @@
 # immich-photo-pipeline
 
-Automated pipeline that processes Immich staging-album photos (Collage Maker, Wallpaper Maker) through a matting/cropping recipe into a Review step, keeps every photo and every revision of it in its own library, and mirrors the managed albums, Review and a Live album into Immich. Review, moving, promoting and trashing are done in the pipeline's own web UI, which is being built up in stages (see step 7).
+Automated pipeline that processes Immich staging-album photos (Collage Maker, Wallpaper Maker; Import Only for items that are kept as they are) through a matting/cropping recipe into a Review step, keeps every photo and every revision of it in its own library, and mirrors the managed albums, Review and a Live album into Immich. Review, moving, promoting and trashing are done in the pipeline's own web UI, which is being built up in stages (see step 7).
 
 ## Setup
 
@@ -8,7 +8,7 @@ This walks through getting a release image running against a real Immich instanc
 
 ### 1. Decide on accounts
 
-Pick one Immich account to be the pipeline's own ("master") account — this is the account that creates the four albums below and owns everything the pipeline uploads. It doesn't need to be an Immich *admin* account, just a regular one; it does need to be the account whose API key the pipeline runs as.
+Pick one Immich account to be the pipeline's own ("master") account — this is the account that creates the five albums below and owns everything the pipeline uploads. It doesn't need to be an Immich *admin* account, just a regular one; it does need to be the account whose API key the pipeline runs as.
 
 If other household members will drop photos into the entry-queue albums from their own Immich accounts (likely, since that's the point), each of those accounts needs its own API key too — see `IMMICH_EXTRA_API_KEY` below for why.
 
@@ -64,7 +64,7 @@ docker compose logs -f immich-photo-pipeline
 
 Running it as a Portainer stack instead? Paste the same compose file into a new stack and set the variables (`IMMICH_URL`, and optionally the album pins below) in Portainer's **Environment variables** panel rather than a `.env` file; everything else is identical. An environment variable left empty or unset is treated as "not set", so the compose file's `IMMICH_API_KEY: ${IMMICH_API_KEY}` line is harmless alongside the secrets file — the file's value always wins when it's present.
 
-The first start creates the four albums (Collage Maker, Wallpaper Maker, Review, Live) in Immich under the pipeline account, if they don't already exist — watch the logs for confirmation, or check the Immich UI.
+The first start creates the five albums (Collage Maker, Wallpaper Maker, Import Only, Review, Live) in Immich under the pipeline account, if they don't already exist — watch the logs for confirmation, or check the Immich UI.
 
 ### 5. Authenticate Claude Code
 
@@ -92,22 +92,23 @@ curl http://localhost:8096/healthz
 
 ### 6. Albums are shared automatically
 
-The other accounts can't drop photos into an entry queue they can't see. So on startup the pipeline looks up which account each `IMMICH_EXTRA_API_KEY` belongs to and shares **Collage Maker and Wallpaper Maker** with them as editors (they can add photos). Every managed album the pipeline creates is shared with them as **viewers**: they can browse it and like photos, but cannot add or remove anything, so nothing changes in a managed album except through the pipeline. Live and Review are shared with them the same way (as viewers); Review shows the photos waiting for a decision, so they can be browsed from Immich.
+The other accounts can't drop photos into an entry queue they can't see. So on startup the pipeline looks up which account each `IMMICH_EXTRA_API_KEY` belongs to and shares **Collage Maker, Wallpaper Maker and Import Only** with them as editors (they can add photos). Every managed album the pipeline creates is shared with them as **viewers**: they can browse it and like photos, but cannot add or remove anything, so nothing changes in a managed album except through the pipeline. Live and Review are shared with them the same way (as viewers); Review shows the photos waiting for a decision, so they can be browsed from Immich.
 
 This is why each household member who should take part needs an `IMMICH_EXTRA_API_KEY` line (steps 2-3), even if they never remove an original from a queue. Sharing is best-effort and safe to repeat: it only adds accounts that are missing (an album already shared keeps the role it has), and a failure is logged and skipped. Set `SHARE_ALBUMS=false` to turn all of this off and manage sharing yourself.
 
-**Notes on the albums.** Immich can't show a link in an album, but it does show the description as text. When `PIPELINE_URL` is set, the pipeline writes a note on every album it manages (each managed album, Review and Live) saying that the album is view-only and where to go to change it, with the address of the matching view in the web UI (for example `https://pipeline.example.com/#album:Costa%20Rica`). Immich shows it as plain text, so the address is copied rather than clicked. The note is kept current: it is checked every cycle and rewritten if it differs, so a note edited by hand on one of those albums is put back. Leave `PIPELINE_URL` unset and the descriptions are not touched.
+**Notes on the albums.** Immich can't show a link in an album, but it does show the description as text. When `PIPELINE_URL` is set, the pipeline writes a note on every album it manages (each managed album, Review and Live) saying that the album is view-only and where to go to change it, with the address of the matching view in the web UI (for example `https://pipeline.example.com/#album:costa-rica`, the album's name in lower case with hyphens between words; an older link that has the name, such as `#album:Costa%20Rica`, still works). Immich shows it as plain text, so the address is copied rather than clicked. The note is kept current: it is checked every cycle and rewritten if it differs, so a note edited by hand on one of those albums is put back. Leave `PIPELINE_URL` unset and the descriptions are not touched.
 
 ### 7. Use it
 
 - Drop any photo or video into **Wallpaper Maker**. A photo is processed solo on the next poll cycle; a video is kept as it is (videos are managed, not processed).
+- Drop any photo or video into **Import Only** to have it managed but never processed: it is copied into the library exactly as it is, lands in Review, and can be browsed, moved, promoted to Live and trashed like anything else. It can't be revised (there is nothing to reprocess), and the original is cleared from Import Only once it is in.
 - Drop a **portrait** photo into **Collage Maker**; it waits there until a second portrait arrives, then groups 2–3 into one collage. Videos can't go in a collage.
 - Each result lands in **Review**, which is kept in the pipeline's library and mirrored to the Review album in Immich so it can be browsed there. The original and every later version are kept in the revision store (`REVISIONS_PATH`); Immich only ever holds the current version.
 - The originals are copied into the store and then removed from the entry queue (see "A photo sits in an entry queue" below if one stays).
 - If the recipe has a question it can't answer on its own, the photo is marked as waiting for an answer. Answering is part of the per-photo panel, which is not built yet.
 - A photo that fails is marked failed with the reason and is **not** retried by itself, since each attempt spends Claude plan credits.
 - **The pipeline no longer reads Immich comments or likes.** Replying to a photo in Immich does nothing now.
-- The web UI at `http://<host>:<port>` (`8096` in the example compose file) is where Review is done. The sidebar lists the queue, Review, Live, each album and the trash; select photos to add them to or remove them from Live, move them to an album, or trash or restore them. Only the choices that apply are offered (a photo already in an album isn't offered that album). Open a photo to do the same to it, to revert to an earlier step, or to ask Claude for a change in its chat box (Enter sends, Ctrl+Enter adds a line). Each place has its own address, such as `/#review`, `/#live` or `/#album:Costa%20Rica`, so it can be bookmarked or linked.
+- The web UI at `http://<host>:<port>` (`8096` in the example compose file) is where Review is done. The sidebar lists the queue, Review, Live, each album and the trash; select photos to add them to or remove them from Live, move them to an album, or trash or restore them. Only the choices that apply are offered (a photo already in an album isn't offered that album). Open a photo to do the same to it, to revert to an earlier step, or to ask Claude for a change in its chat box (Enter sends, Ctrl+Enter adds a line). The original photo (one thumbnail per original for a collage) is shown at the top of the side panel; click it to see it larger. Each place has its own address, such as `/#review`, `/#live` or `/#album:costa-rica`, so it can be bookmarked or linked.
 - Want a fix to stick for every future photo? Add a rule on the **Recipe rules** page — see step 9.
 
 ### 8. Import photos you already processed (optional)
@@ -172,8 +173,8 @@ All settings are environment variables. Credentials can also come from the share
 | `SHARE_ALBUMS` | `true` | Share the pipeline's albums with the accounts behind the extra keys. Set `false` to manage sharing by hand. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | | Claude Pro token from `claude setup-token`. Prefer the secrets-file line; it's re-read periodically, so rotating it needs no restart. Never set `ANTHROPIC_API_KEY` — it would switch billing to metered API usage. |
 | `SECRETS_FILE` | `/run/secrets/immich_secrets.env` | Path of the shared secrets file inside the container. |
-| `COLLAGE_ALBUM_NAME` / `WALLPAPER_ALBUM_NAME` / `REVIEW_ALBUM_NAME` / `LIVE_ALBUM_NAME` | `Collage Maker` / `Wallpaper Maker` / `Review` / `Live` | Albums are looked up by this name at startup and created if missing. |
-| `COLLAGE_ALBUM_ID` / `WALLPAPER_ALBUM_ID` / `REVIEW_ALBUM_ID` / `LIVE_ALBUM_ID` | | Pin an existing album by id instead. An id always wins over the name lookup. |
+| `COLLAGE_ALBUM_NAME` / `WALLPAPER_ALBUM_NAME` / `IMPORT_ALBUM_NAME` / `REVIEW_ALBUM_NAME` / `LIVE_ALBUM_NAME` | `Collage Maker` / `Wallpaper Maker` / `Import Only` / `Review` / `Live` | Albums are looked up by this name at startup and created if missing. |
+| `COLLAGE_ALBUM_ID` / `WALLPAPER_ALBUM_ID` / `IMPORT_ALBUM_ID` / `REVIEW_ALBUM_ID` / `LIVE_ALBUM_ID` | | Pin an existing album by id instead. An id always wins over the name lookup. |
 | `POLL_INTERVAL_SECONDS` | `15` | How often the poll loop runs. |
 | `CLAUDE_AUTH_CHECK_INTERVAL_SECONDS` | `300` | How often the Claude session is re-probed (each probe is a real, trivial invocation, so this is slower than polling). |
 | `LIBRARY_PATH` | `/data/library.json` | The library: every photo, where it lives, and its revisions. Keep `/data` on a persistent volume. |
