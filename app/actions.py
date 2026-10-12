@@ -21,6 +21,7 @@ from .library import (
 )
 from .revert import RevertConflict, RevertError, revert_to
 from .revisions import RevisionStore
+from .slugs import slugify
 
 MAX_BATCH = 500
 MAX_ALBUM_NAME = 60
@@ -75,6 +76,11 @@ def album_name(library: Library, raw, reserved: set[str] | frozenset[str] = froz
     blocked = {r.casefold() for r in RESERVED_NAMES | set(reserved)}
     if name.casefold() in blocked:
         raise ActionError(f"{name!r} is already used for something else")
+    # Names that differ only in punctuation or accents would share one web
+    # address and look the same in lists, so they count as duplicates.
+    for existing in sorted(known - {INBOX, REVIEW}):
+        if slugify(existing) == slugify(name):
+            raise ActionError(f"{name!r} is too close to the existing album {existing!r}; use that one or pick a different name")
     return name
 
 
