@@ -202,6 +202,23 @@ class ImmichClient:
             return
         self._request("DELETE", "/assets", json={"ids": asset_ids, "force": force})
 
+    def get_asset(self, asset_id: str) -> dict | None:
+        """The asset's details (including `isTrashed`), or None if Immich no
+        longer has it (for example its trash was emptied). Immich reports a
+        missing asset as 400 or 404 depending on version."""
+        try:
+            return self._request("GET", f"/assets/{asset_id}")
+        except ImmichError as exc:
+            if f"-> 404" in str(exc) or f"-> 400" in str(exc):
+                return None
+            raise
+
+    def restore_assets(self, asset_ids: list[str]) -> None:
+        """Takes assets out of Immich's trash (POST /trash/restore/assets)."""
+        if not asset_ids:
+            return
+        self._request("POST", "/trash/restore/assets", json={"ids": asset_ids})
+
     def upload_asset(self, file_path: str, file_name: str) -> str:
         with open(file_path, "rb") as fh:
             files = {"assetData": (file_name, fh, "application/octet-stream")}

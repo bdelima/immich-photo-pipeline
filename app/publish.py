@@ -14,6 +14,13 @@ fix it, so a failure is simply tried again next cycle:
                     asset, or whose asset shows an older revision
   tidy_stale        moves assets nobody uses any more to Immich's trash
                     (force=False, so they can still be recovered there)
+
+Immich de-duplicates uploads by checksum, so uploading bytes it has seen
+before (a revert stacks a copy of an earlier revision) hands back the
+existing asset, even one that is in Immich's trash. publish_photo therefore
+checks what it got back: a trashed asset is restored through the API, and if
+it is gone (the trash was emptied) the upload is simply made again, which
+then creates a fresh asset.
 """
 from __future__ import annotations
 
@@ -43,6 +50,26 @@ def photos_needing_publish(library: Library) -> list[str]:
     return sorted(p.id for p in library.photos.values() if needs_publish(p))
 
 
+def _upload_live_asset(immich: ImmichClient, path: str, name: str) -> str:
+    """Uploads the file and returns an asset that is not in Immich's trash."""
+    for attempt in range(2):
+        asset_id = immich.upload_asset(path, name)
+        info = immich.get_asset(asset_id)
+        if info is not None and not info.get("isTrashed"):
+            return asset_id
+        if info is not None:
+            try:
+                immich.restore_assets([asset_id])
+                log.info("restored %s from the Immich trash (the upload matched it)", asset_id)
+                return asset_id
+            except ImmichError:
+                if immich.get_asset(asset_id) is not None:
+                    raise
+        # Gone from Immich: upload again, which now makes a new asset.
+        log.info("%s is no longer in Immich; uploading again", asset_id)
+    raise ImmichError(f"could not get a usable asset for {name}")
+
+
 def publish_photo(immich: ImmichClient, store: LibraryStore, revisions: RevisionStore, photo_id: str) -> bool:
     """Uploads the photo's current revision and records it. The asset it
     replaces, if any, is queued for the trash. Returns False if there was
@@ -60,9 +87,11 @@ def publish_photo(immich: ImmichClient, store: LibraryStore, revisions: Revision
         log.warning("%s: revision file is missing from the store; not publishing", photo_id)
         return False
     ext = os.path.splitext(path)[1] or ".jpg"
-    new_id = immich.upload_asset(path, f"{photo_id}-{rev.n}{ext}")
+    new_id = _upload_live_asset(immich, path, f"{photo_id}-{rev.n}{ext}")
 
     def record(p: Photo) -> None:
+        # The asset is in use now, so it must not stay queued for the trash.
+        p.stale_asset_ids = [a for a in p.stale_asset_ids if a != new_id]
         old = p.immich_asset_id
         if p.trashed:
             # Trashed while the upload ran: nothing should show it.
@@ -94,9 +123,20 @@ def publish_pending(immich: ImmichClient, store: LibraryStore, revisions: Revisi
 def tidy_stale(immich: ImmichClient, store: LibraryStore) -> int:
     """Moves assets that no photo uses to Immich's trash and forgets them.
     Returns how many were handled."""
-    pending = {p.id: list(p.stale_asset_ids) for p in store.load().photos.values() if p.stale_asset_ids}
+    library = store.load()
+    # Photos with identical bytes share one asset, and a revert can bring an
+    # old asset back into use: never trash one that any photo shows now.
+    in_use = {p.immich_asset_id for p in library.photos.values() if p.immich_asset_id}
+    pending = {p.id: list(p.stale_asset_ids) for p in library.photos.values() if p.stale_asset_ids}
     count = 0
     for photo_id, asset_ids in sorted(pending.items()):
+        keep = [a for a in asset_ids if a in in_use]
+        asset_ids = [a for a in asset_ids if a not in in_use]
+        if keep:
+            store.update_photo(photo_id, lambda p, k=frozenset(keep): setattr(
+                p, "stale_asset_ids", [a for a in p.stale_asset_ids if a not in k]))
+        if not asset_ids:
+            continue
         try:
             immich.delete_assets(asset_ids, force=False)
         except ImmichError:
