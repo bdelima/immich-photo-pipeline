@@ -101,6 +101,11 @@ class Config:
     # How many photos are processed at the same time. One is plenty for a
     # household; each is a Claude run.
     worker_count: int = 1
+    # The address people reach this web UI at (for example
+    # https://immich-pipeline.example.com). When set, the note on each
+    # pipeline-managed Immich album links back to the matching view here
+    # (see app/notes.py). Empty means no notes are written.
+    pipeline_url: str = ""
 
     @staticmethod
     def from_env() -> "Config":
@@ -135,4 +140,5 @@ class Config:
             revisions_path=_env("REVISIONS_PATH", "/data/revisions"),
             thumbs_path=_env("THUMBS_PATH", "/data/thumbs"),
             worker_count=max(1, _env_int("WORKER_COUNT", 1)),
+            pipeline_url=_env("PIPELINE_URL").strip().rstrip("/"),
         )

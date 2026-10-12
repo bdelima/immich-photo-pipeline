@@ -158,6 +158,10 @@ class ImmichClient:
         albums made by hand may have them off."""
         self._request("PATCH", f"/albums/{album_id}", json={"isActivityEnabled": True})
 
+    def update_album_description(self, album_id: str, description: str) -> None:
+        """Sets an album's description (PATCH /albums/{id})."""
+        self._request("PATCH", f"/albums/{album_id}", json={"description": description})
+
     def add_assets_to_album(self, album_id: str, asset_ids: list[str]) -> None:
         if not asset_ids:
             return

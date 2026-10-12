@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass, field
 
 from .immich_client import ImmichClient, ImmichError
-from .library import Library
+from .library import REVIEW, Library
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,12 @@ def desired_live_ids(library: Library) -> set[str]:
 def desired_album_ids(library: Library, album_name: str) -> set[str]:
     """The Immich assets that should be in a managed album."""
     return {p.immich_asset_id for p in library.in_home(album_name) if p.immich_asset_id}
+
+
+def desired_review_ids(library: Library) -> set[str]:
+    """The Immich assets that should be in the Review album: every photo
+    waiting in Review (not trashed) that has a published asset."""
+    return {p.immich_asset_id for p in library.in_home(REVIEW) if p.immich_asset_id}
 
 
 def reconcile_album(
@@ -86,6 +92,17 @@ def sync_live(
     if allow_empty is None:
         allow_empty = _may_empty(library, library.live_photos())
     return reconcile_album(immich, live_album_id, desired_live_ids(library), allow_empty=allow_empty)
+
+
+def sync_review(
+    immich: ImmichClient, library: Library, review_album_id: str, *, allow_empty: bool | None = None,
+) -> ReconcileResult:
+    """Keeps the Immich Review album a view of what is waiting in Review, so
+    it can be browsed from Immich. `allow_empty` None means decide from the
+    library (see _may_empty)."""
+    if allow_empty is None:
+        allow_empty = _may_empty(library, library.in_home(REVIEW))
+    return reconcile_album(immich, review_album_id, desired_review_ids(library), allow_empty=allow_empty)
 
 
 def sync_albums(

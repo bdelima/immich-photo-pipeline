@@ -1,6 +1,6 @@
 # immich-photo-pipeline
 
-Automated pipeline that processes Immich staging-album photos (Collage Maker, Wallpaper Maker) through a matting/cropping recipe into a Review step, keeps every photo and every revision of it in its own library, and mirrors the managed albums and a Live album into Immich. Review, moving, promoting and trashing are done in the pipeline's own web UI, which is being built up in stages (see step 7).
+Automated pipeline that processes Immich staging-album photos (Collage Maker, Wallpaper Maker) through a matting/cropping recipe into a Review step, keeps every photo and every revision of it in its own library, and mirrors the managed albums, Review and a Live album into Immich. Review, moving, promoting and trashing are done in the pipeline's own web UI, which is being built up in stages (see step 7).
 
 ## Setup
 
@@ -92,20 +92,22 @@ curl http://localhost:8096/healthz
 
 ### 6. Albums are shared automatically
 
-The other accounts can't drop photos into an entry queue they can't see. So on startup the pipeline looks up which account each `IMMICH_EXTRA_API_KEY` belongs to and shares **Collage Maker and Wallpaper Maker** with them as editors (they can add photos). Every managed album the pipeline creates is shared with them as **viewers**: they can browse it and like photos, but cannot add or remove anything, so nothing changes in a managed album except through the pipeline. Live is left private since it only feeds your displays, and Review is not shown in Immich at all: it lives in the pipeline's own library.
+The other accounts can't drop photos into an entry queue they can't see. So on startup the pipeline looks up which account each `IMMICH_EXTRA_API_KEY` belongs to and shares **Collage Maker and Wallpaper Maker** with them as editors (they can add photos). Every managed album the pipeline creates is shared with them as **viewers**: they can browse it and like photos, but cannot add or remove anything, so nothing changes in a managed album except through the pipeline. Live and Review are shared with them the same way (as viewers); Review shows the photos waiting for a decision, so they can be browsed from Immich.
 
 This is why each household member who should take part needs an `IMMICH_EXTRA_API_KEY` line (steps 2-3), even if they never remove an original from a queue. Sharing is best-effort and safe to repeat: it only adds accounts that are missing (an album already shared keeps the role it has), and a failure is logged and skipped. Set `SHARE_ALBUMS=false` to turn all of this off and manage sharing yourself.
+
+**Notes on the albums.** Immich can't show a link in an album, but it does show the description as text. When `PIPELINE_URL` is set, the pipeline writes a note on every album it manages (each managed album, Review and Live) saying that the album is view-only and where to go to change it, with the address of the matching view in the web UI (for example `https://pipeline.example.com/#album:Costa%20Rica`). Immich shows it as plain text, so the address is copied rather than clicked. The note is kept current: it is checked every cycle and rewritten if it differs, so a note edited by hand on one of those albums is put back. Leave `PIPELINE_URL` unset and the descriptions are not touched.
 
 ### 7. Use it
 
 - Drop any photo or video into **Wallpaper Maker**. A photo is processed solo on the next poll cycle; a video is kept as it is (videos are managed, not processed).
 - Drop a **portrait** photo into **Collage Maker**; it waits there until a second portrait arrives, then groups 2–3 into one collage. Videos can't go in a collage.
-- Each result lands in **Review**, which is held in the pipeline's library rather than in an Immich album. The original and every later version are kept in the revision store (`REVISIONS_PATH`); Immich only ever holds the current version.
+- Each result lands in **Review**, which is kept in the pipeline's library and mirrored to the Review album in Immich so it can be browsed there. The original and every later version are kept in the revision store (`REVISIONS_PATH`); Immich only ever holds the current version.
 - The originals are copied into the store and then removed from the entry queue (see "A photo sits in an entry queue" below if one stays).
 - If the recipe has a question it can't answer on its own, the photo is marked as waiting for an answer. Answering is part of the per-photo panel, which is not built yet.
 - A photo that fails is marked failed with the reason and is **not** retried by itself, since each attempt spends Claude plan credits.
 - **The pipeline no longer reads Immich comments or likes.** Replying to a photo in Immich does nothing now.
-- The web UI at `http://<host>:<port>` (`8096` in the example compose file) currently shows what the library holds (processing, failed, Review, Live, each album). Browsing with thumbnails, moving, promoting to Live, trashing, and revising a photo by chatting with Claude are coming; until they land, Review can't be acted on, so don't switch to this version yet if you rely on it.
+- The web UI at `http://<host>:<port>` (`8096` in the example compose file) is where Review is done. The sidebar lists the queue, Review, Live, each album and the trash; select photos to add them to or remove them from Live, move them to an album, or trash or restore them. Only the choices that apply are offered (a photo already in an album isn't offered that album). Open a photo to do the same to it, to revert to an earlier step, or to ask Claude for a change in its chat box (Enter sends, Ctrl+Enter adds a line). Each place has its own address, such as `/#review`, `/#live` or `/#album:Costa%20Rica`, so it can be bookmarked or linked.
 - Want a fix to stick for every future photo? Add a rule on the **Recipe rules** page — see step 9.
 
 ### 8. Import photos you already processed (optional)
@@ -181,6 +183,7 @@ All settings are environment variables. Credentials can also come from the share
 | `RULES_PATH` | `/data/rules.json` | Where reviewer-taught recipe rules are kept (step 9); keep it on the persistent `/data` volume. |
 | `RECIPE_SKILL_PATH` | `/app/.claude/skills/photo-mat-recipe` | The recipe skill. Claude Code only discovers skills from a `.claude/skills/<name>/` folder, so any override must keep that shape. |
 | `CLAUDE_BINARY` | `claude` | The Claude Code executable to run. |
+| `PIPELINE_URL` | | The address people use to reach this web UI (for example `https://immich-pipeline.example.com`). When set, each managed album's note in Immich links back to the matching view here (step 6). |
 | `WEBUI_HOST` / `WEBUI_PORT` | `0.0.0.0` / `8080` | Where the web UI and `/healthz` listen inside the container. |
 | `CLAUDE_CODE_VERSION` / `CLAUDE_CLI_PREFIX` | `latest` / `/data/claude-cli` | See "Claude Code CLI" below. |
 

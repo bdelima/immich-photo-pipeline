@@ -158,6 +158,13 @@ def test_list_comments_requires_album_id():
         pass
 
 
+def test_update_album_description_patches_just_the_description():
+    session = RecordingSession({})
+    ImmichClient("http://immich", "key", session=session).update_album_description("alb", "hello")
+    method, url, kwargs = session.calls[0]
+    assert (method, url, kwargs["json"]) == ("PATCH", "http://immich/api/albums/alb", {"description": "hello"})
+
+
 def test_restore_assets_posts_ids_to_the_trash_restore_endpoint():
     session = RecordingSession({})
     ImmichClient("http://immich", "k", session=session).restore_assets(["a", "b"])
