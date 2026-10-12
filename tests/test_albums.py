@@ -14,6 +14,7 @@ def make_cfg(**overrides):
         wallpaper_album_id="", wallpaper_album_name="Wallpaper Maker",
         review_album_id="", review_album_name="Review",
         live_album_id="", live_album_name="Live",
+        import_album_id="", import_album_name="Import Only",
         poll_interval_seconds=15, state_path="/data/state.json",
         recipe_skill_path="/app/photo-mat-recipe", claude_binary="claude",
         secrets_file="/run/secrets/immich_secrets.env",
@@ -73,7 +74,7 @@ def test_ensure_core_albums_prefers_explicit_id_over_name_lookup():
     resolved = ensure_core_albums(fake, cfg)
     assert resolved.review_album_id == "explicit-id"
     # "Review" was pinned explicitly, so it's never looked up or created --
-    # the other three weren't pinned, so they still bootstrap as usual.
+    # the others weren't pinned, so they still bootstrap as usual.
     assert "Review" not in {name for name, _ in fake.created}
 
 
@@ -85,8 +86,9 @@ def test_ensure_core_albums_bootstraps_missing_albums_by_name():
     assert resolved.wallpaper_album_id.startswith("new-")
     assert resolved.review_album_id.startswith("new-")
     assert resolved.live_album_id.startswith("new-")
+    assert resolved.import_album_id.startswith("new-")
     created_names = {name for name, _ in fake.created}
-    assert created_names == {"Collage Maker", "Wallpaper Maker", "Review", "Live"}
+    assert created_names == {"Collage Maker", "Wallpaper Maker", "Review", "Live", "Import Only"}
 
 
 def test_ensure_core_albums_reuses_existing_by_name():
@@ -95,7 +97,7 @@ def test_ensure_core_albums_reuses_existing_by_name():
     resolved = ensure_core_albums(fake, cfg)
     assert resolved.review_album_id == "existing-review"
     created_names = {name for name, _ in fake.created}
-    assert created_names == {"Collage Maker", "Wallpaper Maker", "Live"}
+    assert created_names == {"Collage Maker", "Wallpaper Maker", "Live", "Import Only"}
 
 
 # ---- managed albums (the library's own) ---------------------------------------

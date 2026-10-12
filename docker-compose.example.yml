@@ -27,14 +27,19 @@ services:
       # lookup).
       # COLLAGE_ALBUM_NAME: "Collage Maker"
       # WALLPAPER_ALBUM_NAME: "Wallpaper Maker"
+      # IMPORT_ALBUM_NAME: "Import Only"
       # REVIEW_ALBUM_NAME: "Review"
       # LIVE_ALBUM_NAME: "Live"
       # COLLAGE_ALBUM_ID: ${COLLAGE_ALBUM_ID}
       # WALLPAPER_ALBUM_ID: ${WALLPAPER_ALBUM_ID}
+      # IMPORT_ALBUM_ID: ${IMPORT_ALBUM_ID}
       # REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
       # LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
       #
-      # Collage Maker and Wallpaper Maker are shared automatically with the
+      # Import Only holds items that are managed but never processed: drop a
+      # photo or video there and it lands in Review exactly as it is.
+      #
+      # Collage Maker, Wallpaper Maker and Import Only are shared automatically with the
       # accounts behind each IMMICH_EXTRA_API_KEY line in the secrets file
       # (as editors, so they can add photos), and every managed album the
       # pipeline creates, plus Review and Live, is shared with them as
