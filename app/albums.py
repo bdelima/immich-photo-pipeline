@@ -12,7 +12,8 @@ import dataclasses
 import logging
 
 from .config import Config
-from .immich_client import ImmichClient
+from .immich_client import ImmichClient, ImmichError
+from .library import LibraryStore
 
 log = logging.getLogger(__name__)
 
@@ -45,3 +46,46 @@ def ensure_core_albums(immich: ImmichClient, cfg: Config) -> Config:
         "live_album_id": cfg.live_album_id or resolve_or_create_album(immich, albums, cfg.live_album_name),
     }
     return dataclasses.replace(cfg, **resolved)
+
+
+def ensure_album(immich: ImmichClient, store: LibraryStore, name: str) -> str:
+    """The Immich album id for a managed album, making one (owned by this
+    account) if the library has none yet, and recording it in the library.
+
+    An existing album of that name is reused only if this account owns it:
+    an album owned by someone else cannot be changed by the pipeline."""
+    known = store.load().albums.get(name)
+    if known:
+        return known
+    album_id = ""
+    try:
+        me = immich.get_my_user_id()
+        for album in immich.list_albums():
+            if album.get("albumName") == name and album.get("ownerId") == me:
+                album_id = album["id"]
+                break
+    except ImmichError:
+        log.warning("could not look for an existing album named %r", name, exc_info=True)
+    if not album_id:
+        album_id = immich.create_album(name)
+
+    def record(library):
+        return library.albums.setdefault(name, album_id)
+
+    return store.update(record)
+
+
+def ensure_home_albums(immich: ImmichClient, store: LibraryStore) -> list[str]:
+    """Makes sure every album a photo lives in exists in Immich. Returns the
+    names of albums created or newly recorded. Failures are logged and left
+    for the next cycle."""
+    library = store.load()
+    wanted = {p.home for p in library.photos.values()} - {"inbox", "review"}
+    made = []
+    for name in sorted(wanted - set(library.albums)):
+        try:
+            ensure_album(immich, store, name)
+            made.append(name)
+        except ImmichError:
+            log.warning("could not create album %r; will try again next cycle", name, exc_info=True)
+    return made

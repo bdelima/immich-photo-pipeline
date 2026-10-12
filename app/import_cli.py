@@ -15,12 +15,12 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .albums import ensure_core_albums
 from .config import Config
 from .immich_client import ImmichClient, ImmichError
 from .importer import REVIEW, import_existing
+from .library import LibraryStore
+from .revisions import RevisionStore
 from .secrets import resolve_secret
-from .state import StateStore
 
 
 def resolve_source_album(albums: list[dict], ref: str) -> tuple[str, str]:
@@ -41,7 +41,7 @@ def resolve_source_album(albums: list[dict], ref: str) -> tuple[str, str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.import_cli",
-        description="Track already-processed photos in the pipeline (no lineage). Dry run unless --apply.",
+        description="Bring already-processed photos into the library (no lineage). Dry run unless --apply.",
     )
     parser.add_argument("--from", dest="source", required=True, help="source album name or id")
     parser.add_argument("--into", dest="target", required=True,
@@ -56,13 +56,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     immich = ImmichClient(cfg.immich_url, api_key)
     try:
-        cfg = ensure_core_albums(immich, cfg)
         source_id, source_name = resolve_source_album(immich.list_albums(), args.source)
         target = REVIEW if args.target.strip().lower() == REVIEW else args.target.strip()
         report = import_existing(
-            immich, StateStore(cfg.state_path),
+            immich, LibraryStore(cfg.library_path), RevisionStore(cfg.revisions_path),
             source_album_id=source_id, source_album_name=source_name,
-            target=target, review_album_id=cfg.review_album_id, apply=args.apply,
+            target=target, apply=args.apply,
         )
     except (ImmichError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

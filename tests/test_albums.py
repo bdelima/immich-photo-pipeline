@@ -96,3 +96,46 @@ def test_ensure_core_albums_reuses_existing_by_name():
     assert resolved.review_album_id == "existing-review"
     created_names = {name for name, _ in fake.created}
     assert created_names == {"Collage Maker", "Wallpaper Maker", "Live"}
+
+
+# ---- managed albums (the library's own) ---------------------------------------
+
+from app.albums import ensure_album, ensure_home_albums
+from app.library import LibraryStore, Photo
+
+
+class OwnedImmich(FakeImmich):
+    def __init__(self, albums, me="pipeline"):
+        super().__init__(albums)
+        self.me = me
+
+    def get_my_user_id(self):
+        return self.me
+
+
+def test_ensure_album_reuses_one_this_account_owns_and_remembers_it(tmp_path):
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    immich = OwnedImmich([{"id": "1", "albumName": "Holiday", "ownerId": "pipeline"}])
+    assert ensure_album(immich, store, "Holiday") == "1"
+    assert immich.created == [] and store.load().albums == {"Holiday": "1"}
+    immich._albums = []
+    assert ensure_album(immich, store, "Holiday") == "1"       # known, so no lookup
+
+
+def test_ensure_album_does_not_adopt_an_album_owned_by_someone_else(tmp_path):
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    immich = OwnedImmich([{"id": "1", "albumName": "Holiday", "ownerId": "other"}])
+    assert ensure_album(immich, store, "Holiday") == "new-101"
+    assert [n for n, _ in immich.created] == ["Holiday"]
+
+
+def test_home_albums_are_made_for_homes_without_one_except_review_and_inbox(tmp_path):
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    store.update(lambda lib: lib.photos.update(
+        a=Photo(id="a", home="Holiday"), b=Photo(id="b", home="review"), c=Photo(id="c", home="inbox"),
+        d=Photo(id="d", home="Everyday"),
+    ))
+    immich = OwnedImmich([{"id": "9", "albumName": "Everyday", "ownerId": "pipeline"}])
+    assert ensure_home_albums(immich, store) == ["Everyday", "Holiday"]
+    assert sorted(store.load().albums) == ["Everyday", "Holiday"]
+    assert ensure_home_albums(immich, store) == []

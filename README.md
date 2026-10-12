@@ -1,6 +1,6 @@
 # immich-photo-pipeline
 
-Automated pipeline that processes Immich staging-album photos (Collage Maker, Wallpaper Maker) through a matting/cropping recipe, a Review approval step, and syncs approved managed albums to a Live album, with a small web UI to pick the live album.
+Automated pipeline that processes Immich staging-album photos (Collage Maker, Wallpaper Maker) through a matting/cropping recipe into a Review step, keeps every photo and every revision of it in its own library, and mirrors the managed albums and a Live album into Immich. Review, moving, promoting and trashing are done in the pipeline's own web UI, which is being built up in stages (see step 7).
 
 ## Setup
 
@@ -16,7 +16,7 @@ If other household members will drop photos into the entry-queue albums from the
 
 In the Immich web app, signed in as the pipeline's account: **Account Settings → API Keys → New API Key**. Give it a name like `photo-pipeline` and copy the key — Immich only shows it once.
 
-Repeat for each additional household account you want configured as an `IMMICH_EXTRA_API_KEY` fallback. That's needed because Immich won't let the pipeline's own account remove a photo from an entry-queue album unless it's the account that added it (confirmed intentional in Immich, not a bug — see `app/pipeline.py`'s `_clear_from_entry_queue`); the extra keys are tried in turn as a fallback for that one operation. They also tell the pipeline which accounts to share its albums with (step 6), so every household member who should take part needs one.
+Repeat for each additional household account you want configured as an `IMMICH_EXTRA_API_KEY` fallback. That's needed because Immich won't let the pipeline's own account remove a photo from an entry-queue album unless it's the account that added it (confirmed intentional in Immich, not a bug — see `app/worker.py`'s `_clear_from_queue`); the extra keys are tried in turn as a fallback for that one operation. They also tell the pipeline which accounts to share its albums with (step 6), so every household member who should take part needs one.
 
 ### 3. Create the shared secrets file
 
@@ -92,26 +92,25 @@ curl http://localhost:8096/healthz
 
 ### 6. Albums are shared automatically
 
-Immich only surfaces likes and comments on a *shared* album, and other accounts can't drop photos into an entry queue they can't see. So on startup the pipeline looks up which account each `IMMICH_EXTRA_API_KEY` belongs to and shares **Collage Maker, Wallpaper Maker, Review and every managed album** with them as editors (they can add photos, like and comment). Managed albums created later, by replying with a new album name, are shared when they're created. Live is left private since it only feeds your displays.
+The other accounts can't drop photos into an entry queue they can't see. So on startup the pipeline looks up which account each `IMMICH_EXTRA_API_KEY` belongs to and shares **Collage Maker and Wallpaper Maker** with them as editors (they can add photos). Every managed album the pipeline creates is shared with them as **viewers**: they can browse it and like photos, but cannot add or remove anything, so nothing changes in a managed album except through the pipeline. Live is left private since it only feeds your displays, and Review is not shown in Immich at all: it lives in the pipeline's own library.
 
-This is why each household member who should take part needs an `IMMICH_EXTRA_API_KEY` line (steps 2-3), even if they never remove an original from a queue. Sharing is best-effort and safe to repeat: it only adds accounts that are missing, and a failure is logged and skipped. Two cases it can't cover: an album pinned by id that the pipeline account doesn't own (share it by hand in the Immich UI, album → Share), and an album created by the importer (step 8) — that one is shared the next time the container starts. Set `SHARE_ALBUMS=false` to turn all of this off and manage sharing yourself.
+This is why each household member who should take part needs an `IMMICH_EXTRA_API_KEY` line (steps 2-3), even if they never remove an original from a queue. Sharing is best-effort and safe to repeat: it only adds accounts that are missing (an album already shared keeps the role it has), and a failure is logged and skipped. Set `SHARE_ALBUMS=false` to turn all of this off and manage sharing yourself.
 
 ### 7. Use it
 
-- Drop any photo into **Wallpaper Maker** and it's processed solo on the next poll cycle.
-- Drop a **portrait** photo into **Collage Maker**; it waits there (and comments asking if you want it processed solo anyway) until a second portrait arrives, then groups 2–3 into one collage.
-- Either way, the result lands in **Review**. From there:
-  - **Like** it to get asked which managed album to promote it to — reply with a name, either an existing one from the list or a new one, which gets created.
-  - **Comment** with feedback (e.g. "too pink", "crop in tighter") to have it reprocessed in place with that note.
-  - **Comment** "delete this" (or similar — a quick Claude call reads the intent, not an exact phrase) to remove it outright. This works even for a non-admin reviewer account, since the pipeline's own account owns everything it uploads to Review.
-- Once something's in a managed album, **unliking** it pulls it back to Review; **commenting** on it reprocesses it in place, same as Review.
-- Already have finished photos from before the pipeline? See step 8 to import them so they're tracked like everything else.
-- Want a fix to stick for every future photo, not just this one? Say so in the comment ("from now on…") — see step 9.
-- The small web UI at `http://<host>:<port>` (`8096` in the example compose file) picks which managed album is currently mirrored into **Live** — the one album [immich-overflight-feed/immich-frame-mirror](https://github.com/bdelima/immich-display-integrations) should point their own `ALBUM_ID` at, so your TV/display config never has to change when you switch between, say, "Everyday" and "Holiday".
+- Drop any photo or video into **Wallpaper Maker**. A photo is processed solo on the next poll cycle; a video is kept as it is (videos are managed, not processed).
+- Drop a **portrait** photo into **Collage Maker**; it waits there until a second portrait arrives, then groups 2–3 into one collage. Videos can't go in a collage.
+- Each result lands in **Review**, which is held in the pipeline's library rather than in an Immich album. The original and every later version are kept in the revision store (`REVISIONS_PATH`); Immich only ever holds the current version.
+- The originals are copied into the store and then removed from the entry queue (see "A photo sits in an entry queue" below if one stays).
+- If the recipe has a question it can't answer on its own, the photo is marked as waiting for an answer. Answering is part of the per-photo panel, which is not built yet.
+- A photo that fails is marked failed with the reason and is **not** retried by itself, since each attempt spends Claude plan credits.
+- **The pipeline no longer reads Immich comments or likes.** Replying to a photo in Immich does nothing now.
+- The web UI at `http://<host>:<port>` (`8096` in the example compose file) currently shows what the library holds (processing, failed, Review, Live, each album). Browsing with thumbnails, moving, promoting to Live, trashing, and revising a photo by chatting with Claude are coming; until they land, Review can't be acted on, so don't switch to this version yet if you rely on it.
+- Want a fix to stick for every future photo? Add a rule on the **Recipe rules** page — see step 9.
 
 ### 8. Import photos you already processed (optional)
 
-Photos that were finished before the pipeline existed (or outside it) can be brought under the same tracking as everything else — liking/unliking moves them between Review and managed albums, the web UI can mirror their album into Live, and a comment can delete them. There is no history to capture, so each imported photo simply becomes its own record. Run it inside the container; it's a **dry run** unless you add `--apply`:
+Photos that were finished before the pipeline existed (or outside it) can be brought into the library. There is no history to capture, so each imported photo simply becomes a photo with a single revision. Run it inside the container; it's a **dry run** unless you add `--apply`:
 
 ```bash
 # See what would happen (changes nothing):
@@ -121,24 +120,22 @@ docker exec immich-photo-pipeline python -m app.import_cli --from "Screensaver" 
 docker exec immich-photo-pipeline python -m app.import_cli --from "Screensaver" --into "Everyday" --apply
 ```
 
-- `--from` is an album name (or id) holding the finished photos. `--into` is a managed album name (created if it doesn't exist) or the word `review` to put them in Review for the normal like-to-promote flow.
-- Nothing is deleted, and nothing is removed from the source album — photos are only *added* to the target album, and for a managed album they are also liked (otherwise the pipeline would treat them as "pulled back" and move them to Review on the next cycle).
-- It's safe to re-run: anything already tracked is skipped, and a photo that fails (reported at the end) is skipped and can be retried.
+- `--from` is an album name (or id) holding the finished photos. `--into` is a managed album name (created if it doesn't exist) or the word `review` to put them in Review.
+- Each photo's current image is copied into the revision store and published again as a new asset owned by the pipeline account (the source album usually belongs to someone else, so the pipeline could not manage the original). Nothing is deleted and nothing is removed from the source album.
+- It's safe to re-run: anything already in the library is skipped, and a photo that fails (reported at the end) is skipped and can be retried.
 - Under Portainer, open the container's **Console** (connect as the default user, `/bin/sh`) and run the `python -m app.import_cli ...` part of either command there instead of using `docker exec`.
-- A dry run just reads. An `--apply` run takes the same lock the poll loop holds while it works, so it waits for any in-flight cycle to finish (minutes, if a recipe is running) and the poll loop briefly waits for it in turn — this keeps the two from overwriting each other's saved state.
-- If a photo can't be liked — usually because a different Immich account owns it, and Immich only lets the owner edit an asset — it is reported and skipped rather than imported half-way. Either like those photos yourself from the owning account in the Immich UI and re-run (already-liked photos need no edit), or import them into `review` instead.
-- **Imported photos can't be revised.** With no original to work from, a "make it brighter" comment would run the recipe on an already-matted image. The pipeline replies once explaining that, and leaves the photo alone. Like/unlike and "delete this" still work.
-- If you plan to mirror an album into Live afterwards, import everything you want kept *first*: picking a managed album in the web UI makes Live match it exactly.
+- **Imported photos can't be revised.** With no original to work from, a "make it brighter" request would run the recipe on an already-matted image.
+- **Coming from the old comment-and-like version?** The few photos it processed can be carried over, with the instructions it recorded, by `docker exec immich-photo-pipeline python -m app.import_legacy` (dry run; add `--apply`). It reads the old `state.json` (`STATE_PATH`), and the photo in the album that was live is marked as live.
 
 ### 9. Teach the recipe (optional)
 
 The recipe doesn't have to stay as it was written. Reviewers can teach it standing rules, which are added to the prompt on every photo the pipeline processes from then on. They are kept in a file on the `/data` volume (`rules.json`), not written into `photo-mat-recipe/SKILL.md` — the skill is baked into the image, so edits there would vanish on the next update, and nothing would review them.
 
-**Teaching one by comment.** Comment on a photo in Review or a managed album with an explicit cue — *always*, *never*, *from now on*, *next time*, *going forward*, *in general*, *every time*, *remember*:
+**Teaching one while revising a photo (not available yet).** Teaching a rule by commenting on a photo in Immich has been removed with the comment flow; it comes back with the per-photo chat in the web UI. Until then, add rules on the Recipe rules page. The way it worked, and the way it will work again:
 
 > For collages, always keep the items balanced by size.
 
-The photo is revised as usual, and the pipeline replies with exactly what it saved, so a wrong paraphrase is obvious:
+The photo is revised as usual, and the reply says exactly what was saved, so a wrong paraphrase is obvious:
 
 > Saved rule r7 (collages): "Keep collage items balanced by size." Reply "forget r7" to undo.
 
@@ -177,7 +174,10 @@ All settings are environment variables. Credentials can also come from the share
 | `COLLAGE_ALBUM_ID` / `WALLPAPER_ALBUM_ID` / `REVIEW_ALBUM_ID` / `LIVE_ALBUM_ID` | | Pin an existing album by id instead. An id always wins over the name lookup. |
 | `POLL_INTERVAL_SECONDS` | `15` | How often the poll loop runs. |
 | `CLAUDE_AUTH_CHECK_INTERVAL_SECONDS` | `300` | How often the Claude session is re-probed (each probe is a real, trivial invocation, so this is slower than polling). |
-| `STATE_PATH` | `/data/state.json` | Where tracking state is kept; keep `/data` on a persistent volume. |
+| `LIBRARY_PATH` | `/data/library.json` | The library: every photo, where it lives, and its revisions. Keep `/data` on a persistent volume. |
+| `REVISIONS_PATH` | `/data/revisions` | Where every original and every revision of every photo is kept. It can grow, so it is its own setting: bind-mount a bigger disk onto it if needed. |
+| `WORKER_COUNT` | `1` | How many photos are processed at the same time (each is a Claude run). |
+| `STATE_PATH` | `/data/state.json` | The old version's state file; only read by `python -m app.import_legacy`. |
 | `RULES_PATH` | `/data/rules.json` | Where reviewer-taught recipe rules are kept (step 9); keep it on the persistent `/data` volume. |
 | `RECIPE_SKILL_PATH` | `/app/.claude/skills/photo-mat-recipe` | The recipe skill. Claude Code only discovers skills from a `.claude/skills/<name>/` folder, so any override must keep that shape. |
 | `CLAUDE_BINARY` | `claude` | The Claude Code executable to run. |
@@ -188,15 +188,15 @@ All settings are environment variables. Credentials can also come from the share
 
 Setting a `*_ALBUM_ID` pins that album instead of creating one by name. That's how to reuse, say, an existing "Screensaver" album that your display containers already point at: set `LIVE_ALBUM_ID` to its id (find it in the album's URL in the Immich UI) and leave `LIVE_ALBUM_NAME` alone — the name is only used when no id is pinned, so there's no need for the two to match.
 
-One thing to know before you do: choosing a managed album in the web UI makes **Live match it exactly** — photos in Live that aren't in the chosen album are removed from Live (removed from that album only; the photos themselves are not deleted). So if Live is an album that already holds finished photos, import them first (step 8) and choose the album they were imported into, or they'll drop out of Live.
+One thing to know before you do: the pipeline makes **Live match the photos promoted to Live in the library exactly**, so photos in Live that the library doesn't know about are removed from it (from that album only; the photos themselves are not deleted). An empty library never empties Live, but once anything is promoted, everything else goes. So if Live already holds finished photos, import them first (step 8) and promote them.
 
 ## Troubleshooting
 
 - **`/healthz` returns 503, or the logs say there's no working Claude session** — the token line is missing or stale; see step 5. Processing is skipped until it recovers (no restart needed).
 - **`mkdir: cannot create directory '/data/claude-cli': Permission denied`** — the `/data` bind mount isn't writable by uid 1000; see the `chown` in step 3.
 - **The first start looks stuck "installing Claude Code CLI"** — it installs from npm into `/data` once and needs outbound network for that; later starts reuse it. An `npm WARN EBADENGINE` about the Node version is harmless.
-- **A photo sits in an entry queue after being processed** — Immich only lets the account that added a photo remove it from an album. If none of the configured keys is that account, the pipeline leaves a comment saying the original is safe to delete by hand; it won't be reprocessed either way.
-- **A comment on an imported photo gets a reply saying it can't be revised** — expected; see step 8.
+- **A photo sits in an entry queue after being processed** — Immich only lets the account that added a photo remove it from an album. If none of the configured keys is that account, the pipeline logs a warning and leaves the original there; it is safe to delete by hand, and it won't be reprocessed either way.
+- **A photo shows as failed** — the reason is recorded on it. It isn't retried by itself; videos in Collage Maker always fail this way (use Wallpaper Maker).
 - **A rule I taught isn't being applied** — check the **Recipe rules** page: it must be *active* (not a suggestion waiting for a "yes"), and its scope must match the run (a collage-only rule never reaches a single photo). Rules take effect on the next processing or revision of a photo, not retroactively.
 
 ## Releasing

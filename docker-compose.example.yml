@@ -34,14 +34,15 @@ services:
       # REVIEW_ALBUM_ID: ${REVIEW_ALBUM_ID}
       # LIVE_ALBUM_ID: ${LIVE_ALBUM_ID}
       #
-      # Collage Maker, Wallpaper Maker, Review and the managed albums are
-      # shared automatically with the accounts behind each
-      # IMMICH_EXTRA_API_KEY line in the secrets file (editors: they can
-      # add photos, like and comment -- Immich only surfaces likes and
-      # comments on shared albums). Set SHARE_ALBUMS: "false" to manage
-      # sharing by hand in the Immich UI instead.
+      # Collage Maker and Wallpaper Maker are shared automatically with the
+      # accounts behind each IMMICH_EXTRA_API_KEY line in the secrets file
+      # (as editors, so they can add photos), and every managed album the
+      # pipeline creates is shared with them as viewers. Set SHARE_ALBUMS:
+      # "false" to manage sharing by hand in the Immich UI instead.
       # SHARE_ALBUMS: "true"
       POLL_INTERVAL_SECONDS: "15"
+      # How many photos are processed at once (each is a Claude run).
+      # WORKER_COUNT: "1"
       # Claude Pro auth: a CLAUDE_CODE_OAUTH_TOKEN= line in the shared
       # secrets file (see the volumes block) is the preferred path --
       # rotating the token is then just "edit that one line", never
@@ -72,17 +73,22 @@ services:
       # file takes effect on the very next poll cycle, no restart needed.
       # RECIPE_SKILL_PATH: /app/.claude/skills/photo-mat-recipe
       #
-      # Already have finished photos to bring under tracking? Once the
+      # Already have finished photos to bring into the library? Once the
       # container is up: `docker exec immich-photo-pipeline python -m
       # app.import_cli --from "<album>" --into "<managed album|review>"`
       # (dry run; add --apply to do it). See the README, step 8.
     volumes:
-      # Holds state.json and the Claude Code CLI install. The container runs
+      # Holds library.json, the revision store and the Claude Code CLI install. The container runs
       # as uid 1000, so this host directory must be writable by it
       # (`sudo chown -R 1000:1000 pipeline-data`); a root-owned directory
       # fails with "mkdir: cannot create directory '/data/claude-cli':
       # Permission denied".
       - ./pipeline-data:/data
+      # Every original and every revision of every photo is kept under
+      # REVISIONS_PATH (/data/revisions by default). It grows with use, so if
+      # /data is on a small disk, bind-mount a bigger one over just that path.
+      # The same uid 1000 write access applies.
+      # - /mnt/big-disk/pipeline-revisions:/data/revisions
       # The one shared secrets file for this whole Immich pipeline --
       # plain KEY=VALUE lines (see app/secrets.py), so a single
       # bind-mounted file carries every credential instead of one file
@@ -101,7 +107,7 @@ services:
       # used only when clearing an entry-queue original someone else's
       # account added: the pipeline tries IMMICH_API_KEY first, then each
       # IMMICH_EXTRA_API_KEY in turn, and only if every one of them fails
-      # does it leave a comment asking you to delete it by hand.
+      # does it leave the original there (it is never processed twice).
       #
       # Mount the SAME host file into immich-overflight-feed's and
       # immich-frame-mirror's SECRETS_FILE too
