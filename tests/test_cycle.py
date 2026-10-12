@@ -155,6 +155,12 @@ class PublishingImmich(FakeImmich):
     def upload_asset(self, path, name):
         return f"up-{len(self.contents)}-{name}"
 
+    def get_asset(self, asset_id):
+        return {"id": asset_id, "isTrashed": False}
+
+    def restore_assets(self, ids):
+        pass
+
     def delete_assets(self, ids, force=True):
         self.deleted.append((list(ids), force))
 
