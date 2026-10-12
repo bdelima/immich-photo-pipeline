@@ -6,7 +6,7 @@ Nothing here changes anything. Actions on photos are added separately.
 Views (the places the tree offers):
     review          photos waiting in Review
     live            every photo promoted to Live, wherever it lives
-    album:<name>    a managed album
+    album:<slug>    a managed album (its name also works, for old links)
     queue           photos not finished yet: processing, waiting for an
                     answer, or failed
     trash           trashed photos
@@ -19,12 +19,14 @@ import os
 from flask import Flask, abort, jsonify, request, send_file
 
 from .. import chat
+from ..intake import VIDEO_EXTENSIONS
 from ..library import (
     INBOX, REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
     Library, LibraryStore, Photo,
 )
 from ..revisions import RevisionStore, RevisionStoreError
 from ..rules import RulesStore
+from ..slugs import album_for_slug, slug_map
 from ..thumbs import ThumbCache
 
 _QUEUE_STATUSES = (STATUS_PROCESSING, STATUS_AWAITING_ANSWER, STATUS_FAILED)
@@ -48,8 +50,8 @@ def photos_in_view(library: Library, view: str) -> list[Photo] | None:
         photos = [p for p in live if p.status in _QUEUE_STATUSES]
     elif view == "trash":
         photos = library.trashed_photos()
-    elif view.startswith("album:") and view[len("album:"):] in album_names(library):
-        name = view[len("album:"):]
+    elif view.startswith("album:") and album_for_slug(album_names(library), view[len("album:"):]) is not None:
+        name = album_for_slug(album_names(library), view[len("album:"):])
         photos = [p for p in live if p.home == name and p.status == STATUS_READY]
     else:
         return None
@@ -60,11 +62,13 @@ def tree(library: Library) -> dict:
     def count(view: str) -> int:
         return len(photos_in_view(library, view) or [])
 
+    names = album_names(library)
+    slugs = slug_map(names)
     return {
         "queue": count("queue"),
         "review": count("review"),
         "live": count("live"),
-        "albums": [{"name": n, "view": f"album:{n}", "count": count(f"album:{n}")} for n in album_names(library)],
+        "albums": [{"name": n, "view": f"album:{slugs[n]}", "count": count(f"album:{slugs[n]}")} for n in names],
         "trash": count("trash"),
     }
 
@@ -93,6 +97,11 @@ def summary(photo: Photo) -> dict:
     }
 
 
+def _source_media_type(source) -> str:
+    ext = os.path.splitext(source.file or source.name or "")[1].lower()
+    return "video" if ext in VIDEO_EXTENSIONS else "image"
+
+
 def detail(photo: Photo, rules: RulesStore | None = None) -> dict:
     out = summary(photo)
     proposal = None
@@ -104,7 +113,10 @@ def detail(photo: Photo, rules: RulesStore | None = None) -> dict:
         if found is not None:
             proposal = {"id": found.id, "text": found.text, "scope": found.scope}
     out.update({
-        "sources": [{"name": s.name or s.asset_id, "has_copy": bool(s.file)} for s in photo.sources],
+        "sources": [
+            {"index": i, "name": s.name or s.asset_id, "has_copy": bool(s.file), "media_type": _source_media_type(s)}
+            for i, s in enumerate(photo.sources)
+        ],
         "history": [
             {"n": r.n, "step": step, "instruction": r.instruction, "rules": r.rules,
              "created_at": r.created_at, "origin": r.origin, "current": r.n == photo.current,
@@ -177,6 +189,29 @@ def register_browse_routes(
     def media_full(photo_id: str):
         rev = photo_or_404(photo_id).current_revision()
         return send_stored(rev.file if rev else None, cache="no-cache")
+
+    def source_or_404(photo_id: str, index: int):
+        sources = photo_or_404(photo_id).sources
+        if not 0 <= index < len(sources) or not sources[index].file:
+            abort(404)
+        return sources[index]
+
+    @app.get("/media/<photo_id>/source/<int:index>")
+    def media_source(photo_id: str, index: int):
+        # The original as it was added. The copy is never overwritten.
+        return send_stored(source_or_404(photo_id, index).file, cache="private, max-age=31536000, immutable")
+
+    @app.get("/media/<photo_id>/source/<int:index>/thumb")
+    def media_source_thumb(photo_id: str, index: int):
+        source = source_or_404(photo_id, index)
+        if _source_media_type(source) != "image":
+            abort(404)
+        path = thumbs.get(revisions, source.file)
+        if path is None:
+            abort(404)
+        response = send_file(path, mimetype="image/jpeg", conditional=True)
+        response.headers["Cache-Control"] = "private, max-age=86400"
+        return response
 
     @app.get("/media/<photo_id>/rev/<int:n>")
     def media_revision(photo_id: str, n: int):
