@@ -146,4 +146,13 @@ def test_missing_file_is_404_not_500(tmp_path):
 
 def test_page_renders(tmp_path):
     client, *_ = build(tmp_path)
-    assert b"/api/tree" in client.get("/").data
+    page = client.get("/").data
+    assert b"/static/pipeline.css" in page and b"/static/app.js" in page
+    # The sidebar's code is shared with the Recipe rules page, so it lives in app.js.
+    assert b"/api/tree" in client.get("/static/app.js").data
+
+
+def test_every_page_uses_the_one_stylesheet(tmp_path):
+    client, *_ = build(tmp_path)
+    assert client.get("/static/pipeline.css").status_code == 200
+    assert b"/static/pipeline.css" in client.get("/").data

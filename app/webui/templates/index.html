@@ -4,124 +4,142 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>immich-photo-pipeline</title>
-  <style>
-    :root { color-scheme: light dark; --line: #8884; --muted: #888; --accent: #2a7ae2; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, sans-serif; display: flex; height: 100vh; }
-    nav { width: 14rem; flex: none; border-right: 1px solid var(--line); padding: .75rem; overflow-y: auto; }
-    nav h1 { font-size: 1rem; margin: 0 0 .75rem; }
-    nav a.item { display: flex; justify-content: space-between; padding: .3rem .5rem; border-radius: 4px;
-                 color: inherit; text-decoration: none; cursor: pointer; }
-    nav a.item:hover { background: var(--line); }
-    nav a.item.active { background: var(--accent); color: #fff; }
-    nav .group { margin: .9rem 0 .25rem; font-size: .75rem; text-transform: uppercase; color: var(--muted); }
-    nav .count { color: inherit; opacity: .7; }
-    nav .links { margin-top: 1rem; font-size: .85rem; }
-    main { flex: 1; overflow-y: auto; padding: .75rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .6rem; }
-    .tile { position: relative; aspect-ratio: 1; border: 1px solid var(--line); border-radius: 6px;
-            overflow: hidden; cursor: pointer; display: flex; align-items: center; justify-content: center;
-            background: var(--line); }
-    .tile img { width: 100%; height: 100%; object-fit: cover; }
-    .tile .ph { color: var(--muted); font-size: .8rem; text-align: center; padding: .4rem; }
-    .badge { position: absolute; top: 4px; left: 4px; background: #000a; color: #fff; font-size: .7rem;
-             padding: 1px 6px; border-radius: 9px; }
-    .badge.live { background: #d33a; left: auto; right: 4px; }
-    .empty { color: var(--muted); padding: 2rem; }
-    .tile .pick { position: absolute; bottom: 4px; left: 4px; width: 1.3rem; height: 1.3rem; margin: 0; cursor: pointer; }
-    .tile.sel { outline: 3px solid var(--accent); outline-offset: -3px; }
-    #bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .5rem; margin-bottom: .6rem;
-           border: 1px solid var(--line); border-radius: 6px; position: sticky; top: 0; background: Canvas; z-index: 5; }
-    #bar[hidden] { display: none; }
-    #bar .sp { flex: 1; }
-    #msg { margin: 0 0 .6rem; font-size: .9rem; }
-    #msg.bad { color: #c33; }
-    #viewer li button { margin-left: .4rem; font-size: .75rem; }
-    #viewer { position: fixed; inset: 0; background: #000d; display: none; z-index: 10; }
-    #viewer.open { display: flex; }
-    #viewer .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; }
-    #viewer .stage img, #viewer .stage video { max-width: 100%; max-height: 100vh; }
-    #viewer aside { width: 20rem; background: Canvas; color: CanvasText; padding: .75rem; overflow-y: auto; }
-    #viewer h2 { font-size: .95rem; margin: 0 0 .5rem; }
-    #viewer button.close { float: right; }
-    #viewer ol { padding-left: 1.4rem; }
-    #viewer li.current { font-weight: 600; }
-    #viewer li .note { color: var(--muted); font-weight: 400; font-size: .8rem; }
-    .meta { color: var(--muted); font-size: .85rem; }
-    .err { color: #c33; }
-    #chatlog { max-height: 16rem; overflow-y: auto; margin: 0 0 .5rem; display: flex; flex-direction: column; gap: .35rem; }
-    #chatlog .m { padding: .35rem .5rem; border-radius: .5rem; font-size: .85rem; max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; }
-    #chatlog .user { align-self: flex-end; background: #2b6cb033; }
-    #chatlog .claude { align-self: flex-start; background: #8883; }
-    #chatlog .m small { display: block; color: var(--muted); font-size: .7rem; }
-    #chatlog .failed small { color: #c33; }
-    #chatform textarea { width: 100%; box-sizing: border-box; min-height: 3.2rem; resize: vertical; font: inherit; }
-    #chatform .row { display: flex; gap: .5rem; align-items: center; margin-top: .3rem; }
-    .proposal { border: 1px solid #8886; border-radius: .5rem; padding: .5rem; margin: .5rem 0; font-size: .85rem; }
-    .proposal button { margin-right: .4rem; }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='pipeline.css') }}">
 </head>
 <body>
   <nav>
     <h1>Photo pipeline</h1>
     <div id="tree"></div>
-    <div class="links"><a href="/rules">Recipe rules</a></div>
+    <div class="links"><a class="item" href="/rules">Recipe rules</a></div>
   </nav>
   <main>
-    <div id="msg" hidden></div>
-    <div id="bar" hidden>
+    <div class="card head">
+      <h2 id="title"></h2>
+      <span class="chip" id="total"></span>
+      <span class="sp"></span>
+      <span id="status" class="status" role="status"></span>
+    </div>
+    <div id="bar" class="card" hidden>
       <strong id="count"></strong>
-      <button onclick="selectAll()">Select all</button>
-      <button onclick="clearSel()">Clear</button>
+      <button class="btn sec" onclick="selectAll()">Select all</button>
+      <button class="btn sec" onclick="clearSel()">Clear</button>
       <span class="sp"></span>
       <span id="normal">
-        <button onclick="promote(true)">Add to Live</button>
-        <button onclick="promote(false)">Remove from Live</button>
-        <select id="dest"></select>
-        <input id="newname" placeholder="Album name" maxlength="60" hidden>
-        <button onclick="moveSel()">Move</button>
-        <button onclick="trashSel()">Trash</button>
+        <button class="btn sec" id="addLive" onclick="promote(true)">Add to Live</button>
+        <button class="btn sec" id="rmLive" onclick="promote(false)">Remove from Live</button>
+        <button class="btn" id="moveBtn" onclick="moveMenu(this)">Move to &#9662;</button>
+        <button class="btn warn" onclick="trashSel()">Trash</button>
       </span>
-      <span id="intrash" hidden><button onclick="restoreSel()">Restore</button></span>
+      <span id="intrash" hidden><button class="btn" onclick="restoreSel()">Restore</button></span>
     </div>
-    <div id="grid" class="grid"></div>
+    <div id="grid" class="grid" style="margin-top:1rem"></div>
     <div id="empty" class="empty" hidden></div>
   </main>
   <div id="viewer">
-    <div class="stage" id="stage"></div>
-    <aside id="panel"></aside>
+    <div class="dialog">
+      <section class="photo">
+        <header id="vhead"></header>
+        <div class="stage" id="stage"></div>
+        <footer id="vfoot"></footer>
+      </section>
+      <aside id="panel"></aside>
+    </div>
   </div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
 <script>
-let view = "review", list = [], open = -1, albums = [];
+let view = "review", list = [], open = -1, albums = [], loadToken = 0;
 const selected = new Set();
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const api = async url => { const r = await fetch(url); if (!r.ok) throw new Error(url + " " + r.status); return r.json(); };
+// What the last action in each place said. Each view has its own, so the
+// message belongs to the place it happened and not to whatever is open now.
+const statusByView = {};
 
-function item(v, label, n) {
-  return `<a class="item${v === view ? " active" : ""}" data-view="${esc(v)}"><span>${esc(label)}</span><span class="count">${n}</span></a>`;
+// ---- status ----
+function renderStatus() {
+  const s = statusByView[view];
+  const el = $("status");
+  el.textContent = s ? s.text : "";
+  el.className = "status" + (s && s.bad ? " bad" : "");
 }
-async function loadTree() {
-  const t = await api("/api/tree");
-  albums = t.albums.map(a => a.name);
-  $("tree").innerHTML =
-    item("queue", "Queue", t.queue) + item("review", "Review", t.review) + item("live", "Live", t.live) +
-    `<div class="group">Albums</div>` + t.albums.map(a => item(a.view, a.name, a.count)).join("") +
-    `<div class="group">&nbsp;</div>` + item("trash", "Trash", t.trash);
-  for (const a of $("tree").querySelectorAll("a.item")) a.onclick = () => select(a.dataset.view);
+function say(text, bad) {
+  if (text) statusByView[view] = { text, bad: !!bad }; else delete statusByView[view];
+  renderStatus();
 }
-async function select(v, keep) {
-  view = v; closeViewer();
+
+// ---- menus (the "Move to" choices) ----
+let menuEl = null;
+function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+function openMenu(anchor, items, pick) {
+  closeMenu();
+  const m = document.createElement("div");
+  m.className = "menu"; menuEl = m;
+  const draw = () => {
+    m.innerHTML = items.map((it, i) => it.sep ? `<div class="sep"></div>` : `<button data-i="${i}">${esc(it.label)}</button>`).join("");
+    for (const b of m.querySelectorAll("button")) b.onclick = () => {
+      const it = items[+b.dataset.i];
+      if (it.value !== null) { closeMenu(); pick(it.value); } else askName();
+    };
+  };
+  const askName = () => {
+    m.innerHTML = `<div class="newname"><input class="field" maxlength="60" placeholder="Album name"><button class="btn sm">Create</button></div>`;
+    const inp = m.querySelector("input");
+    const go = () => { const v = inp.value.trim(); if (v) { closeMenu(); pick(v); } };
+    m.querySelector("button").onclick = go;
+    inp.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); go(); } else if (e.key === "Escape") closeMenu(); };
+    inp.focus();
+  };
+  draw();
+  document.body.appendChild(m);
+  const r = anchor.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + "px";
+  m.style.top = (r.bottom + 8 + h > innerHeight && r.top - 8 - h > 0 ? r.top - 8 - h : r.bottom + 8) + "px";
+  const first = m.querySelector("button"); if (first) first.focus();
+}
+document.addEventListener("mousedown", e => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }, true);
+
+// Only offer places that make sense: never the album a photo is already in.
+function moveItems(photos) {
+  const homes = new Set(photos.map(p => p.home));
+  const here = homes.size === 1 ? [...homes][0] : null;
+  const items = [];
+  if (here !== "review") items.push({ label: "Review", value: "review" });
+  for (const a of albums) if (a !== here) items.push({ label: a, value: a });
+  items.push({ sep: true }, { label: "New album…", value: null });
+  return items;
+}
+function moveMenu(anchor) {
+  const photos = selPhotos();
+  openMenu(anchor, moveItems(photos), home => act("/api/photos/move", { ids: photos.map(p => p.id), home }, "Moved to " + home));
+}
+
+// ---- the grid ----
+async function select(v, keep, keepViewer) {
+  const token = ++loadToken;
+  view = v;
+  if (!keepViewer) closeViewer();
+  closeMenu();
   if (!keep) selected.clear();
-  await loadTree();
-  list = (await api("/api/photos?view=" + encodeURIComponent(v))).photos;
+  $("title").textContent = viewTitle(v);
+  renderStatus();
+  document.title = viewTitle(v) + " · immich-photo-pipeline";
+  let t, photos;
+  try {
+    [t, photos] = await Promise.all([renderTree(v, ""), api("/api/photos?view=" + encodeURIComponent(v))]);
+  } catch (e) {
+    if (token !== loadToken) return;
+    if (v !== "review") { history.replaceState(null, "", viewHash("review")); return select("review"); }
+    say("Couldn't load the photos.", true); return;
+  }
+  if (token !== loadToken) return;
+  albums = t.albums.map(a => a.name);
+  list = photos.photos;
   for (const id of [...selected]) if (!list.some(p => p.id === id)) selected.delete(id);
+  $("total").textContent = list.length + (list.length === 1 ? " photo" : " photos");
   $("grid").innerHTML = list.map((p, i) => tile(p, i)).join("");
   $("empty").hidden = list.length > 0;
   $("empty").textContent = "Nothing here.";
-  for (const t of $("grid").querySelectorAll(".tile")) {
-    t.onclick = () => openViewer(+t.dataset.i);
-    t.querySelector(".pick").onclick = e => { e.stopPropagation(); toggle(list[+t.dataset.i].id, t); };
+  for (const el of $("grid").querySelectorAll(".tile")) {
+    el.onclick = () => openViewer(+el.dataset.i);
+    el.querySelector(".pick").onclick = e => { e.stopPropagation(); toggle(list[+el.dataset.i].id, el); };
   }
   updateBar();
 }
@@ -132,43 +150,46 @@ function toggle(id, el) {
 }
 function selectAll() { for (const p of list) selected.add(p.id); for (const t of $("grid").children) t.classList.add("sel"), t.querySelector(".pick").checked = true; updateBar(); }
 function clearSel() { selected.clear(); for (const t of $("grid").children) t.classList.remove("sel"), t.querySelector(".pick").checked = false; updateBar(); }
+const selPhotos = () => list.filter(p => selected.has(p.id));
+// The buttons offered depend on what is selected: nothing to add to Live if
+// every chosen photo is already there, nothing to remove if none is.
 function updateBar() {
-  $("bar").hidden = selected.size === 0;
-  $("count").textContent = selected.size + " selected";
+  const sel = selPhotos();
+  $("bar").hidden = sel.length === 0;
+  $("count").textContent = sel.length + " selected";
   const trash = view === "trash";
   $("normal").hidden = trash; $("intrash").hidden = !trash;
-  const opts = [["review", "Review"], ...albums.map(a => [a, a]), ["", "New album…"]];
-  const had = $("dest").options.length > 0, cur = $("dest").value;
-  $("dest").innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
-  if (had && opts.some(([v]) => v === cur)) $("dest").value = cur;
-  $("newname").hidden = $("dest").value !== "";
+  $("addLive").hidden = !sel.some(p => !p.live);
+  $("rmLive").hidden = !sel.some(p => p.live);
 }
-$("dest").onchange = () => { $("newname").hidden = $("dest").value !== ""; };
-function say(text, bad) { const m = $("msg"); m.textContent = text; m.className = bad ? "bad" : ""; m.hidden = !text; }
-async function act(path, payload, what) {
+
+// ---- actions ----
+// `viewerId` is set when the action was started from the photo view, so the
+// view stays open on that photo if it is still in this list.
+async function act(path, payload, what, viewerId) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const out = await r.json();
   if (!r.ok) { say(out.error || "That didn't work.", true); return null; }
   const skipped = out.skipped.map(s => s.reason + " (" + s.id.slice(0, 8) + ")");
   say(`${what}: ${out.done.length} done` + (skipped.length ? `, ${skipped.length} skipped: ${[...new Set(out.skipped.map(s => s.reason))].join("; ")}` : ""), out.done.length === 0 && skipped.length > 0);
   for (const id of out.done) selected.delete(id);
-  await select(view, true);
+  await select(view, true, !!viewerId);
+  if (viewerId) {
+    const i = list.findIndex(p => p.id === viewerId);
+    if (i >= 0) openViewer(i); else closeViewer();
+  }
   return out;
 }
 const ids = () => [...selected];
 const promote = live => act("/api/photos/promote", { ids: ids(), live }, live ? "Added to Live" : "Removed from Live");
 const trashSel = () => act("/api/photos/trash", { ids: ids() }, "Trashed");
 const restoreSel = () => act("/api/photos/restore", { ids: ids() }, "Restored");
-function moveSel() {
-  const home = $("dest").value === "" ? $("newname").value : $("dest").value;
-  return act("/api/photos/move", { ids: ids(), home }, "Moved to " + (home || "…"));
-}
 async function revertTo(id, step) {
   const r = await fetch("/api/photos/" + id + "/revert", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ step }) });
   const out = await r.json();
   if (!r.ok) { say(out.error || "That didn't work.", true); return; }
   say(out.unchanged ? "Already showing that step." : "Reverted to step " + step + " (now step " + out.step + ").");
-  await select(view, true);
+  await select(view, true, true);
   const i = list.findIndex(p => p.id === id);
   if (i >= 0) openViewer(i);
 }
@@ -178,9 +199,11 @@ function tile(p, i) {
     ? `<img loading="lazy" src="/media/${p.id}/thumb?v=${p.version}" alt="">`
     : `<div class="ph">${esc(p.media_type === "video" ? "Video" : p.status.replace("_", " "))}</div>`;
   const on = selected.has(p.id);
-  return `<div class="tile${on ? " sel" : ""}" data-i="${i}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""}>${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
-         `${p.live ? `<span class="badge live">live</span>` : ""}</div>`;
+  return `<div class="tile${on ? " sel" : ""}" data-i="${i}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""} aria-label="Select">${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
+         `${p.live ? `<span class="badge live">Live</span>` : ""}</div>`;
 }
+
+// ---- chat ----
 function chatHtml(p) {
   const labels = { queued: "waiting", working: "working on it…", failed: "failed" };
   return p.chat.map(m =>
@@ -204,7 +227,7 @@ function watchChat(id) {
       if (log) { log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight; }
       return watchChat(id);
     }
-    await select(view, true);
+    await select(view, true, true);
     const i = list.findIndex(x => x.id === id);
     if (i >= 0) openViewer(i);
     else if (p.status === "awaiting_answer") say("Claude has a question about that photo. It is in the Queue.");
@@ -217,14 +240,19 @@ async function sendChat(id) {
   const r = await fetch("/api/photos/" + id + "/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
   const out = await r.json().catch(() => ({}));
   if (!r.ok) { say(out.error || "That didn't send.", true); $("chatsend").disabled = false; return; }
-  box.value = "";
+  box.value = ""; growBox(box);
   say("");
   const i = open;
   const p = await api("/api/photos/" + id);
   const log = $("chatlog");
   log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight;
-  $("chatsend").disabled = false;
   if (i >= 0) watchChat(id);
+}
+// The box grows with what is typed, up to a limit, then scrolls.
+function growBox(box) {
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, 192) + "px";
+  const send = $("chatsend"); if (send) send.disabled = !box.value.trim();
 }
 async function decide(ruleId, id, accept) {
   const r = await fetch("/api/rules/" + ruleId + (accept ? "/activate" : "/retire"), { method: "POST" });
@@ -233,44 +261,87 @@ async function decide(ruleId, id, accept) {
   const i = list.findIndex(x => x.id === id);
   if (i >= 0) openViewer(i);
 }
+
+// ---- the photo view ----
 async function openViewer(i) {
   if (i < 0 || i >= list.length) return;
-  stopPoll();
+  stopPoll(); closeMenu();
   open = i;
   const p = await api("/api/photos/" + list[i].id);
+  if (open !== i) return;
   $("viewer").classList.add("open");
-  $("stage").innerHTML = !p.has_image ? `<div class="meta">No image yet</div>` : p.media_type === "video"
+  $("vhead").innerHTML =
+    `<h3>${esc(p.id.slice(0, 8))}</h3><span class="chip">${esc(p.home)}</span>` +
+    (p.live ? `<span class="chip blue">Live</span>` : "") +
+    (p.status !== "ready" ? `<span class="chip bad">${esc(p.status.replace("_", " "))}</span>` : "") +
+    `<span class="sp"></span>` +
+    (p.trashed ? `<button class="btn" id="vRestore">Restore</button>` :
+      `<button class="btn sec sm" id="vLive">${p.live ? "Remove from Live" : "Add to Live"}</button>` +
+      `<button class="btn sm" id="vMove">Move to &#9662;</button>` +
+      `<button class="btn warn sm" id="vTrash">Trash</button>`) +
+    `<button class="btn sec sm" id="vClose">Close</button>`;
+  const run = (path, what) => act(path, { ids: [p.id], ...(path.endsWith("promote") ? { live: !p.live } : {}) }, what, p.id);
+  $("vClose").onclick = closeViewer;
+  if (p.trashed) $("vRestore").onclick = () => run("/api/photos/restore", "Restored");
+  else {
+    $("vLive").onclick = () => run("/api/photos/promote", p.live ? "Removed from Live" : "Added to Live");
+    $("vTrash").onclick = () => run("/api/photos/trash", "Trashed");
+    $("vMove").onclick = e => openMenu(e.currentTarget, moveItems([p]), home =>
+      act("/api/photos/move", { ids: [p.id], home }, "Moved to " + home, p.id));
+  }
+  $("stage").innerHTML = (!p.has_image ? `<div class="meta" style="color:#93a0ba">No image yet</div>` : p.media_type === "video"
     ? `<video controls autoplay src="/media/${p.id}/full"></video>`
-    : `<img src="/media/${p.id}/full?v=${p.version}" alt="">`;
+    : `<img src="/media/${p.id}/full?v=${p.version}" alt="">`) +
+    (i > 0 ? `<button class="btn sec nav prev" id="vPrev" aria-label="Previous">&lsaquo;</button>` : "") +
+    (i < list.length - 1 ? `<button class="btn sec nav next" id="vNext" aria-label="Next">&rsaquo;</button>` : "");
+  if ($("vPrev")) $("vPrev").onclick = () => openViewer(open - 1);
+  if ($("vNext")) $("vNext").onclick = () => openViewer(open + 1);
+  const cur = p.history.find(h => h.current);
+  $("vfoot").textContent = `${i + 1} of ${list.length}` + (cur ? ` · showing step ${cur.step}` : "") +
+    (p.imported ? " · imported, can't be modified" : "") + ` · ← → to move, Esc to close`;
+
   const hist = p.history.map(h =>
-    `<li class="${h.current ? "current" : ""}">${h.step === 0 ? "Original result" : h.reverts_to_step !== null ? "Reverted to step " + h.reverts_to_step : esc(h.instruction || "(no instruction)")}` +
-    (h.rules && h.rules.length ? ` <span class="note">(${h.rules.length} rule${h.rules.length > 1 ? "s" : ""})</span>` : "") +
-    (!h.current && !p.trashed && p.status === "ready" && !p.busy ? `<button onclick="revertTo('${p.id}', ${h.step})">Revert to this</button>` : "") + `</li>`).join("");
+    `<div class="rev${h.current ? " current" : ""}"><div class="t"><b>Step ${h.step}</b><br><span class="note">` +
+    `${h.step === 0 ? "Original result" : h.reverts_to_step !== null ? "Reverted to step " + h.reverts_to_step : esc(h.instruction || "(no instruction)")}` +
+    (h.rules && h.rules.length ? ` (${h.rules.length} rule${h.rules.length > 1 ? "s" : ""})` : "") + `</span></div>` +
+    (h.current ? `<span class="chip blue">Current</span>` :
+      !p.trashed && p.status === "ready" && !p.busy ? `<button class="btn sec sm" data-revert="${h.step}">Revert</button>` : "") + `</div>`).reverse().join("");
   const chat = p.chat_blocked && !p.chat.length
-    ? `<h2>Changes</h2><p class="meta">${esc(p.chat_blocked)}</p>`
-    : `<h2>Changes</h2><div id="chatlog">${chatHtml(p)}</div>` +
-      (p.proposal ? `<div class="proposal">Remember for future photos: &ldquo;${esc(p.proposal.text)}&rdquo;<br>` +
-        `<button onclick="decide('${p.proposal.id}', '${p.id}', true)">Accept</button><button onclick="decide('${p.proposal.id}', '${p.id}', false)">Dismiss</button></div>` : "") +
-      (p.chat_blocked ? `<p class="meta">${esc(p.chat_blocked)}</p>` :
-        `<div id="chatform"><textarea id="chattext" maxlength="1000" placeholder="${p.question ? "Answer Claude…" : "Describe a change…"}"></textarea>` +
-        `<div class="row"><button id="chatsend" onclick="sendChat('${p.id}')">Send</button><span class="meta">Ctrl+Enter to send</span></div></div>`);
+    ? `<p class="meta aside-note">${esc(p.chat_blocked)}</p>`
+    : `<div id="chatlog">${chatHtml(p)}</div>` +
+      (p.proposal ? `<div class="proposal">Remember for future photos: &ldquo;${esc(p.proposal.text)}&rdquo;` +
+        `<div class="row"><button class="btn sm" data-decide="1">Accept</button><button class="btn sec sm" data-decide="0">Dismiss</button></div></div>` : "") +
+      (p.chat_blocked ? `<p class="meta aside-note">${esc(p.chat_blocked)}</p>` :
+        `<div id="chatform"><div class="composer"><textarea id="chattext" rows="1" maxlength="1000" placeholder="${p.question ? "Answer Claude…" : "Describe a change…"}"></textarea>` +
+        `<button class="send" id="chatsend" aria-label="Send" disabled>&uarr;</button></div>` +
+        `<div class="hint">Enter to send &middot; Ctrl+Enter for a new line</div></div>`);
   $("panel").innerHTML =
-    `<button class="close" onclick="closeViewer()">Close</button><h2>${esc(p.home)} · ${esc(p.status.replace("_", " "))}</h2>` +
-    `<div class="meta">${p.live ? "Live · " : ""}${esc(p.kind)}${p.imported ? " · imported, can't be modified" : ""}</div>` +
-    (p.error ? `<p class="err">${esc(p.error)}</p>` : "") +
-    (p.question ? `<p>Claude asks: ${esc(p.question)}</p>` : "") +
-    chat +
-    (hist ? `<h2>History</h2><ol start="0">${hist}</ol>` : "") +
-    (p.legacy_notes.length ? `<h2>Earlier notes</h2><ul>${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
-    `<div class="meta">${i + 1} of ${list.length} · ← → to move, Esc to close</div>`;
+    (p.error ? `<p class="err aside-note">${esc(p.error)}</p>` : "") +
+    (p.question ? `<p class="aside-note">Claude asks: ${esc(p.question)}</p>` : "") +
+    `<h4>History</h4><div class="hist">${hist}</div>` +
+    (p.legacy_notes.length ? `<h4>Earlier notes</h4><ul class="meta" style="margin:0 1.1rem .5rem;padding-left:1.1rem">${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
+    `<div class="changes"><h4>Ask Claude to change it</h4>${chat}</div>`;
+  for (const b of $("panel").querySelectorAll("[data-revert]")) b.onclick = () => revertTo(p.id, +b.dataset.revert);
+  for (const b of $("panel").querySelectorAll("[data-decide]")) b.onclick = () => decide(p.proposal.id, p.id, b.dataset.decide === "1");
   const log = $("chatlog");
   if (log) log.scrollTop = log.scrollHeight;
   const box = $("chattext");
-  if (box) box.onkeydown = e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(p.id); } };
+  if (box) {
+    box.oninput = () => growBox(box);
+    // Enter sends; Ctrl+Enter (or Shift+Enter) adds a line.
+    box.onkeydown = e => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey || e.shiftKey) { box.setRangeText("\n", box.selectionStart, box.selectionEnd, "end"); growBox(box); }
+      else sendChat(p.id);
+    };
+    $("chatsend").onclick = () => sendChat(p.id);
+  }
   if (p.busy) watchChat(p.id);
 }
 function closeViewer() { stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && menuEl) { closeMenu(); return; }
   if (open < 0) return;
   const typing = ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName);
   if (typing && e.key !== "Escape") return;
@@ -278,7 +349,13 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowRight") openViewer(open + 1);
   else if (e.key === "ArrowLeft") openViewer(open - 1);
 });
-select("review");
+
+// The address fragment picks the place: /#album:Costa%20Rica opens that album.
+// Clicking the sidebar changes the fragment, which comes back through here.
+window.addEventListener("hashchange", () => { const v = hashView(location.hash); if (v && v !== view) select(v); });
+const first = hashView(location.hash);
+if (!first) history.replaceState(null, "", viewHash("review"));
+select(first || "review");
 </script>
 </body>
 </html>
