@@ -55,7 +55,7 @@ def test_tree_counts(tmp_path):
     client, *_ = build(tmp_path)
     t = client.get("/api/tree").get_json()
     assert t["review"] == 2 and t["live"] == 1 and t["queue"] == 2 and t["trash"] == 1
-    assert t["albums"] == [{"name": "Sunsets", "view": "album:Sunsets", "count": 1}]
+    assert t["albums"] == [{"name": "Sunsets", "view": "album:sunsets", "count": 1}]
 
 
 def test_an_album_a_photo_was_just_moved_to_is_listed_before_immich_has_it(tmp_path):
@@ -63,8 +63,8 @@ def test_an_album_a_photo_was_just_moved_to_is_listed_before_immich_has_it(tmp_p
     client, store, _ = build(tmp_path)
     actions.move(store, ["r1"], "Beach")                    # no Immich album yet
     t = client.get("/api/tree").get_json()
-    assert {"name": "Beach", "view": "album:Beach", "count": 1} in t["albums"]
-    assert ids(client.get("/api/photos?view=album:Beach")) == {"r1"}
+    assert {"name": "Beach", "view": "album:beach", "count": 1} in t["albums"]
+    assert ids(client.get("/api/photos?view=album:beach")) == {"r1"}
     assert t["review"] == 1
 
 
@@ -74,7 +74,8 @@ def test_views(tmp_path):
     assert ids(client.get("/api/photos?view=live")) == {"a1"}
     assert ids(client.get("/api/photos?view=queue")) == {"q1", "f1"}
     assert ids(client.get("/api/photos?view=trash")) == {"t1"}
-    assert ids(client.get("/api/photos?view=album:Sunsets")) == {"a1"}
+    assert ids(client.get("/api/photos?view=album:sunsets")) == {"a1"}
+    assert ids(client.get("/api/photos?view=album:Sunsets")) == {"a1"}       # an old link by name
     assert client.get("/api/photos?view=album:Nope").status_code == 400
     assert client.get("/api/photos?view=bogus").status_code == 400
 
@@ -156,3 +157,49 @@ def test_every_page_uses_the_one_stylesheet(tmp_path):
     client, *_ = build(tmp_path)
     assert client.get("/static/pipeline.css").status_code == 200
     assert b"/static/pipeline.css" in client.get("/").data
+
+
+def test_the_original_is_served_and_listed_in_the_detail(tmp_path):
+    from app.library import Source
+    client, store, revisions = build(tmp_path)
+    rel = revisions.save_source("r1", 0, make_image(tmp_path / "orig.jpg", color=(10, 200, 10)), "orig.jpg")
+    store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", file=rel, name="orig.jpg")))
+    d = client.get("/api/photos/r1").get_json()
+    assert d["sources"] == [{"index": 0, "name": "orig.jpg", "has_copy": True, "media_type": "image"}]
+    full = client.get("/media/r1/source/0")
+    assert full.status_code == 200 and "immutable" in full.headers["Cache-Control"]
+    thumb = client.get("/media/r1/source/0/thumb")
+    assert thumb.status_code == 200 and thumb.mimetype == "image/jpeg"
+    thumb.close(); full.close()
+
+
+def test_original_routes_404_without_a_stored_copy(tmp_path):
+    from app.library import Source
+    client, store, _ = build(tmp_path)
+    store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x")))      # no copy yet
+    assert client.get("/media/r1/source/0").status_code == 404
+    assert client.get("/media/r1/source/0/thumb").status_code == 404
+    assert client.get("/media/r1/source/5").status_code == 404
+    assert client.get("/media/nope/source/0").status_code == 404
+
+
+def test_a_video_original_has_no_thumbnail(tmp_path):
+    from app.library import Source
+    client, store, revisions = build(tmp_path)
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"not really a video")
+    rel = revisions.save_source("v1", 0, str(clip), "clip.mp4")
+    store.update(lambda lib: lib.photos["v1"].sources.append(Source(asset_id="v", file=rel, name="clip.mp4")))
+    assert client.get("/api/photos/v1").get_json()["sources"][0]["media_type"] == "video"
+    assert client.get("/media/v1/source/0").status_code == 200
+    assert client.get("/media/v1/source/0/thumb").status_code == 404
+
+
+def test_the_icons_and_the_pages_that_link_them_are_served(tmp_path):
+    client, *_ = build(tmp_path)
+    assert client.get("/static/icon.svg").status_code == 200
+    html = client.get("/").data
+    assert b"/static/icon.svg" in html and html.count(b'data:image/png;base64,') == 2
+    assert b'rel="apple-touch-icon"' in html
+    rules_template = os.path.join(os.path.dirname(__file__), "..", "app", "webui", "templates", "rules.html")
+    assert '{% include "_icons.html" %}' in open(rules_template).read()

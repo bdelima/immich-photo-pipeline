@@ -3,12 +3,23 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const api = async url => { const r = await fetch(url); if (!r.ok) throw new Error(url + " " + r.status); return r.json(); };
 
-// A view is "review", "live", "queue", "trash" or "album:<name>". It is the
-// address fragment of the main page (/#album:Costa%20Rica), which is how the
-// notes on the Immich albums link straight to one.
+// A view is "review", "live", "queue", "trash" or "album:<slug>". It is the
+// address fragment of the main page (/#album:costa-rica), which is how the
+// notes on the Immich albums link straight to one. An older link that has
+// the album's name (/#album:Costa%20Rica) still works.
 const viewHash = v => "#" + encodeURIComponent(v).replace(/%3A/gi, ":");
 const hashView = h => { try { return decodeURIComponent((h || "").replace(/^#/, "")); } catch (e) { return ""; } };
-const viewTitle = v => v.startsWith("album:") ? v.slice(6) : v.charAt(0).toUpperCase() + v.slice(1);
+const viewTitle = (v, albums) => {
+  if (!v.startsWith("album:")) return v.charAt(0).toUpperCase() + v.slice(1);
+  const a = (albums || []).find(x => x.view === v || x.name === v.slice(6));
+  return a ? a.name : v.slice(6);
+};
+// The canonical view for an address: an old name link becomes its slug link.
+const canonicalView = (v, albums) => {
+  if (!v.startsWith("album:")) return v;
+  const a = (albums || []).find(x => x.view === v || x.name === v.slice(6));
+  return a ? a.view : v;
+};
 
 function treeItem(v, label, n, active, base) {
   return `<a class="item${v === active ? " active" : ""}" href="${base}${viewHash(v)}" data-view="${esc(v)}"><span>${esc(label)}</span><span class="count">${n}</span></a>`;

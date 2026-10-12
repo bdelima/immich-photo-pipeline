@@ -1,4 +1,4 @@
-"""Finds new originals in the two entry queues and records them in the library.
+"""Finds new originals in the entry queues and records them in the library.
 
 This only looks and records; nothing here downloads an image or calls Claude.
 Each new photo is created with status "processing", which is what the worker
@@ -6,6 +6,9 @@ Each new photo is created with status "processing", which is what the worker
 that was queued or half done when the container stopped simply continues.
 
   * Wallpaper Maker: every new photo or video becomes a single photo.
+  * Import Only: every new photo or video becomes a single photo that is kept
+    exactly as it is: no recipe, no revision. It lands in Review, flagged
+    `imported`, and can be browsed, moved, promoted and trashed.
   * Collage Maker: portraits are grouped two or three at a time. A lone
     portrait waits (nothing is recorded) until a partner arrives. Videos do
     not belong in a collage: each one is recorded as failed, with the reason,
@@ -31,6 +34,7 @@ log = logging.getLogger(__name__)
 
 QUEUE_WALLPAPER = "wallpaper"
 QUEUE_COLLAGE = "collage"
+QUEUE_IMPORT = "import"
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".3gp", ".mts", ".m2ts", ".wmv", ".mpg", ".mpeg",
@@ -80,11 +84,15 @@ def _source(asset: Asset) -> Source:
 
 
 class Intake:
-    def __init__(self, immich: ImmichClient, store: LibraryStore, wallpaper_album_id: str, collage_album_id: str):
+    def __init__(
+        self, immich: ImmichClient, store: LibraryStore, wallpaper_album_id: str, collage_album_id: str,
+        import_album_id: str = "",
+    ):
         self.immich = immich
         self.store = store
         self.wallpaper_album_id = wallpaper_album_id
         self.collage_album_id = collage_album_id
+        self.import_album_id = import_album_id
         # A lone portrait is reported once, not every cycle.
         self._waiting_logged: set[str] = set()
 
@@ -95,6 +103,7 @@ class Intake:
         created: list[str] = []
         created += self._scan_wallpaper()
         created += self._scan_collage()
+        created += self._scan_import()
         return created
 
     def _list(self, album_id: str) -> list[Asset] | None:
@@ -168,4 +177,30 @@ class Intake:
         made = self.store.update(add)
         for photo_id in made:
             log.info("collage: new photo %s recorded", photo_id)
+        return made
+
+    def _scan_import(self) -> list[str]:
+        if not self.import_album_id:
+            return []
+        assets = self._list(self.import_album_id)
+        if assets is None:
+            return []
+
+        def add(library: Library) -> list[str]:
+            known = known_source_ids(library)
+            made = []
+            for asset in assets:
+                if asset.id in known or asset.id in library.photos:
+                    continue
+                library.photos[asset.id] = Photo(
+                    id=asset.id, kind="single", media_type="video" if is_video(asset) else "image",
+                    sources=[_source(asset)], home=INBOX, status=STATUS_PROCESSING, queue=QUEUE_IMPORT,
+                    imported=True,
+                )
+                made.append(asset.id)
+            return made
+
+        made = self.store.update(add)
+        for photo_id in made:
+            log.info("import: new original %s queued", photo_id)
         return made

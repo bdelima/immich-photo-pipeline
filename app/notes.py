@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from .immich_client import ImmichClient, ImmichError
 from .library import Library
+from .slugs import slug_map
 
 log = logging.getLogger(__name__)
 
@@ -33,15 +34,16 @@ _LIVE = (
 
 def view_url(base_url: str, view: str) -> str:
     """The pipeline address that opens the given view ("review", "live" or
-    "album:<name>")."""
+    "album:<slug>")."""
     return f"{base_url.rstrip('/')}/#{quote(view, safe=':')}"
 
 
 def desired_notes(library: Library, base_url: str, live_album_id: str, review_album_id: str) -> dict[str, str]:
     """Album id -> the description it should have."""
     notes: dict[str, str] = {}
+    slugs = slug_map(library.albums)
     for name, album_id in sorted(library.albums.items()):
-        notes[album_id] = _MANAGED.format(url=view_url(base_url, f"album:{name}"))
+        notes[album_id] = _MANAGED.format(url=view_url(base_url, f"album:{slugs[name]}"))
     if review_album_id:
         notes[review_album_id] = _REVIEW.format(url=view_url(base_url, "review"))
     if live_album_id:

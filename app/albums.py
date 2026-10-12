@@ -1,7 +1,8 @@
-"""Resolves the four core albums (Collage Maker, Wallpaper Maker, Review,
-Live) by name at startup, creating any that don't exist yet. An explicit
-*_ALBUM_ID env var always wins over the name lookup, for anyone who's
-already set albums up by hand and would rather pin the id directly.
+"""Resolves the core albums (Collage Maker, Wallpaper Maker, Review, Live),
+plus the Import Only queue, by name at startup, creating any that don't
+exist yet. An explicit *_ALBUM_ID env var always wins over the name lookup,
+for anyone who's already set albums up by hand and would rather pin the id
+directly.
 
 Sharing is separate: see sharing.py, which main.py runs after this to
 share the albums with the accounts behind IMMICH_EXTRA_API_KEY.
@@ -34,16 +35,17 @@ def resolve_or_create_album(immich: ImmichClient, albums: list[dict], name: str)
 
 
 def ensure_core_albums(immich: ImmichClient, cfg: Config) -> Config:
-    """Returns a copy of cfg with all four *_album_id fields guaranteed
+    """Returns a copy of cfg with all five *_album_id fields guaranteed
     non-empty, resolving/creating by name wherever an id wasn't already
     pinned. Fetches the album list once up front rather than once per
-    album, to avoid four separate round-trips doing the same lookup."""
+    album, to avoid separate round-trips doing the same lookup."""
     albums = immich.list_albums()
     resolved = {
         "collage_album_id": cfg.collage_album_id or resolve_or_create_album(immich, albums, cfg.collage_album_name),
         "wallpaper_album_id": cfg.wallpaper_album_id or resolve_or_create_album(immich, albums, cfg.wallpaper_album_name),
         "review_album_id": cfg.review_album_id or resolve_or_create_album(immich, albums, cfg.review_album_name),
         "live_album_id": cfg.live_album_id or resolve_or_create_album(immich, albums, cfg.live_album_name),
+        "import_album_id": cfg.import_album_id or resolve_or_create_album(immich, albums, cfg.import_album_name),
     }
     return dataclasses.replace(cfg, **resolved)
 

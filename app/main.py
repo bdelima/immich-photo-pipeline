@@ -27,7 +27,7 @@ log = logging.getLogger("immich-photo-pipeline")
 
 
 def wait_for_immich_ready(immich: ImmichClient, cfg: Config) -> Config:
-    """Resolves/bootstraps the four core albums by name (see albums.py).
+    """Resolves/bootstraps the core albums (the entry queues, Review and Live) by name (see albums.py).
     Retries rather than crashing if Immich isn't reachable yet -- a real
     possibility at container startup, e.g. under compose without a
     healthcheck-gated depends_on."""
@@ -100,18 +100,19 @@ def main() -> None:
         # The entry queues are shared as editors so the household can drop
         # photos into them. Every managed album is shared as viewers by the
         # poll cycle (see cycle.py), as are Live and Review.
-        ensure_all_shared(immich, [cfg.collage_album_id, cfg.wallpaper_album_id], share_user_ids)
+        ensure_all_shared(
+            immich, [cfg.collage_album_id, cfg.wallpaper_album_id, cfg.import_album_id], share_user_ids)
         log.info("entry queues shared with %d extra account(s)", len(share_user_ids))
 
     poll_wake = threading.Event()
     worker = Worker(
         store, revisions, immich, recipe,
         wallpaper_album_id=cfg.wallpaper_album_id, collage_album_id=cfg.collage_album_id,
-        extra_clients=extra_clients, rules=rules, count=cfg.worker_count,
+        import_album_id=cfg.import_album_id, extra_clients=extra_clients, rules=rules, count=cfg.worker_count,
         can_run_recipe=lambda: health.snapshot().claude_auth_ok,
         on_change=poll_wake.set,
     )
-    intake = Intake(immich, store, cfg.wallpaper_album_id, cfg.collage_album_id)
+    intake = Intake(immich, store, cfg.wallpaper_album_id, cfg.collage_album_id, cfg.import_album_id)
     cycle = Cycle(
         immich, store, intake, worker, live_album_id=cfg.live_album_id, share_user_ids=share_user_ids,
         revisions=revisions, review_album_id=cfg.review_album_id, pipeline_url=cfg.pipeline_url,

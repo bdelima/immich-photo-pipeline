@@ -24,7 +24,8 @@ def register_action_routes(
 ) -> None:
     reserved = set()
     if cfg is not None:
-        reserved = {cfg.collage_album_name, cfg.wallpaper_album_name, cfg.review_album_name, cfg.live_album_name}
+        reserved = {cfg.collage_album_name, cfg.wallpaper_album_name, cfg.review_album_name, cfg.live_album_name,
+                    cfg.import_album_name}
 
     def changed() -> None:
         if on_change is not None:
