@@ -99,8 +99,7 @@ def main() -> None:
         share_user_ids = resolve_user_ids(immich, extra_clients)
         # The entry queues are shared as editors so the household can drop
         # photos into them. Every managed album is shared as viewers by the
-        # poll cycle (see cycle.py). Live is only mirrored to displays, so it
-        # is left private.
+        # poll cycle (see cycle.py), as are Live and Review.
         ensure_all_shared(immich, [cfg.collage_album_id, cfg.wallpaper_album_id], share_user_ids)
         log.info("entry queues shared with %d extra account(s)", len(share_user_ids))
 
@@ -115,7 +114,7 @@ def main() -> None:
     intake = Intake(immich, store, cfg.wallpaper_album_id, cfg.collage_album_id)
     cycle = Cycle(
         immich, store, intake, worker, live_album_id=cfg.live_album_id, share_user_ids=share_user_ids,
-        revisions=revisions,
+        revisions=revisions, review_album_id=cfg.review_album_id, pipeline_url=cfg.pipeline_url,
     )
 
     auth_thread = threading.Thread(

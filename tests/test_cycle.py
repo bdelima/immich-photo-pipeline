@@ -57,11 +57,14 @@ class FakeWorker:
         self.woken += 1
 
 
-def build(tmp_path, immich, share=("wife",), revisions=None):
+def build(tmp_path, immich, share=("wife",), revisions=None, **cycle_args):
     store = LibraryStore(str(tmp_path / "lib.json"))
     worker = FakeWorker()
     intake = Intake(immich, store, "wp", "co")
-    cycle = Cycle(immich, store, intake, worker, live_album_id="LIVE", share_user_ids=list(share), revisions=revisions)
+    cycle = Cycle(
+        immich, store, intake, worker, live_album_id="LIVE", share_user_ids=list(share), revisions=revisions,
+        **cycle_args,
+    )
     return cycle, store, worker
 
 
@@ -83,10 +86,11 @@ def test_albums_for_every_home_are_created_shared_as_viewers_and_filled(tmp_path
     ))
     cycle.run_once()
     assert immich.created == ["Holiday"] and store.load().albums == {"Holiday": "new-Holiday"}
-    assert immich.shared == [("new-Holiday", ["wife"], "viewer")]
-    assert immich.contents["new-Holiday"] == {"im-a"}      # Review is state only: no album for it
+    both = [("new-Holiday", ["wife"], "viewer"), ("LIVE", ["wife"], "viewer")]
+    assert immich.shared == both
+    assert immich.contents["new-Holiday"] == {"im-a"}      # Review has its own album: see the Review tests
     cycle.run_once()
-    assert immich.shared == [("new-Holiday", ["wife"], "viewer")]    # checked once, not every cycle
+    assert immich.shared == both    # checked once, not every cycle
 
 
 def test_live_follows_the_promoted_flags(tmp_path):
@@ -114,7 +118,7 @@ def test_an_album_that_could_not_be_shared_is_tried_again_next_cycle(tmp_path):
     cycle.run_once()
     immich.fail_share = False
     cycle.run_once()
-    assert immich.shared == [("new-Holiday", ["wife"], "viewer")]
+    assert immich.shared == [("new-Holiday", ["wife"], "viewer"), ("LIVE", ["wife"], "viewer")]
 
 
 def test_a_step_that_fails_does_not_stop_the_others(tmp_path):
@@ -203,9 +207,9 @@ def test_an_editor_shared_output_album_is_converted_to_viewer(tmp_path):
     immich.users = ["wife"]
     cycle, store = stocked(tmp_path, immich)
     cycle.run_once()
-    assert immich.role_changes == [("new-Holiday", "wife", "viewer")]
+    assert immich.role_changes == [("new-Holiday", "wife", "viewer"), ("LIVE", "wife", "viewer")]
     cycle.run_once()
-    assert len(immich.role_changes) == 1
+    assert len(immich.role_changes) == 2
 
 
 def test_without_a_revision_store_the_cycle_still_runs(tmp_path):
@@ -214,3 +218,101 @@ def test_without_a_revision_store_the_cycle_still_runs(tmp_path):
     store.update(lambda lib: lib.photos.update(a=Photo(id="a", home="Holiday", immich_asset_id="im-a")))
     cycle.run_once()
     assert immich.contents["new-Holiday"] == {"im-a"}
+
+
+# ---- Live, Review and the album notes -----------------------------------------
+
+
+def test_live_is_shared_as_viewers_even_with_an_empty_library(tmp_path):
+    immich = FakeImmich()
+    cycle, _, _ = build(tmp_path, immich)
+    cycle.run_once()
+    assert immich.shared == [("LIVE", ["wife"], "viewer")]
+
+
+def test_live_is_not_shared_when_it_has_no_id_yet(tmp_path):
+    immich = FakeImmich()
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    cycle = Cycle(immich, store, Intake(immich, store, "wp", "co"), FakeWorker(), live_album_id="", share_user_ids=["wife"])
+    cycle.run_once()
+    assert immich.shared == []
+
+
+def test_review_holds_the_photos_waiting_in_review_and_is_shared_as_viewers(tmp_path):
+    immich = FakeImmich(albums={"REVIEW": {"stale"}})
+    cycle, store, _ = build(tmp_path, immich, review_album_id="REVIEW")
+    store.update(lambda lib: lib.photos.update(
+        r=Photo(id="r", home="review", immich_asset_id="im-r"),
+        a=Photo(id="a", home="Holiday", immich_asset_id="im-a"),
+    ))
+    cycle.run_once()
+    assert immich.contents["REVIEW"] == {"im-r"}
+    assert ("REVIEW", ["wife"], "viewer") in immich.shared
+
+
+def test_an_empty_library_does_not_empty_review(tmp_path):
+    immich = FakeImmich(albums={"REVIEW": {"keep"}})
+    cycle, _, _ = build(tmp_path, immich, review_album_id="REVIEW")
+    cycle.run_once()
+    assert immich.contents["REVIEW"] == {"keep"}
+
+
+class NotedImmich(FakeImmich):
+    """Keeps a description per album and lists them the way Immich does."""
+
+    def __init__(self, descriptions, **kw):
+        super().__init__(**kw)
+        self.descriptions = dict(descriptions)
+        self.writes = []
+
+    def list_albums(self):
+        return [{"id": k, "albumName": k, "description": v} for k, v in self.descriptions.items()]
+
+    def create_album(self, name):
+        album_id = super().create_album(name)
+        self.descriptions[album_id] = ""
+        return album_id
+
+    def update_album_description(self, album_id, description):
+        self.writes.append(album_id)
+        self.descriptions[album_id] = description
+
+
+def noted(tmp_path, **kw):
+    immich = NotedImmich({"LIVE": "", "REVIEW": "my own words"})
+    cycle, store, _ = build(tmp_path, immich, review_album_id="REVIEW", **kw)
+    store.update(lambda lib: lib.photos.update(a=Photo(id="a", home="Costa Rica", immich_asset_id="im-a")))
+    return immich, cycle
+
+
+def test_each_managed_album_gets_a_note_that_links_back_to_its_view(tmp_path):
+    immich, cycle = noted(tmp_path, pipeline_url="https://pipe.example/")
+    cycle.run_once()
+    d = immich.descriptions
+    assert d["new-Costa Rica"] == (
+        "This is a view-only album managed by the Immich Pipeline. To make changes to this album, "
+        "go to https://pipe.example/#album:Costa%20Rica")
+    assert d["REVIEW"] == (
+        "This is a view-only album managed by the Immich Pipeline that holds items waiting for review. "
+        "To review items, go to https://pipe.example/#review")
+    assert d["LIVE"] == (
+        "This is a view-only album managed by the Immich Pipeline that determines wallpapers on connected "
+        "display devices. To add or remove wallpapers, go to https://pipe.example/#live")
+
+
+def test_notes_are_kept_current_but_only_written_when_they_differ(tmp_path):
+    immich, cycle = noted(tmp_path, pipeline_url="https://pipe.example")
+    cycle.run_once()
+    first = len(immich.writes)
+    assert first == 3
+    cycle.run_once()
+    assert len(immich.writes) == first
+    immich.descriptions["LIVE"] = "edited by hand"
+    cycle.run_once()
+    assert immich.writes[first:] == ["LIVE"] and immich.descriptions["LIVE"].endswith("https://pipe.example/#live")
+
+
+def test_no_notes_are_written_without_a_pipeline_url(tmp_path):
+    immich, cycle = noted(tmp_path)
+    cycle.run_once()
+    assert immich.writes == [] and immich.descriptions["REVIEW"] == "my own words"

@@ -156,3 +156,10 @@ def test_list_comments_requires_album_id():
         assert False, "expected TypeError"
     except TypeError:
         pass
+
+
+def test_update_album_description_patches_just_the_description():
+    session = RecordingSession({})
+    ImmichClient("http://immich", "key", session=session).update_album_description("alb", "hello")
+    method, url, kwargs = session.calls[0]
+    assert (method, url, kwargs["json"]) == ("PATCH", "http://immich/api/albums/alb", {"description": "hello"})
