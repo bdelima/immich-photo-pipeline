@@ -57,11 +57,12 @@ class FakeWorker:
         self.woken += 1
 
 
-def build(tmp_path, immich, share=("wife",)):
+def build(tmp_path, immich, share=("wife",), revisions=None):
     store = LibraryStore(str(tmp_path / "lib.json"))
     worker = FakeWorker()
     intake = Intake(immich, store, "wp", "co")
-    return Cycle(immich, store, intake, worker, live_album_id="LIVE", share_user_ids=list(share)), store, worker
+    cycle = Cycle(immich, store, intake, worker, live_album_id="LIVE", share_user_ids=list(share), revisions=revisions)
+    return cycle, store, worker
 
 
 def test_a_new_original_is_recorded_and_the_worker_woken(tmp_path):
@@ -135,3 +136,81 @@ def test_nothing_is_shared_when_there_is_nobody_to_share_with(tmp_path):
     store.update(lambda lib: lib.photos.update(a=Photo(id="a", home="Holiday", immich_asset_id="im-a")))
     cycle.run_once()
     assert immich.shared == []
+
+
+# ---- publishing, emptying and converting --------------------------------------
+
+
+class PublishingImmich(FakeImmich):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.deleted = []
+        self.role_changes = []
+        self.users = []
+
+    def upload_asset(self, path, name):
+        return f"up-{len(self.contents)}-{name}"
+
+    def delete_assets(self, ids, force=True):
+        self.deleted.append((list(ids), force))
+
+    def get_album(self, album_id):
+        return {"ownerId": "pipeline", "isActivityEnabled": True,
+                "albumUsers": [{"user": {"id": u}, "role": "editor"} for u in self.users]}
+
+    def update_album_user_role(self, album_id, user_id, role):
+        self.role_changes.append((album_id, user_id, role))
+
+
+def stocked(tmp_path, immich):
+    from app.library import Revision
+    from app.revisions import RevisionStore
+
+    revisions = RevisionStore(str(tmp_path / "revs"))
+    cycle, store, _ = build(tmp_path, immich, revisions=revisions)
+    src = tmp_path / "x.jpg"
+    src.write_bytes(b"x")
+    rel, sha = revisions.save_revision("a", 0, str(src))
+    store.update(lambda lib: lib.photos.update(a=Photo(
+        id="a", home="Holiday", live=True, revisions=[Revision(n=0, parent=None, file=rel, sha256=sha)], current=0,
+    )))
+    return cycle, store
+
+
+def test_a_photo_with_no_asset_is_published_then_lands_in_its_album_and_live(tmp_path):
+    immich = PublishingImmich()
+    cycle, store = stocked(tmp_path, immich)
+    cycle.run_once()
+    asset = store.load().photos["a"].immich_asset_id
+    assert asset and immich.contents["new-Holiday"] == {asset} and immich.contents["LIVE"] == {asset}
+
+
+def test_trashing_the_last_live_photo_empties_live_and_binds_the_copy(tmp_path):
+    from app import actions
+
+    immich = PublishingImmich()
+    cycle, store = stocked(tmp_path, immich)
+    cycle.run_once()
+    asset = store.load().photos["a"].immich_asset_id
+    actions.trash(store, ["a"])
+    cycle.run_once()
+    assert immich.contents["LIVE"] == set() and immich.contents["new-Holiday"] == set()
+    assert immich.deleted == [([asset], False)] and store.load().photos["a"].stale_asset_ids == []
+
+
+def test_an_editor_shared_output_album_is_converted_to_viewer(tmp_path):
+    immich = PublishingImmich()
+    immich.users = ["wife"]
+    cycle, store = stocked(tmp_path, immich)
+    cycle.run_once()
+    assert immich.role_changes == [("new-Holiday", "wife", "viewer")]
+    cycle.run_once()
+    assert len(immich.role_changes) == 1
+
+
+def test_without_a_revision_store_the_cycle_still_runs(tmp_path):
+    immich = PublishingImmich()
+    cycle, store, _ = build(tmp_path, immich)
+    store.update(lambda lib: lib.photos.update(a=Photo(id="a", home="Holiday", immich_asset_id="im-a")))
+    cycle.run_once()
+    assert immich.contents["new-Holiday"] == {"im-a"}

@@ -132,3 +132,29 @@ def test_sync_albums_does_not_wipe_every_album_for_a_blank_library():
     results = sync_albums(immich, blank)
     assert all(r.held_back for r in results.values())
     assert immich.albums == {"alb-h": {"x"}, "alb-e": {"y"}}
+
+
+def test_the_last_promoted_photo_can_be_taken_out_of_live():
+    lib = library()
+    for photo in lib.photos.values():
+        photo.live = False
+    immich = FakeImmich({"LIVE": {"im-a"}})
+    sync_live(immich, lib, "LIVE")
+    assert immich.albums["LIVE"] == set()
+
+
+def test_live_is_not_emptied_while_a_promoted_photo_still_awaits_its_upload():
+    lib = library()
+    for photo in lib.photos.values():
+        photo.live = photo.id == "f"          # promoted, but no asset yet
+    immich = FakeImmich({"LIVE": {"im-a"}})
+    sync_live(immich, lib, "LIVE")
+    assert immich.albums["LIVE"] == {"im-a"}
+
+
+def test_the_last_photo_can_be_taken_out_of_an_album():
+    lib = library()
+    lib.photos["c"].home = "Holiday"
+    immich = FakeImmich({"alb-h": set(), "alb-e": {"im-c"}})
+    sync_albums(immich, lib)
+    assert immich.albums["alb-e"] == set() and "im-c" in immich.albums["alb-h"]

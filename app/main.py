@@ -60,13 +60,20 @@ def auth_probe_forever(recipe: RecipeRunner, health: HealthStore, secrets_file: 
         time.sleep(interval_seconds)
 
 
-def poll_forever(cycle: Cycle, interval_seconds: int) -> None:
+def poll_forever(cycle: Cycle, interval_seconds: int, wake: threading.Event | None = None) -> None:
+    """Runs a cycle, then waits for the interval, or for `wake` to be set
+    (the web UI sets it after an action, so a change reaches Immich now
+    rather than at the next tick)."""
     while True:
         try:
             cycle.run_once()
         except Exception:
             log.exception("poll cycle failed; will retry next interval")
-        time.sleep(interval_seconds)
+        if wake is None:
+            time.sleep(interval_seconds)
+        else:
+            wake.wait(interval_seconds)
+            wake.clear()
 
 
 def main() -> None:
@@ -104,7 +111,11 @@ def main() -> None:
         can_run_recipe=lambda: health.snapshot().claude_auth_ok,
     )
     intake = Intake(immich, store, cfg.wallpaper_album_id, cfg.collage_album_id)
-    cycle = Cycle(immich, store, intake, worker, live_album_id=cfg.live_album_id, share_user_ids=share_user_ids)
+    cycle = Cycle(
+        immich, store, intake, worker, live_album_id=cfg.live_album_id, share_user_ids=share_user_ids,
+        revisions=revisions,
+    )
+    poll_wake = threading.Event()
 
     auth_thread = threading.Thread(
         target=auth_probe_forever,
@@ -115,13 +126,14 @@ def main() -> None:
 
     worker.start()
     poll_thread = threading.Thread(
-        target=poll_forever, args=(cycle, cfg.poll_interval_seconds), daemon=True,
+        target=poll_forever, args=(cycle, cfg.poll_interval_seconds, poll_wake), daemon=True,
     )
     poll_thread.start()
     log.info("poll loop started (interval=%ss)", cfg.poll_interval_seconds)
 
     app = create_app(
         cfg, immich, store, health, rules=rules, revisions=revisions, thumbs=ThumbCache(cfg.thumbs_path),
+        on_change=poll_wake.set,
     )
     app.run(host=cfg.webui_host, port=cfg.webui_port)
 

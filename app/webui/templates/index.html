@@ -28,6 +28,15 @@
              padding: 1px 6px; border-radius: 9px; }
     .badge.live { background: #d33a; left: auto; right: 4px; }
     .empty { color: var(--muted); padding: 2rem; }
+    .tile .pick { position: absolute; bottom: 4px; left: 4px; width: 1.3rem; height: 1.3rem; margin: 0; cursor: pointer; }
+    .tile.sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+    #bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .5rem; margin-bottom: .6rem;
+           border: 1px solid var(--line); border-radius: 6px; position: sticky; top: 0; background: Canvas; z-index: 5; }
+    #bar[hidden] { display: none; }
+    #bar .sp { flex: 1; }
+    #msg { margin: 0 0 .6rem; font-size: .9rem; }
+    #msg.bad { color: #c33; }
+    #viewer li button { margin-left: .4rem; font-size: .75rem; }
     #viewer { position: fixed; inset: 0; background: #000d; display: none; z-index: 10; }
     #viewer.open { display: flex; }
     #viewer .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; }
@@ -49,6 +58,22 @@
     <div class="links"><a href="/rules">Recipe rules</a></div>
   </nav>
   <main>
+    <div id="msg" hidden></div>
+    <div id="bar" hidden>
+      <strong id="count"></strong>
+      <button onclick="selectAll()">Select all</button>
+      <button onclick="clearSel()">Clear</button>
+      <span class="sp"></span>
+      <span id="normal">
+        <button onclick="promote(true)">Add to Live</button>
+        <button onclick="promote(false)">Remove from Live</button>
+        <select id="dest"></select>
+        <input id="newname" placeholder="Album name" maxlength="60" hidden>
+        <button onclick="moveSel()">Move</button>
+        <button onclick="trashSel()">Trash</button>
+      </span>
+      <span id="intrash" hidden><button onclick="restoreSel()">Restore</button></span>
+    </div>
     <div id="grid" class="grid"></div>
     <div id="empty" class="empty" hidden></div>
   </main>
@@ -57,7 +82,8 @@
     <aside id="panel"></aside>
   </div>
 <script>
-let view = "review", list = [], open = -1;
+let view = "review", list = [], open = -1, albums = [];
+const selected = new Set();
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const api = async url => { const r = await fetch(url); if (!r.ok) throw new Error(url + " " + r.status); return r.json(); };
@@ -67,27 +93,82 @@ function item(v, label, n) {
 }
 async function loadTree() {
   const t = await api("/api/tree");
+  albums = t.albums.map(a => a.name);
   $("tree").innerHTML =
     item("queue", "Queue", t.queue) + item("review", "Review", t.review) + item("live", "Live", t.live) +
     `<div class="group">Albums</div>` + t.albums.map(a => item(a.view, a.name, a.count)).join("") +
     `<div class="group">&nbsp;</div>` + item("trash", "Trash", t.trash);
   for (const a of $("tree").querySelectorAll("a.item")) a.onclick = () => select(a.dataset.view);
 }
-async function select(v) {
+async function select(v, keep) {
   view = v; closeViewer();
+  if (!keep) selected.clear();
   await loadTree();
   list = (await api("/api/photos?view=" + encodeURIComponent(v))).photos;
+  for (const id of [...selected]) if (!list.some(p => p.id === id)) selected.delete(id);
   $("grid").innerHTML = list.map((p, i) => tile(p, i)).join("");
   $("empty").hidden = list.length > 0;
   $("empty").textContent = "Nothing here.";
-  for (const t of $("grid").querySelectorAll(".tile")) t.onclick = () => openViewer(+t.dataset.i);
+  for (const t of $("grid").querySelectorAll(".tile")) {
+    t.onclick = () => openViewer(+t.dataset.i);
+    t.querySelector(".pick").onclick = e => { e.stopPropagation(); toggle(list[+t.dataset.i].id, t); };
+  }
+  updateBar();
+}
+function toggle(id, el) {
+  if (selected.has(id)) selected.delete(id); else selected.add(id);
+  el.classList.toggle("sel", selected.has(id));
+  updateBar();
+}
+function selectAll() { for (const p of list) selected.add(p.id); for (const t of $("grid").children) t.classList.add("sel"), t.querySelector(".pick").checked = true; updateBar(); }
+function clearSel() { selected.clear(); for (const t of $("grid").children) t.classList.remove("sel"), t.querySelector(".pick").checked = false; updateBar(); }
+function updateBar() {
+  $("bar").hidden = selected.size === 0;
+  $("count").textContent = selected.size + " selected";
+  const trash = view === "trash";
+  $("normal").hidden = trash; $("intrash").hidden = !trash;
+  const opts = [["review", "Review"], ...albums.map(a => [a, a]), ["", "New album…"]];
+  const had = $("dest").options.length > 0, cur = $("dest").value;
+  $("dest").innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+  if (had && opts.some(([v]) => v === cur)) $("dest").value = cur;
+  $("newname").hidden = $("dest").value !== "";
+}
+$("dest").onchange = () => { $("newname").hidden = $("dest").value !== ""; };
+function say(text, bad) { const m = $("msg"); m.textContent = text; m.className = bad ? "bad" : ""; m.hidden = !text; }
+async function act(path, payload, what) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const out = await r.json();
+  if (!r.ok) { say(out.error || "That didn't work.", true); return null; }
+  const skipped = out.skipped.map(s => s.reason + " (" + s.id.slice(0, 8) + ")");
+  say(`${what}: ${out.done.length} done` + (skipped.length ? `, ${skipped.length} skipped: ${[...new Set(out.skipped.map(s => s.reason))].join("; ")}` : ""), out.done.length === 0 && skipped.length > 0);
+  for (const id of out.done) selected.delete(id);
+  await select(view, true);
+  return out;
+}
+const ids = () => [...selected];
+const promote = live => act("/api/photos/promote", { ids: ids(), live }, live ? "Added to Live" : "Removed from Live");
+const trashSel = () => act("/api/photos/trash", { ids: ids() }, "Trashed");
+const restoreSel = () => act("/api/photos/restore", { ids: ids() }, "Restored");
+function moveSel() {
+  const home = $("dest").value === "" ? $("newname").value : $("dest").value;
+  return act("/api/photos/move", { ids: ids(), home }, "Moved to " + (home || "…"));
+}
+async function revertTo(id, step) {
+  const r = await fetch("/api/photos/" + id + "/revert", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ step }) });
+  const out = await r.json();
+  if (!r.ok) { say(out.error || "That didn't work.", true); return; }
+  say(out.unchanged ? "Already showing that step." : "Reverted to step " + step + " (now step " + out.step + ").");
+  await select(view, true);
+  const i = list.findIndex(p => p.id === id);
+  if (i >= 0) openViewer(i);
 }
 function tile(p, i) {
   const label = p.status !== "ready" ? p.status.replace("_", " ") : p.media_type === "video" ? "video" : "";
   const inner = p.media_type === "image" && p.has_image
     ? `<img loading="lazy" src="/media/${p.id}/thumb?v=${p.version}" alt="">`
     : `<div class="ph">${esc(p.media_type === "video" ? "Video" : p.status.replace("_", " "))}</div>`;
-  return `<div class="tile" data-i="${i}">${inner}${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
+  const on = selected.has(p.id);
+  return `<div class="tile${on ? " sel" : ""}" data-i="${i}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""}>${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
          `${p.live ? `<span class="badge live">live</span>` : ""}</div>`;
 }
 async function openViewer(i) {
@@ -100,7 +181,8 @@ async function openViewer(i) {
     : `<img src="/media/${p.id}/full?v=${p.version}" alt="">`;
   const hist = p.history.map(h =>
     `<li class="${h.current ? "current" : ""}">${h.step === 0 ? "Original result" : h.reverts_to_step !== null ? "Reverted to step " + h.reverts_to_step : esc(h.instruction || "(no instruction)")}` +
-    (h.rules && h.rules.length ? ` <span class="note">(${h.rules.length} rule${h.rules.length > 1 ? "s" : ""})</span>` : "") + `</li>`).join("");
+    (h.rules && h.rules.length ? ` <span class="note">(${h.rules.length} rule${h.rules.length > 1 ? "s" : ""})</span>` : "") +
+    (!h.current && !p.trashed && p.status === "ready" ? `<button onclick="revertTo('${p.id}', ${h.step})">Revert to this</button>` : "") + `</li>`).join("");
   $("panel").innerHTML =
     `<button class="close" onclick="closeViewer()">Close</button><h2>${esc(p.home)} · ${esc(p.status.replace("_", " "))}</h2>` +
     `<div class="meta">${p.live ? "Live · " : ""}${esc(p.kind)}${p.imported ? " · imported, can't be modified" : ""}</div>` +

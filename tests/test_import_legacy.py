@@ -108,7 +108,7 @@ def test_processed_photos_come_across_with_their_state(tmp_path):
     assert rev0.origin == "legacy" and rev0.parent is None and rev0.instruction is None
     assert open(revisions.path(rev0.file), "rb").read() == b"cur-r1"
     assert rev0.sha256 == hashlib.sha256(b"cur-r1").hexdigest()
-    assert r1.immich_asset_id.startswith("uploaded-")
+    assert r1.immich_asset_id.startswith("uploaded-") and r1.published_revision == 0
 
     h1 = lib.photos["h1"]
     assert h1.kind == "collage" and h1.home == "Holiday" and h1.legacy_notes == ["swap the first two", "recenter the left one"]

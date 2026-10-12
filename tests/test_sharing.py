@@ -19,6 +19,7 @@ class FakeAccount:
         self.shared = []  # (album_id, user_ids, role)
         self.created = []
         self.activity_enabled = []
+        self.role_changes = []
 
     def get_my_user_id(self):
         if self.fail_me:
@@ -34,6 +35,9 @@ class FakeAccount:
         if self.fail_share:
             raise ImmichError("PUT /albums/x/users -> 403")
         self.shared.append((album_id, list(user_ids), role))
+
+    def update_album_user_role(self, album_id, user_id, role):
+        self.role_changes.append((album_id, user_id, role))
 
     def enable_album_activity(self, album_id):
         self.activity_enabled.append(album_id)
@@ -155,3 +159,30 @@ def test_client_builds_the_share_and_user_requests():
     method, url, kwargs = session.calls[-1]
     assert (method, url) == ("PATCH", "http://immich/api/albums/a1")
     assert kwargs["json"] == {"isActivityEnabled": True}
+
+
+def test_convert_changes_an_editor_share_to_viewer_and_adds_the_missing():
+    owner = FakeAccount("owner", {"a1": album(users=["wife"])})     # wife is an editor
+    assert ensure_shared(owner, "a1", ["wife", "kid"], "viewer", convert=True) is True
+    assert owner.role_changes == [("a1", "wife", "viewer")]
+    assert owner.shared == [("a1", ["kid"], "viewer")]
+
+
+def test_without_convert_an_existing_role_is_left_alone():
+    owner = FakeAccount("owner", {"a1": album(users=["wife"])})
+    ensure_shared(owner, "a1", ["wife"], "viewer")
+    assert owner.role_changes == []
+
+
+def test_convert_leaves_a_viewer_alone():
+    owner = FakeAccount("owner", {"a1": {"ownerId": "owner", "albumUsers": [{"user": {"id": "wife"}, "role": "viewer"}]}})
+    ensure_shared(owner, "a1", ["wife"], "viewer", convert=True)
+    assert owner.role_changes == []
+
+
+def test_client_builds_the_role_change_request():
+    session = FakeSession()
+    ImmichClient("http://immich", "key", session=session).update_album_user_role("a1", "u2", "viewer")
+    method, url, kwargs = session.calls[0]
+    assert (method, url) == ("PUT", "http://immich/api/albums/a1/user/u2")
+    assert kwargs["json"] == {"role": "viewer"}

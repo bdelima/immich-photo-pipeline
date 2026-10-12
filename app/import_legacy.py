@@ -176,6 +176,7 @@ def _import_one(
         home=_home(data.get("home", REVIEW)),
         status=STATUS_READY,
         immich_asset_id=new_asset,
+        published_revision=0,
         legacy_notes=list(data.get("revision_notes") or []),
         imported=imported,
     )

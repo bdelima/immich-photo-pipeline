@@ -70,22 +70,35 @@ def reconcile_album(
     return result
 
 
+def _may_empty(library: Library, members) -> bool:
+    """Whether an empty desired set can be believed. It can when the library
+    is not blank (a blank or lost one is the case the guard exists for) and
+    every photo that belongs in the album already has its asset, so nothing
+    is empty only because an upload has not happened yet. This is what lets
+    the last photo be taken out of Live or an album."""
+    return bool(library.photos) and all(p.immich_asset_id for p in members)
+
+
 def sync_live(
-    immich: ImmichClient, library: Library, live_album_id: str, *, allow_empty: bool = False,
+    immich: ImmichClient, library: Library, live_album_id: str, *, allow_empty: bool | None = None,
 ) -> ReconcileResult:
+    """`allow_empty` None means decide from the library (see _may_empty)."""
+    if allow_empty is None:
+        allow_empty = _may_empty(library, library.live_photos())
     return reconcile_album(immich, live_album_id, desired_live_ids(library), allow_empty=allow_empty)
 
 
 def sync_albums(
-    immich: ImmichClient, library: Library, *, allow_empty: bool = False,
+    immich: ImmichClient, library: Library, *, allow_empty: bool | None = None,
 ) -> dict[str, ReconcileResult]:
     """Reconciles every managed album. A failure on one album is logged and
     does not stop the others; that album is simply left for the next pass."""
     results: dict[str, ReconcileResult] = {}
     for name, album_id in sorted(library.albums.items()):
+        empty_ok = allow_empty if allow_empty is not None else _may_empty(library, library.in_home(name))
         try:
             results[name] = reconcile_album(
-                immich, album_id, desired_album_ids(library, name), allow_empty=allow_empty,
+                immich, album_id, desired_album_ids(library, name), allow_empty=empty_ok,
             )
         except ImmichError:
             log.exception("could not bring album %r (%s) in line with the library", name, album_id)
