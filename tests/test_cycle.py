@@ -297,7 +297,7 @@ def test_each_managed_album_gets_a_note_that_links_back_to_its_view(tmp_path):
     d = immich.descriptions
     assert d["new-Costa Rica"] == (
         "This is a view-only album managed by the Immich Pipeline. To make changes to this album, "
-        "go to https://pipe.example/#album:Costa%20Rica")
+        "go to https://pipe.example/#album:costa-rica")
     assert d["REVIEW"] == (
         "This is a view-only album managed by the Immich Pipeline that holds items waiting for review. "
         "To review items, go to https://pipe.example/#review")

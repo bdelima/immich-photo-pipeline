@@ -171,6 +171,18 @@ def test_a_video_is_copied_and_published_untouched_without_claude(tmp_path):
     assert immich.uploads[0][0] == "v.jpg" and immich.uploads[0][1] == b"orig-v"
 
 
+def test_an_import_only_image_is_kept_as_it_is_without_claude_and_cleared_from_its_queue(tmp_path):
+    worker, store, revisions, immich, recipe = build(tmp_path, can_run_recipe=lambda: False, import_album_id="im")
+    queue(store, "i", ("i",), queue="import")
+    store.update_photo("i", lambda p: setattr(p, "imported", True))
+    assert worker.run_one() is True
+    photo = store.load().photos["i"]
+    assert recipe.calls == [] and photo.status == "ready" and photo.home == REVIEW and photo.imported
+    assert photo.current_revision().origin == "original"
+    assert open(revisions.path(photo.current_revision().file), "rb").read() == b"orig-i"
+    assert immich.uploads == [("i.jpg", b"orig-i")] and immich.removed == [("im", ["i"])]
+
+
 def test_an_image_waits_while_there_is_no_claude_session(tmp_path):
     ok = {"v": False}
     worker, store, _, _, recipe = build(tmp_path, can_run_recipe=lambda: ok["v"])
