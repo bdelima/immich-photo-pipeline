@@ -329,7 +329,7 @@ async function openViewer(i) {
         ? `<button class="orig" data-orig="${s.index}" data-type="video" title="${esc(s.name)}"><span class="ph">Video</span></button>`
         : `<button class="orig" data-orig="${s.index}" data-type="image" title="${esc(s.name)}"><img loading="lazy" src="/media/${p.id}/source/${s.index}/thumb" alt="Original ${esc(s.name)}"></button>`).join("") + `</div>`;
   $("panel").innerHTML =
-    `<h4>Original${withCopy.length > 1 ? "s" : ""}</h4>${originals}` +
+    `<h4>Original${withCopy.length > 1 ? "s" : ""}</h4>${originals}${originalDetails(p.sources)}` +
     (p.error ? `<p class="err aside-note">${esc(p.error)}</p>` : "") +
     (p.question ? `<p class="aside-note">Claude asks: ${esc(p.question)}</p>` : "") +
     `<h4>History</h4><div class="hist">${hist}</div>` +
@@ -353,6 +353,24 @@ async function openViewer(i) {
     $("chatsend").onclick = () => sendChat(p.id);
   }
   if (p.busy) watchChat(p.id);
+}
+// What Immich knew about each original when it was copied: when it was taken,
+// where, and whose account it came from. Nothing is shown for what is unknown.
+function originalDetails(sources) {
+  const blocks = sources.map((s, i) => {
+    const m = s.meta || {}, rows = [];
+    if (m.taken) rows.push([m.taken_kind === "file" ? "File date" : "Taken", m.taken]);
+    if (m.place) rows.push(["Place", m.place]);
+    else if (m.latitude != null && m.longitude != null) rows.push(["Place", m.latitude.toFixed(4) + ", " + m.longitude.toFixed(4)]);
+    if (m.owner_name) rows.push(["Owner", m.owner_name]);
+    return rows.length
+      ? `<div class="meta aside-note">` + (sources.length > 1 ? `<div><b>Original ${i + 1}</b></div>` : "") +
+        rows.map(([k, v]) => `<div><b>${k}</b> ${esc(v)}</div>`).join("") + `</div>`
+      : "";
+  }).join("");
+  if (blocks) return blocks;
+  return sources.length && sources.every(s => s.meta && s.meta.unavailable)
+    ? `<p class="meta aside-note">No details of the original: Immich no longer has it.</p>` : "";
 }
 // The original, full size, over the photo view. Click it, or press Esc, to close.
 function showOriginal(id, index, type) {
