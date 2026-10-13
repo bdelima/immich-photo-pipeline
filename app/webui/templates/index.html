@@ -287,6 +287,28 @@ async function decide(ruleId, id, accept) {
   if (i >= 0) openViewer(i);
 }
 
+// ---- the sidebar's collapsible sections ----
+// History, Chat and Watermark can each be folded away. What is open is kept
+// while moving between photos and when a photo is redrawn.
+const folds = { hist: true, chat: true, wm: false };
+function foldSection(key, title, body) {
+  const open = folds[key];
+  return `<section class="fold" data-fold="${key}"><button type="button" class="foldhead" data-key="${key}" aria-expanded="${open}" aria-controls="fold-${key}">` +
+    `<span>${title}</span><span class="chev" aria-hidden="true"></span></button><div class="foldbody" id="fold-${key}"${open ? "" : " hidden"}>${body}</div></section>`;
+}
+function setFold(key, open) {
+  folds[key] = open;
+  const sec = document.querySelector(`#panel [data-fold="${key}"]`);
+  if (!sec) return;
+  sec.querySelector(".foldhead").setAttribute("aria-expanded", String(open));
+  sec.querySelector(".foldbody").hidden = !open;
+  if (open && key === "chat") { const log = $("chatlog"); if (log) log.scrollTop = log.scrollHeight; }
+}
+// The Watermark header is wired by wireWatermark, which opens it by folding the other two.
+function wireFolds() {
+  for (const h of $("panel").querySelectorAll(".foldhead")) if (h.dataset.key !== "wm") h.onclick = () => setFold(h.dataset.key, !folds[h.dataset.key]);
+}
+
 // ---- the photo view ----
 async function openViewer(i) {
   if (i < 0 || i >= list.length) return;
@@ -348,10 +370,12 @@ async function openViewer(i) {
     `<div class="asidebar"><h4>Original${withCopy.length > 1 ? "s" : ""}</h4><button class="btn sec sm" id="vClose">Close</button></div>${originals}${originalDetails(p.sources)}` +
     (p.error ? `<p class="err aside-note">${esc(p.error)}</p>` : "") +
     (p.question ? `<p class="aside-note">Claude asks: ${esc(p.question)}</p>` : "") +
-    `<h4>History</h4><div class="hist">${hist}</div>` +
+    foldSection("hist", "History", `<div class="hist">${hist}</div>`) +
     (p.legacy_notes.length ? `<h4>Earlier notes</h4><ul class="meta" style="margin:0 1.1rem .5rem;padding-left:1.1rem">${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
-    `<div class="changes"><h4>Ask Claude to change it</h4>${p.chat_blocked ? "" : watermarkForm(p.watermark)}${chat}</div>`;
+    foldSection("chat", "Chat", chat) +
+    (p.chat_blocked ? "" : foldSection("wm", "Watermark", watermarkForm(p.watermark)));
   $("vClose").onclick = $("vClose2").onclick = closeViewer;
+  wireFolds();
   wireWatermark(p.id, p.watermark);
   for (const b of $("panel").querySelectorAll("[data-orig]")) b.onclick = () => showOriginal(p.id, +b.dataset.orig, b.dataset.type);
   for (const b of $("panel").querySelectorAll("[data-revert]")) b.onclick = () => revertTo(p.id, +b.dataset.revert);
@@ -394,15 +418,14 @@ function originalDetails(sources) {
 // that the reviewer can change before asking Claude to add them as a new step.
 function watermarkForm(w) {
   const where = w.parts && w.parts.place;
-  return `<div class="wm"><button class="btn sec sm" id="wmOpen">Add a watermark…</button>` +
-    `<div id="wmForm" hidden><label>Title<input class="field" id="wmTitle" maxlength="120" value="${esc(w.title)}"></label>` +
+  return `<div class="wm"><div id="wmForm"><label>Title<input class="field" id="wmTitle" maxlength="120" value="${esc(w.title)}"></label>` +
     `<div class="tools"><label>Hint <small>(optional; blank = the whole picture)</small><input class="field" id="wmHint" maxlength="80" placeholder="e.g. the bird on the left"></label>` +
     `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><button class="btn sec sm" id="wmPoem">Suggest title</button><span class="meta" id="wmSaw" role="status"></span></div></div>` +
     `<label>Second line<input class="field" id="wmSub" maxlength="120" value="${esc(w.subtitle)}"></label>` +
     (Array.isArray(w.parts && w.parts.coordinates) ? `<div class="tools"><div class="row"><span class="meta">${where ? "Immich location" : "Coordinates"}</span>` +
       `<span class="chip">${where ? esc(where) : esc(w.parts.coordinates[0].toFixed(4)) + ", " + esc(w.parts.coordinates[1].toFixed(4))}</span></div>` +
       `<div class="row"><button class="btn sec sm" id="wmOsm">Look up (OSM)</button><button class="btn sec sm" id="wmClaudeLoc">Ask Claude</button><span class="meta" id="wmLocSaw" role="status"></span></div></div>` : "") +
-    `<label>Third line<input class="field" id="wmThird" maxlength="120"></label>` +
+    `<label>Third line<input class="field" id="wmThird" maxlength="120" value="${esc(w.third || "")}"></label>` +
     `<table class="wmgrid" id="wmGrid"></table>` +
     `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button></div></div></div>`;
 }
@@ -422,19 +445,28 @@ function trimHome(place, home) {
   return home && bits.length > 1 && countryKey(bits[bits.length - 1]) === countryKey(home) ? bits.slice(0, -1).join(", ") : place;
 }
 function wireWatermark(id, w) {
-  const open = $("wmOpen"); if (!open) return;
-  const form = $("wmForm");
-  let looked = false;
-  const toggle = show => { form.hidden = !show; open.hidden = show; if (show && !looked) { looked = true; loadHome(); } };
-  open.onclick = () => { toggle(true); $("wmTitle").focus(); };
-  $("wmCancel").onclick = () => toggle(false);
+  const head = document.querySelector('#panel .foldhead[data-key="wm"]'); if (!head) return;
+  // Working on the watermark folds History and Chat out of the way; cancelling
+  // puts them back as they were, and adding the watermark opens the Chat.
+  let looked = false, before = { hist: folds.hist, chat: folds.chat };
+  const startHome = () => { if (!looked) { looked = true; loadHome(); } };
+  const openWm = () => {
+    before = { hist: folds.hist, chat: folds.chat };
+    setFold("hist", false); setFold("chat", false); setFold("wm", true);
+    startHome(); $("wmTitle").focus();
+  };
+  const closeWm = restore => { setFold("wm", false); if (restore) { setFold("hist", before.hist); setFold("chat", before.chat); } };
+  head.onclick = () => (folds.wm ? closeWm(true) : openWm());
+  $("wmCancel").onclick = () => closeWm(true);
   // The pieces that can go on any line: what Immich knew (place, owner, date)
   // and whatever Claude has said so far. Ticking a box puts a piece on that line.
   // A location keeps its full text in `raw`; `text` leaves off the home country.
-  const parts = w.parts || {};
+  // When the form starts from the last watermark, the pieces start unticked so
+  // they do not contradict the lines that are already filled in.
+  const parts = w.parts || {}, fresh = !w.remembered;
   let home = "";
   const items = [["Location (Immich)", parts.place, true, false, false, true], ["Owner", parts.owner, false, true, false, false], ["Date", parts.date, false, true, false, false]]
-    .filter(x => x[1]).map(([label, raw, t, u, v, loc]) => ({ label, raw, text: raw, t, u, v, loc, fixed: true }));
+    .filter(x => x[1]).map(([label, raw, t, u, v, loc]) => ({ label, raw, text: raw, t: t && fresh, u: u && fresh, v: v && fresh, loc, fixed: true }));
   // Each line is rebuilt from its ticked pieces only when one of its own boxes
   // changes, so whatever was typed into the other lines is kept.
   const lines = { t: ["wmTitle", " – "], u: ["wmSub", " · "], v: ["wmThird", " · "] };
@@ -532,11 +564,14 @@ function wireWatermark(id, w) {
     const out = await r.json().catch(() => ({}));
     if (!r.ok) { say(out.error || "That didn't send.", true); $("wmSend").disabled = false; return; }
     say("Watermark requested.");
-    toggle(false); $("wmSend").disabled = false;
+    for (const x of items) x.t = x.u = x.v = false;       // the lines are what was sent; start the pieces fresh
+    drawGrid();
+    closeWm(false); setFold("chat", true); $("wmSend").disabled = false;
     const p = await api("/api/photos/" + id), log = $("chatlog");
     if (log) { log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight; }
     watchChat(id);
   };
+  if (folds.wm) startHome();
 }
 // The original, full size, over the photo view. Click it, or press Esc, to close.
 function showOriginal(id, index, type) {
