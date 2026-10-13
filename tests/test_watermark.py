@@ -39,6 +39,18 @@ def test_a_single_line_and_quotes_are_handled():
     assert 'rule): "Bob".' in watermark.instruction("", "Bob")
 
 
+def test_a_third_line_is_allowed_but_never_required():
+    text = watermark.instruction("Costa Rica", "Bob", "Wings at Dusk")
+    assert 'the title "Costa Rica" on top and "Bob" underneath it and "Wings at Dusk" below that.' in text
+    assert 'the title "A" on top and "C" below that.' in watermark.instruction("A", "", "C")
+    assert 'rule): "C".' in watermark.instruction("", "", "C")
+    assert "below that" not in watermark.instruction("A", "B")
+    with pytest.raises(chat.ChatError):
+        watermark.instruction("", "", "x" * 121)
+    with pytest.raises(chat.ChatError):
+        watermark.instruction("A", "", 5)
+
+
 def test_an_empty_or_overlong_watermark_is_refused():
     with pytest.raises(chat.ChatError):
         watermark.instruction(" ", "")
@@ -51,9 +63,9 @@ def test_an_empty_or_overlong_watermark_is_refused():
 def test_adding_queues_a_message_for_the_worker(tmp_path):
     store = LibraryStore(str(tmp_path / "lib.json"))
     store.update(lambda lib: lib.photos.update(p=photo()))
-    watermark.add(store, "p", "Costa Rica", "Bob")
+    watermark.add(store, "p", "Costa Rica", "Bob", "Wings at Dusk")
     msg = store.load().photos["p"].chat[0]
-    assert msg.role == "user" and msg.state == "queued" and "Costa Rica" in msg.text
+    assert msg.role == "user" and msg.state == "queued" and "Costa Rica" in msg.text and "Wings at Dusk" in msg.text
 
 
 def test_a_photo_that_cannot_be_changed_is_refused(tmp_path):

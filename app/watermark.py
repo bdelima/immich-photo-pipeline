@@ -1,4 +1,4 @@
-"""The watermark builder: a two-line template seeded from what Immich knew
+"""The watermark builder: a template of up to three lines, seeded from what Immich knew
 about the original (see metadata.py), which the reviewer can change before it
 is sent. Sending it asks Claude, through the photo's chat, to add the text as a
 new step in the photo's history (so it can be reverted like any other)."""
@@ -53,11 +53,18 @@ def _line(value, what: str) -> str:
     return line
 
 
-def instruction(title, subtitle) -> str:
-    title, subtitle = _line(title, "title"), _line(subtitle, "second line")
-    if not title and not subtitle:
+def instruction(title, subtitle, third=None) -> str:
+    """The request to Claude. Up to three lines, none of them required (but
+    at least one is): the title on top, a second line underneath it and an
+    optional third below that."""
+    title, subtitle, third = _line(title, "title"), _line(subtitle, "second line"), _line(third, "third line")
+    if not title and not subtitle and not third:
         raise chat.ChatError("there is nothing to write in the watermark")
-    lines = [f'the title "{title}" on top' if title else "", f'"{subtitle}" ' + ("underneath it" if title else "") if subtitle else ""]
+    lines = [
+        f'the title "{title}" on top' if title else "",
+        f'"{subtitle}" ' + ("underneath it" if title else "") if subtitle else "",
+        f'"{third}" ' + ("below that" if title or subtitle else "") if third else "",
+    ]
     return (
         "Add a small, tasteful watermark to this photo only (this is not a standing rule): "
         + " and ".join(x.strip() for x in lines if x)
@@ -107,7 +114,7 @@ def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None, s
     return name
 
 
-def add(store: LibraryStore, photo_id: str, title, subtitle) -> int:
+def add(store: LibraryStore, photo_id: str, title, subtitle, third=None) -> int:
     """Queues the watermark as a request to Claude. Same rules as the chat box
     (a photo that can't be changed, or too many waiting, is refused)."""
-    return chat.enqueue(store, photo_id, instruction(title, subtitle))
+    return chat.enqueue(store, photo_id, instruction(title, subtitle, third))
