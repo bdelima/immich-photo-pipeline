@@ -195,8 +195,7 @@ async function moveAndFollow(id, home) {
   if (!r.ok) { say(out.error || "That didn't work.", true); return; }
   if (!out.done.includes(id)) { say("Not moved: " + out.skipped.map(s => s.reason).join("; "), true); return; }
   const t = await api("/api/tree");
-  // The server collapses runs of spaces in a name, so compare the same way.
-  const want = home.split(/\s+/).filter(Boolean).join(" ").toLowerCase();
+  const want = home.toLowerCase();
   const album = t.albums.find(a => a.name.toLowerCase() === want);
   const dest = want === "review" ? "review" : album ? album.view : view;
   if (dest !== view) history.replaceState(null, "", viewHash(dest));
@@ -396,6 +395,9 @@ function watermarkForm(w) {
   return `<div class="wm"><button class="btn sec sm" id="wmOpen">Add a watermark…</button>` +
     `<div id="wmForm" hidden><label>Title<input class="field" id="wmTitle" maxlength="120" value="${esc(w.title)}"></label>` +
     `<label>Underneath<input class="field" id="wmSub" maxlength="120" value="${esc(w.subtitle)}"></label>` +
+    `<div class="ident"><label>What to name <small>(optional; blank = the main subject)</small><input class="field" id="wmHint" maxlength="80" placeholder="e.g. the bird on the left"></label>` +
+    `<label>Put the answer in<select class="field" id="wmWhere"><option value="title+">Title (added to it)</option><option value="title">Title (replacing it)</option><option value="sub+">Underneath (added to it)</option><option value="sub">Underneath (replacing it)</option></select></label>` +
+    `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><span class="meta" id="wmSaw" role="status"></span></div></div>` +
     `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button></div></div></div>`;
 }
 function wireWatermark(id) {
@@ -404,6 +406,21 @@ function wireWatermark(id) {
   const toggle = show => { form.hidden = !show; open.hidden = show; };
   open.onclick = () => { toggle(true); $("wmTitle").focus(); };
   $("wmCancel").onclick = () => toggle(false);
+  // Asks Claude to name what is in the picture, then puts the answer where chosen.
+  $("wmIdentify").onclick = async () => {
+    const btn = $("wmIdentify"), saw = $("wmSaw");
+    btn.disabled = true; saw.textContent = "Looking…";
+    try {
+      const r = await fetch("/api/photos/" + id + "/identify", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hint: $("wmHint").value }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
+      const where = $("wmWhere").value, field = $(where.startsWith("title") ? "wmTitle" : "wmSub");
+      field.value = where.endsWith("+") && field.value.trim() ? field.value.trim() + (where === "sub+" ? " · " : " – ") + out.name : out.name;
+      saw.textContent = "Claude sees: " + out.name;
+    } catch (e) { saw.textContent = "That didn't work."; }
+    finally { btn.disabled = false; }
+  };
   $("wmSend").onclick = async () => {
     $("wmSend").disabled = true;
     const r = await fetch("/api/photos/" + id + "/watermark", { method: "POST", headers: { "Content-Type": "application/json" },
