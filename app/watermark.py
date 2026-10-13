@@ -5,6 +5,7 @@ new step in the photo's history (so it can be reverted like any other)."""
 from __future__ import annotations
 
 import calendar
+import os
 
 from . import chat
 from .library import LibraryStore, Photo
@@ -57,6 +58,41 @@ def instruction(title, subtitle) -> str:
         "a little 3D, and keep it readable against the photo. "
         "Do not change anything else about the photo."
     )
+
+
+MAX_HINT = 80
+
+
+def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None) -> str:
+    """Asks Claude to name the main subject of the photo's current image (or
+    what `hint` points at), to seed the watermark text. Nothing is changed or
+    added to the history."""
+    if recipe is None or revisions is None:
+        raise chat.ChatError("Claude isn't available here right now.", 503)
+    photo = store.load().photos.get(photo_id)
+    if photo is None:
+        raise chat.ChatError("no such photo", 404)
+    if photo.media_type == "video":
+        raise chat.ChatError("Videos can't be looked at.")
+    if photo.trashed:
+        raise chat.ChatError("It is in the trash. Restore it to work on it.")
+    revision = photo.current_revision()
+    path = revisions.path(revision.file) if revision and revision.file else None
+    if not path or not os.path.exists(path):
+        raise chat.ChatError("There is no image to look at yet.")
+    if hint is not None and not isinstance(hint, str):
+        raise chat.ChatError("the hint must be text")
+    hint = " ".join((hint or "").replace('"', "'").replace("<", "").replace(">", "").split())
+    if len(hint) > MAX_HINT:
+        raise chat.ChatError(f"the hint is at most {MAX_HINT} characters; this one is {len(hint)}")
+    try:
+        name = recipe.identify(path, hint or None)
+    except RuntimeError as exc:
+        raise chat.ChatError(f"Claude couldn't identify it: {exc}", 502)
+    name = " ".join(name.replace('"', "'").replace("<", "").replace(">", "").split())[:MAX_LINE]
+    if not name:
+        raise chat.ChatError("Claude did not name anything", 502)
+    return name
 
 
 def add(store: LibraryStore, photo_id: str, title, subtitle) -> int:
