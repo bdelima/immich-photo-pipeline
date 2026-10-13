@@ -57,7 +57,7 @@ def test_adding_queues_a_message_for_the_worker(tmp_path):
 
 def test_a_photo_that_cannot_be_changed_is_refused(tmp_path):
     store = LibraryStore(str(tmp_path / "lib.json"))
-    store.update(lambda lib: lib.photos.update(p=photo(imported=True)))
+    store.update(lambda lib: lib.photos.update(p=photo(media_type="video")))
     with pytest.raises(chat.ChatError):
         watermark.add(store, "p", "Costa Rica", "Bob")
     with pytest.raises(chat.ChatError) as e:

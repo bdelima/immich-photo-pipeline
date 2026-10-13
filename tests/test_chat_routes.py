@@ -45,9 +45,14 @@ def test_a_bad_message_is_a_400_and_does_not_wake_the_worker(tmp_path):
 
 
 def test_a_photo_that_cannot_be_modified_gives_its_reason(tmp_path):
-    client, _, _, jobs = build(tmp_path, imported=True)
+    client, _, _, jobs = build(tmp_path, media_type="video")
     r = client.post("/api/photos/a/chat", json={"text": "warmer"})
-    assert r.status_code == 400 and "already finished" in r.get_json()["error"] and jobs == []
+    assert r.status_code == 400 and "Videos" in r.get_json()["error"] and jobs == []
+
+
+def test_an_imported_photo_accepts_a_message(tmp_path):
+    client, _, _, jobs = build(tmp_path, imported=True)
+    assert client.post("/api/photos/a/chat", json={"text": "warmer"}).status_code == 200 and jobs == [1]
 
 
 def test_an_unknown_photo_is_a_404(tmp_path):
