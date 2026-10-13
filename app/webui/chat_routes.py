@@ -8,7 +8,7 @@ from typing import Callable
 
 from flask import Flask, jsonify, request
 
-from .. import chat
+from .. import chat, watermark
 from ..library import LibraryStore
 
 
@@ -27,5 +27,20 @@ def register_chat_routes(
             try:
                 on_job()
             except Exception:  # the worker also looks on its own every few seconds
+                app.logger.exception("on_job failed")
+        return jsonify({"id": message_id})
+
+    @app.post("/api/photos/<photo_id>/watermark")
+    def api_watermark(photo_id: str):
+        data = request.get_json(silent=True)
+        data = data if isinstance(data, dict) else {}
+        try:
+            message_id = watermark.add(store, photo_id, data.get("title"), data.get("subtitle"))
+        except chat.ChatError as exc:
+            return jsonify({"error": str(exc)}), exc.status
+        if on_job is not None:
+            try:
+                on_job()
+            except Exception:
                 app.logger.exception("on_job failed")
         return jsonify({"id": message_id})

@@ -211,3 +211,16 @@ def test_the_icons_and_the_pages_that_link_them_are_served(tmp_path):
     assert b'rel="apple-touch-icon"' in html
     rules_template = os.path.join(os.path.dirname(__file__), "..", "app", "webui", "templates", "rules.html")
     assert '{% include "_icons.html" %}' in open(rules_template).read()
+
+
+def test_the_detail_offers_a_watermark_template_and_the_route_queues_it(tmp_path):
+    from app.library import Source
+    client, store, _ = build(tmp_path)
+    meta = {"taken": "2024-03-02 14:05", "place": "Costa Rica", "owner_name": "Bob"}
+    store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", meta=meta)))
+    assert client.get("/api/photos/r1").get_json()["watermark"] == {"title": "Costa Rica", "subtitle": "Bob · March 2024"}
+    ok = client.post("/api/photos/r1/watermark", json={"title": "Costa Rica", "subtitle": "Bob"})
+    assert ok.status_code == 200
+    assert "Costa Rica" in store.load().photos["r1"].chat[0].text
+    assert client.post("/api/photos/r1/watermark", json={"title": "", "subtitle": ""}).status_code == 400
+    assert client.post("/api/photos/nope/watermark", json={"title": "x"}).status_code == 404

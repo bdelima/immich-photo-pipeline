@@ -18,7 +18,7 @@ import os
 
 from flask import Flask, abort, jsonify, request, send_file
 
-from .. import chat
+from .. import chat, watermark
 from ..intake import VIDEO_EXTENSIONS
 from ..library import (
     INBOX, REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
@@ -130,6 +130,8 @@ def detail(photo: Photo, rules: RulesStore | None = None) -> dict:
         # Why chat is off for this photo (None when it is on).
         "chat_blocked": chat.blocked_reason(photo),
         "proposal": proposal,
+        # What the watermark form starts with (the reviewer can change it).
+        "watermark": watermark.template(photo),
     })
     return out
 
