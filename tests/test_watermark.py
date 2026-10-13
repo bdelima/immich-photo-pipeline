@@ -64,3 +64,86 @@ def test_a_photo_that_cannot_be_changed_is_refused(tmp_path):
     with pytest.raises(chat.ChatError) as e:
         watermark.add(store, "nope", "x", "y")
     assert e.value.status == 404
+
+
+# ---- identifying what is in the picture ---------------------------------------------------
+
+
+class FakeIdentifier:
+    def __init__(self, answer="Scarlet macaw", error=None):
+        self.answer, self.error, self.calls = answer, error, []
+
+    def identify(self, image_path, hint=None):
+        self.calls.append((image_path, hint))
+        if self.error:
+            raise RuntimeError(self.error)
+        return self.answer
+
+
+def _with_image(tmp_path, **kw):
+    from PIL import Image
+    from app.library import Revision
+    from app.revisions import RevisionStore
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    revisions = RevisionStore(str(tmp_path / "rev"))
+    img = tmp_path / "i.jpg"
+    Image.new("RGB", (8, 8)).save(img)
+    rel, sha = revisions.save_revision("p", 0, str(img))
+    p = photo(**kw)
+    p.revisions.append(Revision(n=0, parent=None, file=rel, sha256=sha))
+    p.current = 0
+    store.update(lambda lib: lib.photos.update(p=p))
+    return store, revisions
+
+
+def test_identify_names_the_current_image_and_cleans_the_answer(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    recipe = FakeIdentifier('  "Scarlet\n macaw" <b> ')
+    assert watermark.identify(store, revisions, recipe, "p", "  the bird ") == "'Scarlet macaw' b"
+    path, hint = recipe.calls[0]
+    assert path == revisions.path(store.load().photos["p"].revisions[0].file) and hint == "the bird"
+    assert watermark.identify(store, revisions, recipe, "p") and recipe.calls[1][1] is None
+    assert store.load().photos["p"].chat == []            # nothing is queued or changed
+
+
+def test_identify_is_refused_when_there_is_nothing_to_look_at(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    ok = FakeIdentifier()
+    for args, status in ((("nope",), 404), (("p", 5), 400), (("p", "x" * 81), 400)):
+        with pytest.raises(chat.ChatError) as e:
+            watermark.identify(store, revisions, ok, *args)
+        assert e.value.status == status
+    with pytest.raises(chat.ChatError) as e:
+        watermark.identify(store, revisions, None, "p")
+    assert e.value.status == 503
+    store.update_photo("p", lambda p: setattr(p, "trashed", True))
+    with pytest.raises(chat.ChatError):
+        watermark.identify(store, revisions, ok, "p")
+    assert ok.calls == []
+    (tmp_path / "v").mkdir()
+    store2, revisions2 = _with_image(tmp_path / "v", media_type="video")
+    with pytest.raises(chat.ChatError):
+        watermark.identify(store2, revisions2, ok, "p")
+
+
+def test_a_failed_identification_is_a_502_with_the_reason(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    with pytest.raises(chat.ChatError) as e:
+        watermark.identify(store, revisions, FakeIdentifier(error="Claude took too long to answer"), "p")
+    assert e.value.status == 502 and "too long" in str(e.value)
+
+
+def test_the_identify_route(tmp_path):
+    from app.rules import RulesStore
+    from app.thumbs import ThumbCache
+    from app.webui.server import create_app
+    store, revisions = _with_image(tmp_path)
+    recipe = FakeIdentifier()
+    client = create_app(None, None, store, None, rules=RulesStore(str(tmp_path / "r.json")), revisions=revisions,
+                        thumbs=ThumbCache(str(tmp_path / "th")), recipe=recipe).test_client()
+    assert client.post("/api/photos/p/identify", json={"hint": "the bird"}).get_json() == {"name": "Scarlet macaw"}
+    assert recipe.calls[0][1] == "the bird"
+    assert client.post("/api/photos/p/identify").status_code == 200
+    assert client.post("/api/photos/nope/identify", json={}).status_code == 404
+    bare = create_app(None, None, store, None, revisions=revisions, thumbs=ThumbCache(str(tmp_path / "th"))).test_client()
+    assert bare.post("/api/photos/p/identify", json={}).status_code == 503

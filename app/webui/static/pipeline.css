@@ -187,4 +187,6 @@ button.orig .ph { color: var(--muted); font-size: .8rem; }
 #viewer .wm { padding: .4rem 1.1rem; }
 #viewer .wm label { display: block; font-size: .8rem; margin-top: .5rem; }
 #viewer .wm .field { display: block; width: 100%; margin-top: .2rem; }
-#viewer .wm .row { display: flex; gap: .5rem; margin-top: .6rem; }
+#viewer .wm .row { display: flex; gap: .5rem; margin-top: .6rem; align-items: center; }
+#viewer .wm .ident { margin-top: .8rem; padding-top: .2rem; border-top: 1px solid rgba(128,128,128,.25); }
+#viewer .wm select.field { display: block; width: 100%; margin-top: .2rem; }

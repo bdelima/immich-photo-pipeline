@@ -135,7 +135,7 @@ def main() -> None:
 
     app = create_app(
         cfg, immich, store, health, rules=rules, revisions=revisions, thumbs=ThumbCache(cfg.thumbs_path),
-        on_change=poll_wake.set, on_job=worker.wake,
+        on_change=poll_wake.set, on_job=worker.wake, recipe=recipe,
     )
     app.run(host=cfg.webui_host, port=cfg.webui_port)
 
