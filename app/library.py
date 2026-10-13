@@ -163,9 +163,10 @@ class Photo:
     # True if there is no original to reprocess from (a photo that was
     # already finished when the pipeline first saw it).
     imported: bool = False
-    # The lines of the last watermark asked for ({"title", "subtitle", "third"}),
-    # so the watermark form can start from it next time (see watermark.py).
-    last_watermark: dict[str, str] | None = None
+    # The last watermark asked for: its lines ({"title", "subtitle", "third"}) and the
+    # pieces and ticks they were made from ("pieces", a list), so the watermark form
+    # can start from it next time (see watermark.py).
+    last_watermark: dict | None = None
     created_at: str = field(default_factory=now_iso)
 
     # ---- revisions -------------------------------------------------------
