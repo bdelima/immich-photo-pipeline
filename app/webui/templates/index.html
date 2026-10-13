@@ -334,7 +334,8 @@ async function openViewer(i) {
     (p.question ? `<p class="aside-note">Claude asks: ${esc(p.question)}</p>` : "") +
     `<h4>History</h4><div class="hist">${hist}</div>` +
     (p.legacy_notes.length ? `<h4>Earlier notes</h4><ul class="meta" style="margin:0 1.1rem .5rem;padding-left:1.1rem">${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
-    `<div class="changes"><h4>Ask Claude to change it</h4>${chat}</div>`;
+    `<div class="changes"><h4>Ask Claude to change it</h4>${p.chat_blocked ? "" : watermarkForm(p.watermark)}${chat}</div>`;
+  wireWatermark(p.id);
   for (const b of $("panel").querySelectorAll("[data-orig]")) b.onclick = () => showOriginal(p.id, +b.dataset.orig, b.dataset.type);
   for (const b of $("panel").querySelectorAll("[data-revert]")) b.onclick = () => revertTo(p.id, +b.dataset.revert);
   for (const b of $("panel").querySelectorAll("[data-decide]")) b.onclick = () => decide(p.proposal.id, p.id, b.dataset.decide === "1");
@@ -371,6 +372,33 @@ function originalDetails(sources) {
   if (blocks) return blocks;
   return sources.length && sources.every(s => s.meta && s.meta.unavailable)
     ? `<p class="meta aside-note">No details of the original: Immich no longer has it.</p>` : "";
+}
+// The watermark builder: two lines, seeded from the original's details, that
+// the reviewer can change before asking Claude to add them as a new step.
+function watermarkForm(w) {
+  return `<div class="wm"><button class="btn sec sm" id="wmOpen">Add a watermark…</button>` +
+    `<div id="wmForm" hidden><label>Title<input class="field" id="wmTitle" maxlength="120" value="${esc(w.title)}"></label>` +
+    `<label>Underneath<input class="field" id="wmSub" maxlength="120" value="${esc(w.subtitle)}"></label>` +
+    `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button></div></div></div>`;
+}
+function wireWatermark(id) {
+  const open = $("wmOpen"); if (!open) return;
+  const form = $("wmForm");
+  const toggle = show => { form.hidden = !show; open.hidden = show; };
+  open.onclick = () => { toggle(true); $("wmTitle").focus(); };
+  $("wmCancel").onclick = () => toggle(false);
+  $("wmSend").onclick = async () => {
+    $("wmSend").disabled = true;
+    const r = await fetch("/api/photos/" + id + "/watermark", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: $("wmTitle").value, subtitle: $("wmSub").value }) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) { say(out.error || "That didn't send.", true); $("wmSend").disabled = false; return; }
+    say("Watermark requested.");
+    toggle(false); $("wmSend").disabled = false;
+    const p = await api("/api/photos/" + id), log = $("chatlog");
+    if (log) { log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight; }
+    watchChat(id);
+  };
 }
 // The original, full size, over the photo view. Click it, or press Esc, to close.
 function showOriginal(id, index, type) {
