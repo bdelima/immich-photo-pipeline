@@ -380,6 +380,39 @@ class RecipeRunner:
             log.warning("comment interpretation returned unparseable output")
             return None
 
+    def identify(self, image_path: str, hint: str | None = None) -> str:
+        """Asks Claude to name what is in a picture: the main subject, or what
+        the reviewer pointed at with `hint`. Returns a short name. Raises
+        RuntimeError if the call fails or the reply is unusable. Read-only:
+        nothing about the photo changes."""
+        what = f"this: {hint}" if hint else "the main subject"
+        prompt = (
+            f"Look at the image at {image_path} and name {what}. Be specific but brief: a common name of at "
+            "most six words (for example \"Scarlet macaw\" or \"Brick lighthouse\"), with no sentence around it. "
+            'If you cannot tell, name your best guess. Reply with ONLY this JSON and no other text: {"name": "<the name>"}'
+        )
+        token = resolve_oauth_token(self._secrets_file)
+        env = os.environ.copy()
+        if token:
+            env[ENV_TOKEN_VAR] = token
+        cmd = [self._claude_binary, "-p", prompt, "--output-format", "json", "--permission-mode", _PERMISSION_MODE]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Claude took too long to answer")
+        except FileNotFoundError:
+            raise RuntimeError(f"{self._claude_binary} not found on PATH")
+        if proc.returncode != 0:
+            raise RuntimeError(f"claude invocation failed ({proc.returncode}): {(proc.stderr or '')[:300]}")
+        try:
+            payload = _extract_json_object(json.loads(proc.stdout).get("result", ""))
+        except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
+            raise RuntimeError("Claude's answer could not be read")
+        name = _text(payload, "name")
+        if not name:
+            raise RuntimeError("Claude did not name anything")
+        return name
+
     def check_auth(self) -> tuple[bool, str | None]:
         """A cheap, trivial invocation used purely to confirm a session can
         be established -- not a real recipe run. Only the exit code is
