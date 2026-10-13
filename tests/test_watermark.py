@@ -136,7 +136,7 @@ def test_a_retry_passes_the_earlier_answers_so_it_can_differ(tmp_path):
     watermark.identify(store, revisions, recipe, "p")
     watermark.identify(store, revisions, recipe, "p", None, "subject", [' Old "one" ', "", "Two"])
     watermark.identify(store, revisions, recipe, "p", None, "subject", [str(i) for i in range(30)])
-    assert recipe.avoids[0] is None and recipe.avoids[1] == ["Old 'one'", "Two"]
+    assert recipe.avoids[0] is None and recipe.avoids[1] == ["Scarlet macaw", "Old 'one'", "Two"]   # what it said before, then the page's
     assert len(recipe.avoids[2]) == watermark.MAX_AVOID and recipe.avoids[2][-1] == "29"
     for bad in ("Two", [1], {"a": 1}):
         with pytest.raises(chat.ChatError) as e:
@@ -192,7 +192,7 @@ def test_the_identify_route(tmp_path):
     assert client.post("/api/photos/p/identify").status_code == 200
     assert client.post("/api/photos/p/identify", json={"style": "title"}).status_code == 200
     client.post("/api/photos/p/identify", json={"avoid": ["Old"]})
-    assert recipe.avoids[-1] == ["Old"]
+    assert recipe.avoids[-1] == ["Scarlet macaw", "Old"]
     assert client.post("/api/photos/p/identify", json={"avoid": "Old"}).status_code == 400
     assert client.post("/api/photos/p/identify", json={"style": "limerick"}).status_code == 400
     assert client.post("/api/photos/nope/identify", json={}).status_code == 404
@@ -285,3 +285,29 @@ def test_an_older_library_without_the_field_still_loads():
     raw = library_to_dict(lib)
     del raw["photos"]["p"]["last_watermark"]
     assert library_from_dict(raw).photos["p"].last_watermark is None
+
+
+def test_suggestions_are_remembered_on_the_photo_so_a_later_ask_differs(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    recipe = FakeIdentifier(["One", "Two", "Three"])
+    watermark.identify(store, revisions, recipe, "p", None, "title")
+    assert store.load().photos["p"].suggestions == {"title": ["One", "Two", "Three"]}
+    # asked again later (a fresh page sends no earlier answers): the saved ones are passed along
+    recipe.answer = ["Four"]
+    watermark.identify(store, revisions, recipe, "p", None, "title")
+    assert recipe.avoids[-1] == ["One", "Two", "Three"]
+    # the two kinds are kept apart, and only the last 15 are kept
+    watermark.identify(store, revisions, FakeIdentifier("Macaw"), "p", None, "subject")
+    saved = store.load().photos["p"].suggestions
+    assert saved["subject"] == ["Macaw"] and saved["title"] == ["One", "Two", "Three", "Four"]
+    many = FakeIdentifier([f"t{i}" for i in range(20)])
+    watermark.identify(store, revisions, many, "p", None, "title")
+    assert store.load().photos["p"].suggestions["title"] == [f"t{i}" for i in range(5, 20)]
+    assert watermark.MAX_AVOID == 15
+
+
+def test_a_library_without_suggestions_still_loads():
+    from app.library import library_from_dict, library_to_dict, Library
+    raw = library_to_dict(Library(photos={"p": photo()}))
+    del raw["photos"]["p"]["suggestions"]
+    assert library_from_dict(raw).photos["p"].suggestions == {}
