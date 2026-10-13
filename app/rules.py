@@ -19,7 +19,9 @@ Lifecycle of a rule:
 Only `active` rules are ever injected. Ids (r1, r2, ...) are never reused.
 
 Scope decides which runs a rule is injected into: "single" (one photo),
-"collage" (a multi-photo collage), or "all".
+"collage" (a multi-photo collage), or "all" of those; or "imported", which is
+only for edits to imported (already finished) photos and never reaches the
+matting recipe.
 """
 from __future__ import annotations
 
@@ -33,8 +35,8 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
-SCOPES = ("all", "single", "collage")
-SCOPE_LABELS = {"all": "all photos", "single": "single photos", "collage": "collages"}
+SCOPES = ("all", "single", "collage", "imported")
+SCOPE_LABELS = {"all": "all photos", "single": "single photos", "collage": "collages", "imported": "imported photos"}
 MAX_ACTIVE_RULES = 20
 MAX_RULE_CHARS = 300
 
@@ -151,8 +153,10 @@ class RulesStore:
 
     def active_texts(self, kind: str) -> list[str]:
         """Texts of the active rules that apply to a run of `kind`
-        ("single" or "collage"), oldest first."""
-        return [r.text for r in self.all() if r.status == "active" and r.scope in ("all", kind)]
+        ("single" or "collage"; "imported" for an edit of an imported photo,
+        which takes only the rules made for those), oldest first."""
+        wanted = (kind,) if kind == "imported" else ("all", kind)
+        return [r.text for r in self.all() if r.status == "active" and r.scope in wanted]
 
     def pending_proposal_for(self, asset_id: str) -> Rule | None:
         return next(

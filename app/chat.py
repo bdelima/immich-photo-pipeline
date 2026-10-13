@@ -6,6 +6,9 @@ message means (see RecipeRunner.interpret_comment) and acts on it:
 
   revise          re-run the recipe from the originals with every earlier
                   instruction replayed, and save the result as a new revision
+                  (an imported photo has no originals: Claude edits the image
+                  it came in as, with the earlier instructions replayed, and
+                  without the matting recipe)
   answer          reply to a question the recipe asked about the photo
   undo            take back the last adjustment(s), as a revert (no Claude
                   call beyond the interpretation)
@@ -71,8 +74,6 @@ def blocked_reason(photo: Photo) -> str | None:
         return "It is in the trash. Restore it to work on it."
     if photo.media_type == "video":
         return "Videos are kept exactly as they were added; they can't be modified."
-    if photo.imported:
-        return "This photo was already finished when it was imported, so it can't be modified."
     if photo.status == STATUS_PROCESSING:
         return "It is still being processed."
     if photo.status == STATUS_WAITING:
@@ -237,6 +238,7 @@ def _handle(
         rules=active_rules,
         proposal=proposal,
         history=photo.instructions(),
+        imported=photo.imported,
     )
     intent = recipe.interpret_comment(message.text, ctx)
     if intent is None:
@@ -291,23 +293,34 @@ def _rules_for(rules: RulesStore | None, photo: Photo) -> list[str]:
     if rules is None:
         return []
     try:
-        return rules.active_texts("collage" if photo.kind == "collage" else "single")
+        return rules.active_texts("imported" if photo.imported else "collage" if photo.kind == "collage" else "single")
     except Exception:
         log.exception("could not read reviewer rules; revising without them")
         return []
+
+
+def _first_image_path(photo: Photo, revisions: RevisionStore) -> str:
+    """The image an imported photo came in as (step 0): what every edit of it
+    starts from, since there is no original to reprocess."""
+    first = photo.revision_at_step(0)
+    if first is None or not first.file or not revisions.exists(first.file):
+        raise RuntimeError("the imported image is not in the store, so it can't be edited")
+    return revisions.path(first.file)
 
 
 def _revise(
     store: LibraryStore, revisions: RevisionStore, recipe: RecipeRunner, rules: RulesStore | None,
     photo: Photo, message: ChatMessage,
 ) -> bool:
-    paths = _source_paths(photo, revisions)
+    paths = [_first_image_path(photo, revisions)] if photo.imported else _source_paths(photo, revisions)
     active = _rules_for(rules, photo)
     note = note_with_history(bounded_history(photo.instructions()), message.text)
     tmp = tempfile.mkdtemp(prefix="pipeline-chat-")
     try:
         out = os.path.join(tmp, "output.jpg")
-        if photo.kind == "collage":
+        if photo.imported:
+            result = recipe.run_edit(paths[0], out, note, rules=active)
+        elif photo.kind == "collage":
             result = recipe.run_collage(paths, out, note=note, rules=active)
         else:
             result = recipe.run_single(paths[0], out, note=note, rules=active)
@@ -383,7 +396,7 @@ def _propose(store: LibraryStore, rules: RulesStore, photo: Photo, result: Recip
     becomes active when the reviewer accepts it."""
     try:
         rules.add(
-            result.lesson, result.lesson_scope, status="proposed", origin="proposed",
+            result.lesson, "imported" if photo.imported else result.lesson_scope, status="proposed", origin="proposed",
             lineage_id=photo.id, source_asset_id=photo.id,
         )
     except (ValueError, RulesFull):
