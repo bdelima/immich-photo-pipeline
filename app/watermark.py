@@ -97,13 +97,26 @@ def clean_pieces(pieces) -> list[dict] | None:
     return out
 
 
+def _remembered(photo: Photo) -> dict | None:
+    """The watermark the form should start from: the one made at the step now showing, or else at
+    the nearest earlier step that made the image (a revert shows the one of the step it reverts
+    to). A photo none of whose steps carries one (watermarked before this was kept per step) uses
+    the last one asked for. None means the template."""
+    for rev in reversed(photo.lineage()):
+        if rev.watermark:
+            return rev.watermark
+    if not any(r.watermark for r in photo.revisions):
+        return photo.last_watermark
+    return None
+
+
 def starting_point(photo: Photo) -> dict:
     """What the watermark form starts with: the last watermark asked for on
     this photo if there was one, otherwise the template from the original's
     details. `remembered` says which. `pieces` is what the form's fields and
     tick boxes hold: the four fixed ones (title, location, author, date) and any
     others that were added, each with the lines it is ticked for."""
-    last = photo.last_watermark
+    last = _remembered(photo)
     if isinstance(last, dict) and any(last.get(k) for k in ("title", "subtitle", "third")):
         saved = clean_pieces(last.get("pieces")) if isinstance(last.get("pieces"), list) else None
         if saved is None:
@@ -264,9 +277,9 @@ def add(store: LibraryStore, photo_id: str, title, subtitle, third=None, pieces=
     are remembered on the photo, with the pieces and ticks they were made from."""
     text = instruction(title, subtitle, third)
     cleaned = clean_pieces(pieces)
-    message_id = chat.enqueue(store, photo_id, text)
     last = {"title": _line(title, "title"), "subtitle": _line(subtitle, "second line"), "third": _line(third, "third line")}
     if cleaned is not None:
         last["pieces"] = cleaned
+    message_id = chat.enqueue(store, photo_id, text, watermark=last)
     store.update_photo(photo_id, lambda p: setattr(p, "last_watermark", last))
     return message_id

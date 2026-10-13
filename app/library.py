@@ -88,6 +88,9 @@ class Revision:
     # instruction is None; the instructions that produced the image are
     # those of the revision it reverts to (see Photo.lineage).
     reverts_to: int | None = None
+    # For a watermark: what was asked for ({"title", "subtitle", "third", "pieces"}), so the
+    # watermark form can start from it again while this step is what is showing (see watermark.py).
+    watermark: dict | None = None
 
 
 # States of a reviewer's chat message (see chat.py).
@@ -107,6 +110,8 @@ class ChatMessage:
     text: str
     state: str = CHAT_DONE
     at: str = field(default_factory=now_iso)
+    # For a watermark request: the form it was made from, which the revision it makes keeps.
+    watermark: dict | None = None
 
 
 @dataclass
@@ -152,6 +157,8 @@ class Photo:
     # While status is awaiting_answer after a revision request: that request,
     # which the answered revision records as its instruction.
     pending_instruction: str | None = None
+    # The watermark form that went with pending_instruction, if it was a watermark.
+    pending_watermark: dict | None = None
     # The photo's chat, oldest first (see chat.py).
     chat: list[ChatMessage] = field(default_factory=list)
     # While status is failed.
