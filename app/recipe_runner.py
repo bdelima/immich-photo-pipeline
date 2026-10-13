@@ -380,17 +380,28 @@ class RecipeRunner:
             log.warning("comment interpretation returned unparseable output")
             return None
 
-    def identify(self, image_path: str, hint: str | None = None) -> str:
-        """Asks Claude to name what is in a picture: the main subject, or what
-        the reviewer pointed at with `hint`. Returns a short name. Raises
-        RuntimeError if the call fails or the reply is unusable. Read-only:
-        nothing about the photo changes."""
-        what = f"this: {hint}" if hint else "the main subject"
-        prompt = (
-            f"Look at the image at {image_path} and name {what}. Be specific but brief: a common name of at "
-            "most six words (for example \"Scarlet macaw\" or \"Brick lighthouse\"), with no sentence around it. "
-            'If you cannot tell, name your best guess. Reply with ONLY this JSON and no other text: {"name": "<the name>"}'
-        )
+    def identify(self, image_path: str, hint: str | None = None, style: str = "subject") -> str:
+        """Asks Claude to look at a picture and answer in a few words. With
+        style "subject" it names the main subject, or what the reviewer
+        pointed at with `hint`; with "title" it gives the picture a short
+        poetic title, the way a painting is named (`hint` says what to focus
+        on). Returns the text. Raises RuntimeError if the call fails or the
+        reply is unusable. Read-only: nothing about the photo changes."""
+        if style == "title":
+            focus = f" Let this guide the title: {hint}." if hint else ""
+            ask = (
+                f"Look at the image at {image_path} and give it a title, the way you would name a painting: "
+                "as few words as possible (two to five), poetic and evocative rather than descriptive, "
+                f"with no sentence around it (for example \"Wings at Dusk\" or \"The Quiet Harbor\").{focus} "
+            )
+        else:
+            what = f"this: {hint}" if hint else "the main subject"
+            ask = (
+                f"Look at the image at {image_path} and name {what}. Be specific but brief: a common name of at "
+                "most six words (for example \"Scarlet macaw\" or \"Brick lighthouse\"), with no sentence around it. "
+                "If you cannot tell, name your best guess. "
+            )
+        prompt = ask + 'Reply with ONLY this JSON and no other text: {"name": "<the text>"}'
         token = resolve_oauth_token(self._secrets_file)
         env = os.environ.copy()
         if token:
