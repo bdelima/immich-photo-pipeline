@@ -73,8 +73,9 @@ class FakeIdentifier:
     def __init__(self, answer="Scarlet macaw", error=None):
         self.answer, self.error, self.calls = answer, error, []
 
-    def identify(self, image_path, hint=None):
+    def identify(self, image_path, hint=None, style="subject"):
         self.calls.append((image_path, hint))
+        self.styles = getattr(self, "styles", []) + [style]
         if self.error:
             raise RuntimeError(self.error)
         return self.answer
@@ -104,6 +105,21 @@ def test_identify_names_the_current_image_and_cleans_the_answer(tmp_path):
     assert path == revisions.path(store.load().photos["p"].revisions[0].file) and hint == "the bird"
     assert watermark.identify(store, revisions, recipe, "p") and recipe.calls[1][1] is None
     assert store.load().photos["p"].chat == []            # nothing is queued or changed
+
+
+def test_identify_can_be_asked_for_a_poetic_title_instead_of_a_name(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    recipe = FakeIdentifier("Wings at Dusk")
+    assert watermark.identify(store, revisions, recipe, "p", "the light", "title") == "Wings at Dusk"
+    assert watermark.identify(store, revisions, recipe, "p") and recipe.styles == ["title", "subject"]
+    with pytest.raises(chat.ChatError) as e:
+        watermark.identify(store, revisions, recipe, "p", None, "haiku")
+    assert e.value.status == 400 and len(recipe.calls) == 2
+
+
+def test_the_pieces_the_builder_can_place_come_from_the_originals_details():
+    assert watermark.parts(photo()) == {"place": "Playa Hermosa, Costa Rica", "owner": "Bob", "date": "March 2024"}
+    assert watermark.parts(Photo(id="p")) == {"place": "", "owner": "", "date": ""}
 
 
 def test_identify_is_refused_when_there_is_nothing_to_look_at(tmp_path):
@@ -144,6 +160,8 @@ def test_the_identify_route(tmp_path):
     assert client.post("/api/photos/p/identify", json={"hint": "the bird"}).get_json() == {"name": "Scarlet macaw"}
     assert recipe.calls[0][1] == "the bird"
     assert client.post("/api/photos/p/identify").status_code == 200
+    assert client.post("/api/photos/p/identify", json={"style": "title"}).status_code == 200
+    assert client.post("/api/photos/p/identify", json={"style": "limerick"}).status_code == 400
     assert client.post("/api/photos/nope/identify", json={}).status_code == 404
     bare = create_app(None, None, store, None, revisions=revisions, thumbs=ThumbCache(str(tmp_path / "th"))).test_client()
     assert bare.post("/api/photos/p/identify", json={}).status_code == 503
