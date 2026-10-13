@@ -468,10 +468,10 @@ function wireWatermark(id, w) {
   // A location keeps its full text in `raw`; `text` leaves off the home country.
   // When the form starts from the last watermark, the pieces start unticked so
   // they do not contradict the lines that are already filled in.
-  const parts = w.parts || {}, fresh = !w.remembered;
+  const parts = w.parts || {}, fromTemplate = !w.remembered;
   let home = "";
   const items = [["Location (Immich)", parts.place, true, false, false, true], ["Owner", parts.owner, false, true, false, false], ["Date", parts.date, false, true, false, false]]
-    .filter(x => x[1]).map(([label, raw, t, u, v, loc]) => ({ label, raw, text: raw, t: t && fresh, u: u && fresh, v: v && fresh, loc, fixed: true }));
+    .filter(x => x[1]).map(([label, raw, t, u, v, loc]) => ({ label, raw, text: raw, t: t && fromTemplate, u: u && fromTemplate, v: v && fromTemplate, loc, fixed: true }));
   // Each line is rebuilt from its ticked pieces only when one of its own boxes
   // changes, so whatever was typed into the other lines is kept.
   const lines = { t: ["wmTitle", " – "], u: ["wmSub", " · "], v: ["wmThird", " · "] };
@@ -548,10 +548,12 @@ function wireWatermark(id, w) {
         const firstTime = !items.some(x => x.label === label);
         refresh(() => {
           for (const o of items) if (o.label === label) o.t = false;
-          if (firstTime) for (const o of items) if (o.fixed) { if (o.t) { o.t = false; o.u = true; } else if (o.u) { o.u = false; o.v = true; } }
+          if (firstTime && fromTemplate) for (const o of items) if (o.fixed) { if (o.t) { o.t = false; o.u = true; } else if (o.u) { o.u = false; o.v = true; } }
           items.unshift(...fresh); items.length = Math.min(items.length, 20);
         });
-        for (const k of ["t", "u", "v"]) if (firstTime || k === "t") compose(k);
+        // Lines 2 and 3 are only rebuilt when the pieces just moved down a line; a form that
+        // started from the last watermark has them filled in already, so only the title changes.
+        for (const k of ["t", "u", "v"]) if ((firstTime && fromTemplate) || k === "t") compose(k);
         saw.textContent = "Claude suggests: " + names.join(" / ") + " – the first is the title; tick another to switch.";
       } else {
         refresh(() => { for (const text of names) if (items.length < 20) items.push({ label, text, raw: text, t: false, u: false, v: false }); });
