@@ -187,6 +187,23 @@ async function act(path, payload, what, viewerId) {
   }
   return out;
 }
+// Moving a photo from its own view takes you with it: the place it was moved
+// to opens with the photo still in front of you, instead of the view closing.
+async function moveAndFollow(id, home) {
+  const r = await fetch("/api/photos/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [id], home }) });
+  const out = await r.json();
+  if (!r.ok) { say(out.error || "That didn't work.", true); return; }
+  if (!out.done.includes(id)) { say("Not moved: " + out.skipped.map(s => s.reason).join("; "), true); return; }
+  const t = await api("/api/tree");
+  const want = home.toLowerCase();
+  const album = t.albums.find(a => a.name.toLowerCase() === want);
+  const dest = want === "review" ? "review" : album ? album.view : view;
+  if (dest !== view) history.replaceState(null, "", viewHash(dest));
+  await select(dest, false, true);
+  say("Moved to " + home);
+  const i = list.findIndex(x => x.id === id);
+  if (i >= 0) openViewer(i); else closeViewer();
+}
 const ids = () => [...selected];
 const promote = live => act("/api/photos/promote", { ids: ids(), live }, live ? "Added to Live" : "Removed from Live");
 const trashSel = () => act("/api/photos/trash", { ids: ids() }, "Trashed");
@@ -293,8 +310,7 @@ async function openViewer(i) {
   else {
     $("vLive").onclick = () => run("/api/photos/promote", p.live ? "Removed from Live" : "Added to Live");
     $("vTrash").onclick = () => run("/api/photos/trash", "Trashed");
-    $("vMove").onclick = e => openMenu(e.currentTarget, moveItems([p]), home =>
-      act("/api/photos/move", { ids: [p.id], home }, "Moved to " + home, p.id));
+    $("vMove").onclick = e => openMenu(e.currentTarget, moveItems([p]), home => moveAndFollow(p.id, home));
   }
   $("stage").innerHTML = (!p.has_image ? `<div class="meta" style="color:#93a0ba">No image yet</div>` : p.media_type === "video"
     ? `<video controls autoplay src="/media/${p.id}/full"></video>`
