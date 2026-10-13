@@ -52,7 +52,9 @@ def instruction(title, subtitle) -> str:
     return (
         "Add a small, tasteful watermark to this photo only (this is not a standing rule): "
         + " and ".join(x.strip() for x in lines if x)
-        + ". Put it where it does not cover the subject and stays readable against the photo. "
+        + ". Put it in the lower right corner, unless that would cover the subject; then use the nearest "
+        "corner that does not. Set it in Arial, with a soft shadow and a slight highlight so the text looks "
+        "a little 3D, and keep it readable against the photo. "
         "Do not change anything else about the photo."
     )
 
