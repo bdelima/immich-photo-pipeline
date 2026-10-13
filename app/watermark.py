@@ -154,12 +154,23 @@ def instruction(title, subtitle, third=None) -> str:
 
 
 MAX_HINT = 80
-MAX_AVOID = 12
+MAX_AVOID = 15
 STYLES = ("subject", "title")
 
 
 def _clean(text: str) -> str:
     return " ".join(text.replace('"', "'").replace("<", "").replace(">", "").split())
+
+
+def _recent(texts: list) -> list[str]:
+    """The last MAX_AVOID different, non-empty texts, the newest kept when one repeats."""
+    out: list[str] = []
+    for t in texts:
+        if isinstance(t, str) and t:
+            if t in out:
+                out.remove(t)
+            out.append(t)
+    return out[-MAX_AVOID:]
 
 
 def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None, style="subject", avoid=None) -> list[str]:
@@ -190,7 +201,8 @@ def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None, s
         raise chat.ChatError(f"the hint is at most {MAX_HINT} characters; this one is {len(hint)}")
     if avoid is not None and (not isinstance(avoid, list) or not all(isinstance(a, str) for a in avoid)):
         raise chat.ChatError("the earlier answers must be a list of text")
-    earlier = [a for a in (_clean(a)[:MAX_LINE] for a in avoid or []) if a][-MAX_AVOID:]
+    kept = photo.suggestions.get(style) if isinstance(photo.suggestions, dict) else None
+    earlier = _recent((kept if isinstance(kept, list) else []) + [_clean(a)[:MAX_LINE] for a in avoid or []])
     try:
         found = recipe.identify(path, hint or None, style, earlier or None)
     except RuntimeError as exc:
@@ -202,6 +214,15 @@ def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None, s
             names.append(name)
     if not names:
         raise chat.ChatError("Claude did not name anything", 502)
+    # Remember them on the photo (the last MAX_AVOID per style), so a later ask differs even
+    # after the photo was closed and opened again.
+    def remember(p: Photo) -> None:
+        old = p.suggestions if isinstance(p.suggestions, dict) else {}
+        p.suggestions = {**old, style: _recent((old.get(style) if isinstance(old.get(style), list) else []) + names)}
+    try:
+        store.update_photo(photo_id, remember)
+    except KeyError:
+        pass
     return names
 
 

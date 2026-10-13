@@ -167,6 +167,9 @@ class Photo:
     # pieces and ticks they were made from ("pieces", a list), so the watermark form
     # can start from it next time (see watermark.py).
     last_watermark: dict | None = None
+    # The last suggestions Claude made for the watermark ("subject" and "title" -> up to
+    # 15 each), kept so asking again, even after the photo was closed, gives new ones.
+    suggestions: dict = field(default_factory=dict)
     created_at: str = field(default_factory=now_iso)
 
     # ---- revisions -------------------------------------------------------
