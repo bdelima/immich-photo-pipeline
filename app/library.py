@@ -55,6 +55,10 @@ class Source:
     file: str = ""
     name: str = ""
     owner_id: str = ""
+    # What Immich knew about the original when it was copied: date, place and
+    # owner (see metadata.py). Empty until fetched; {"unavailable": True} when
+    # Immich no longer has the asset, so it is not asked again.
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
