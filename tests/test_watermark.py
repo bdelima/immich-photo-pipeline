@@ -6,6 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 
 from app import chat, watermark
+from test_chat import FakeRecipe, build, add_photo, run
+from app.recipe_runner import CommentIntent, RecipeResult
 from app.library import LibraryStore, Photo, Source
 
 
@@ -311,3 +313,76 @@ def test_a_library_without_suggestions_still_loads():
     raw = library_to_dict(Library(photos={"p": photo()}))
     del raw["photos"]["p"]["suggestions"]
     assert library_from_dict(raw).photos["p"].suggestions == {}
+
+
+# ---- remembered per step ---------------------------------------------------------------------
+
+
+def _stepped():
+    """Step 0 plain, step 1 watermarked 'One', step 2 a plain change, step 3 watermarked 'Two'."""
+    from app.library import Revision
+    p = photo()
+    for n, wm in enumerate([None, "One", None, "Two"]):
+        p.revisions.append(Revision(n=n, parent=n - 1 if n else None, file=f"f{n}", instruction="x" if n else None,
+                                    watermark={"title": wm, "subtitle": "", "third": ""} if wm else None))
+    p.current = 3
+    return p
+
+
+def test_the_form_starts_from_the_watermark_of_the_step_showing():
+    p = _stepped()
+    assert watermark.starting_point(p)["title"] == "Two"
+    p.current = 2                                       # a plain step after 'One': nearest earlier watermark
+    assert watermark.starting_point(p)["title"] == "One"
+    p.current = 0                                       # before any watermark: the template
+    got = watermark.starting_point(p)
+    assert got["remembered"] is False and got["title"] == "Playa Hermosa, Costa Rica"
+
+
+def test_a_revert_shows_the_watermark_of_the_step_it_reverts_to():
+    p = _stepped()
+    p.add_revert(1, "f4")                               # now showing step 4, a copy of step 1
+    assert watermark.starting_point(p)["title"] == "One"
+    p.add_revert(0, "f5")                               # a copy of the plain first result
+    assert watermark.starting_point(p)["remembered"] is False
+
+
+def test_a_photo_watermarked_before_steps_kept_theirs_uses_the_last_one_asked_for():
+    from app.library import Revision
+    p = photo(last_watermark={"title": "Old", "subtitle": "", "third": ""})
+    p.revisions.append(Revision(n=0, parent=None, file="f0")); p.current = 0
+    assert watermark.starting_point(p)["title"] == "Old"
+
+
+# ---- a watermark request is kept on the step it makes -----------------------------------------
+
+
+def _wm(title):
+    return {"title": title, "subtitle": "", "third": "", "pieces": [
+        {"key": "title", "label": "Title", "text": title, "t": True, "u": False, "v": False}]}
+
+
+def test_a_watermark_request_is_kept_on_the_step_it_makes(tmp_path):
+    store, revisions, recipe, rules = build(tmp_path)
+    add_photo(tmp_path, store, revisions, steps=("first", "crop"))
+    chat.enqueue(store, "a", "add a watermark", watermark=_wm("Dusk"))
+    assert run(store, revisions, recipe, rules) is True
+    photo = store.load().photos["a"]
+    assert photo.current_revision().watermark == _wm("Dusk") and photo.revisions[1].watermark is None
+    chat.enqueue(store, "a", "make it warmer")                       # an ordinary step carries none
+    run(store, revisions, recipe, rules)
+    assert store.load().photos["a"].current_revision().watermark is None
+
+
+def test_a_watermark_asked_through_a_question_still_reaches_its_step(tmp_path):
+    ask = RecipeResult(status="needs_clarification", question="Which corner?", session_id="s1")
+    store, revisions, recipe, rules = build(tmp_path, FakeRecipe(results=[ask]))
+    add_photo(tmp_path, store, revisions)
+    chat.enqueue(store, "a", "add a watermark", watermark=_wm("Dusk"))
+    assert run(store, revisions, recipe, rules) is False
+    assert store.load().photos["a"].pending_watermark == _wm("Dusk")
+    recipe.intent = CommentIntent("answer")
+    chat.enqueue(store, "a", "the left one")
+    assert run(store, revisions, recipe, rules) is True
+    photo = store.load().photos["a"]
+    assert photo.current_revision().watermark == _wm("Dusk") and photo.pending_watermark is None

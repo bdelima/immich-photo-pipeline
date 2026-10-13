@@ -118,10 +118,11 @@ def clean_text(text) -> str:
     return cleaned
 
 
-def enqueue(store: LibraryStore, photo_id: str, text) -> int:
+def enqueue(store: LibraryStore, photo_id: str, text, watermark: dict | None = None) -> int:
     """Records a reviewer's message, queued for the worker. Returns its id.
     Raises ChatError if the photo can't be changed or the message is not
-    acceptable."""
+    acceptable. A watermark request passes the form it was made from, which
+    the step it makes keeps."""
     cleaned = clean_text(text)
 
     def add(library) -> int:
@@ -133,7 +134,9 @@ def enqueue(store: LibraryStore, photo_id: str, text) -> int:
             raise ChatError(why)
         if len(photo.open_messages()) >= MAX_QUEUED:
             raise ChatError("Too many messages are waiting; let it catch up first.", 429)
-        return _append(photo, "user", cleaned, CHAT_QUEUED).id
+        message = _append(photo, "user", cleaned, CHAT_QUEUED)
+        message.watermark = watermark
+        return message.id
 
     return store.update(add)
 
@@ -330,18 +333,19 @@ def _revise(
                 p.question = result.question or "Need more information to proceed."
                 p.session_id = result.session_id
                 p.pending_instruction = message.text
+                p.pending_watermark = message.watermark
                 _append(p, "claude", p.question, CHAT_DONE)
 
             store.update_photo(photo.id, ask)
             return False
-        return _save_result(store, revisions, rules, photo, result, message.text, active)
+        return _save_result(store, revisions, rules, photo, result, message.text, active, message.watermark)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _save_result(
     store: LibraryStore, revisions: RevisionStore, rules: RulesStore | None, photo: Photo,
-    result: RecipeResult, instruction: str | None, active: list[str],
+    result: RecipeResult, instruction: str | None, active: list[str], watermark: dict | None = None,
 ) -> bool:
     """Stores a finished image as the photo's next revision (or, for a photo
     that has none yet, its first) and tells the reviewer."""
@@ -358,10 +362,12 @@ def _save_result(
         p.revisions.append(Revision(
             n=n, parent=p.current, file=rel, instruction=None if first else instruction,
             rules=list(active), session_id=result.session_id, sha256=digest, origin="processed",
+            watermark=None if first else watermark,
         ))
         p.current = n
         p.question = None
         p.pending_instruction = None
+        p.pending_watermark = None
         if first:
             # The first result: the worker publishes it and takes the
             # originals out of the entry queue, as for any new photo.
@@ -418,6 +424,7 @@ def _answer(
         raise RuntimeError("there is no open question to answer")
     first = photo.current_revision() is None
     instruction = photo.pending_instruction
+    watermark = photo.pending_watermark
     tmp = tempfile.mkdtemp(prefix="pipeline-chat-")
     try:
         out = os.path.join(tmp, "output.jpg")
@@ -430,7 +437,7 @@ def _answer(
 
             store.update_photo(photo.id, ask)
             return False
-        return _save_result(store, revisions, rules, photo, result, instruction, _rules_for(rules, photo))
+        return _save_result(store, revisions, rules, photo, result, instruction, _rules_for(rules, photo), watermark)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
