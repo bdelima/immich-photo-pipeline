@@ -116,6 +116,7 @@ def main() -> None:
     cycle = Cycle(
         immich, store, intake, worker, live_album_id=cfg.live_album_id, share_user_ids=share_user_ids,
         revisions=revisions, review_album_id=cfg.review_album_id, pipeline_url=cfg.pipeline_url,
+        extra_clients=extra_clients,
     )
 
     auth_thread = threading.Thread(
