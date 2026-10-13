@@ -85,12 +85,13 @@ class FakeIdentifier:
     def __init__(self, answer="Scarlet macaw", error=None):
         self.answer, self.error, self.calls = answer, error, []
 
-    def identify(self, image_path, hint=None, style="subject"):
+    def identify(self, image_path, hint=None, style="subject", avoid=None):
         self.calls.append((image_path, hint))
         self.styles = getattr(self, "styles", []) + [style]
+        self.avoids = getattr(self, "avoids", []) + [avoid]
         if self.error:
             raise RuntimeError(self.error)
-        return self.answer
+        return self.answer if isinstance(self.answer, list) else [self.answer]
 
 
 def _with_image(tmp_path, **kw):
@@ -112,7 +113,7 @@ def _with_image(tmp_path, **kw):
 def test_identify_names_the_current_image_and_cleans_the_answer(tmp_path):
     store, revisions = _with_image(tmp_path)
     recipe = FakeIdentifier('  "Scarlet\n macaw" <b> ')
-    assert watermark.identify(store, revisions, recipe, "p", "  the bird ") == "'Scarlet macaw' b"
+    assert watermark.identify(store, revisions, recipe, "p", "  the bird ") == ["'Scarlet macaw' b"]
     path, hint = recipe.calls[0]
     assert path == revisions.path(store.load().photos["p"].revisions[0].file) and hint == "the bird"
     assert watermark.identify(store, revisions, recipe, "p") and recipe.calls[1][1] is None
@@ -121,17 +122,34 @@ def test_identify_names_the_current_image_and_cleans_the_answer(tmp_path):
 
 def test_identify_can_be_asked_for_a_poetic_title_instead_of_a_name(tmp_path):
     store, revisions = _with_image(tmp_path)
-    recipe = FakeIdentifier("Wings at Dusk")
-    assert watermark.identify(store, revisions, recipe, "p", "the light", "title") == "Wings at Dusk"
+    recipe = FakeIdentifier(["Wings at Dusk", " The Quiet Harbor ", "Wings at Dusk", ""])
+    assert watermark.identify(store, revisions, recipe, "p", "the light", "title") == ["Wings at Dusk", "The Quiet Harbor"]
     assert watermark.identify(store, revisions, recipe, "p") and recipe.styles == ["title", "subject"]
     with pytest.raises(chat.ChatError) as e:
         watermark.identify(store, revisions, recipe, "p", None, "haiku")
     assert e.value.status == 400 and len(recipe.calls) == 2
 
 
+def test_a_retry_passes_the_earlier_answers_so_it_can_differ(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    recipe = FakeIdentifier()
+    watermark.identify(store, revisions, recipe, "p")
+    watermark.identify(store, revisions, recipe, "p", None, "subject", [' Old "one" ', "", "Two"])
+    watermark.identify(store, revisions, recipe, "p", None, "subject", [str(i) for i in range(30)])
+    assert recipe.avoids[0] is None and recipe.avoids[1] == ["Old 'one'", "Two"]
+    assert len(recipe.avoids[2]) == watermark.MAX_AVOID and recipe.avoids[2][-1] == "29"
+    for bad in ("Two", [1], {"a": 1}):
+        with pytest.raises(chat.ChatError) as e:
+            watermark.identify(store, revisions, recipe, "p", None, "subject", bad)
+        assert e.value.status == 400
+
+
 def test_the_pieces_the_builder_can_place_come_from_the_originals_details():
-    assert watermark.parts(photo()) == {"place": "Playa Hermosa, Costa Rica", "owner": "Bob", "date": "March 2024"}
-    assert watermark.parts(Photo(id="p")) == {"place": "", "owner": "", "date": ""}
+    got = watermark.parts(photo())
+    assert (got["place"], got["owner"], got["date"]) == ("Playa Hermosa, Costa Rica", "Bob", "March 2024")
+    assert watermark.parts(Photo(id="p")) == {"place": "", "owner": "", "date": "", "coordinates": None}
+    located = Photo(id="q", sources=[Source(asset_id="a", meta={"latitude": 9.5, "longitude": -84.6})])
+    assert watermark.parts(located)["coordinates"] == [9.5, -84.6]
 
 
 def test_identify_is_refused_when_there_is_nothing_to_look_at(tmp_path):
@@ -169,10 +187,13 @@ def test_the_identify_route(tmp_path):
     recipe = FakeIdentifier()
     client = create_app(None, None, store, None, rules=RulesStore(str(tmp_path / "r.json")), revisions=revisions,
                         thumbs=ThumbCache(str(tmp_path / "th")), recipe=recipe).test_client()
-    assert client.post("/api/photos/p/identify", json={"hint": "the bird"}).get_json() == {"name": "Scarlet macaw"}
+    assert client.post("/api/photos/p/identify", json={"hint": "the bird"}).get_json() == {"names": ["Scarlet macaw"]}
     assert recipe.calls[0][1] == "the bird"
     assert client.post("/api/photos/p/identify").status_code == 200
     assert client.post("/api/photos/p/identify", json={"style": "title"}).status_code == 200
+    client.post("/api/photos/p/identify", json={"avoid": ["Old"]})
+    assert recipe.avoids[-1] == ["Old"]
+    assert client.post("/api/photos/p/identify", json={"avoid": "Old"}).status_code == 400
     assert client.post("/api/photos/p/identify", json={"style": "limerick"}).status_code == 400
     assert client.post("/api/photos/nope/identify", json={}).status_code == 404
     bare = create_app(None, None, store, None, revisions=revisions, thumbs=ThumbCache(str(tmp_path / "th"))).test_client()
