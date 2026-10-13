@@ -50,8 +50,8 @@ assumptions turned out wrong, all confirmed and fixed here):
    it's the one way headless mode can use a tool at all.
 
 Auth: this container authenticates against a Claude Pro subscription via
-a long-lived (~1 year) OAuth token from `claude setup-token`, not an
-API key -- confirmed against the current Claude Code docs
+a long-lived (~1 year) OAuth token from `claude setup-token`, not an API
+key -- confirmed against the current Claude Code docs
 (https://code.claude.com/docs/en/authentication, "Generate a long-lived
 token"). That command opens the same browser-approval screen as `/login`
 and prints the resulting token straight to the terminal; it does not
