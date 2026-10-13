@@ -22,16 +22,24 @@ def month_year(taken: str) -> str:
         return ""
 
 
-def template(photo: Photo) -> dict:
-    """The starting title and second line, from the first original that has
-    the details: the place; then the uploader's name and the month."""
-    title, uploader, when = "", "", ""
+def parts(photo: Photo) -> dict:
+    """What Immich knew about the photo, as separate pieces the builder can
+    place on either line: the place, the uploader's name and the month. Each is
+    taken from the first original that has it ("" when none does)."""
+    place, owner, date = "", "", ""
     for source in photo.sources:
         m = source.meta or {}
-        title = title or m.get("place", "")
-        uploader = uploader or m.get("owner_name", "")
-        when = when or month_year(m.get("taken", ""))
-    return {"title": title, "subtitle": " · ".join(x for x in (uploader, when) if x)}
+        place = place or m.get("place", "")
+        owner = owner or m.get("owner_name", "")
+        date = date or month_year(m.get("taken", ""))
+    return {"place": place, "owner": owner, "date": date}
+
+
+def template(photo: Photo) -> dict:
+    """The starting title and second line: the place; then the uploader's
+    name and the month."""
+    p = parts(photo)
+    return {"title": p["place"], "subtitle": " · ".join(x for x in (p["owner"], p["date"]) if x)}
 
 
 def _line(value, what: str) -> str:
@@ -61,12 +69,16 @@ def instruction(title, subtitle) -> str:
 
 
 MAX_HINT = 80
+STYLES = ("subject", "title")
 
 
-def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None) -> str:
-    """Asks Claude to name the main subject of the photo's current image (or
-    what `hint` points at), to seed the watermark text. Nothing is changed or
-    added to the history."""
+def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None, style="subject") -> str:
+    """Asks Claude to look at the photo's current image and say something to
+    seed the watermark text: its name (style "subject": the main subject, or
+    what `hint` points at) or a short poetic title, the way a painting is
+    named (style "title"). Nothing is changed or added to the history."""
+    if style not in STYLES:
+        raise chat.ChatError("the style must be 'subject' or 'title'")
     if recipe is None or revisions is None:
         raise chat.ChatError("Claude isn't available here right now.", 503)
     photo = store.load().photos.get(photo_id)
@@ -86,7 +98,7 @@ def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None) -
     if len(hint) > MAX_HINT:
         raise chat.ChatError(f"the hint is at most {MAX_HINT} characters; this one is {len(hint)}")
     try:
-        name = recipe.identify(path, hint or None)
+        name = recipe.identify(path, hint or None, style)
     except RuntimeError as exc:
         raise chat.ChatError(f"Claude couldn't identify it: {exc}", 502)
     name = " ".join(name.replace('"', "'").replace("<", "").replace(">", "").split())[:MAX_LINE]

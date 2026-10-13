@@ -33,12 +33,14 @@ def register_chat_routes(
 
     @app.post("/api/photos/<photo_id>/identify")
     def api_identify(photo_id: str):
-        """Names what is in the photo (a Claude run, so it can take a few
-        seconds) so the watermark builder can use it. Changes nothing."""
+        """Names what is in the photo, or gives it a short poetic title (a
+        Claude run, so it can take a few seconds), for the watermark builder to
+        use. Changes nothing."""
         data = request.get_json(silent=True)
         hint = data.get("hint") if isinstance(data, dict) else None
+        style = (data.get("style") if isinstance(data, dict) else None) or "subject"
         try:
-            return jsonify({"name": watermark.identify(store, revisions, recipe, photo_id, hint)})
+            return jsonify({"name": watermark.identify(store, revisions, recipe, photo_id, hint, style)})
         except chat.ChatError as exc:
             return jsonify({"error": str(exc)}), exc.status
 
