@@ -56,15 +56,68 @@ def template(photo: Photo) -> dict:
     return {"title": p["place"], "subtitle": " · ".join(x for x in (p["owner"], p["date"]) if x)}
 
 
+# The four things a watermark is made of, each with its own field in the form. Every one can
+# be placed on any of the three lines (t = first, u = second, v = third).
+FIXED = (("title", "Title"), ("location", "Location"), ("author", "Author"), ("date", "Date"))
+MAX_PIECES = 20
+MAX_LABEL = 40
+
+
+def base_pieces(photo: Photo, *, placed: bool) -> list[dict]:
+    """The four fields filled in from the original's details: the title is empty, the location
+    comes from Immich, the author is the uploader, the date is the month. `placed` puts the
+    location on the first line and the author and date on the second, as the template always did."""
+    p = parts(photo)
+    texts = {"title": "", "location": p["place"], "author": p["owner"], "date": p["date"]}
+    lines = {"title": "", "location": "t", "author": "u", "date": "u"}
+    # `auto` marks a piece as taken from Immich just now (the page may tidy it, e.g. leave off the home country)
+    return [{"key": key, "label": label, "text": texts[key], "auto": True,
+             "t": placed and lines[key] == "t", "u": placed and lines[key] == "u", "v": False}
+            for key, label in FIXED]
+
+
+def clean_pieces(pieces) -> list[dict] | None:
+    """The pieces the form sent (or that were saved), made safe: None if there are none."""
+    if pieces is None:
+        return None
+    if not isinstance(pieces, list) or not all(isinstance(x, dict) for x in pieces):
+        raise chat.ChatError("the pieces must be a list")
+    keys = {key for key, _ in FIXED}
+    out: list[dict] = []
+    for x in pieces[:MAX_PIECES]:
+        key = x.get("key") if x.get("key") in keys else ""
+        if key and any(o["key"] == key for o in out):
+            continue
+        label = _clean(x.get("label") if isinstance(x.get("label"), str) else "")[:MAX_LABEL]
+        text = _clean(x.get("text") if isinstance(x.get("text"), str) else "")[:MAX_LINE]
+        if not key and not label:
+            continue
+        out.append({"key": key, "label": label or dict(FIXED)[key], "text": text,
+                    "t": bool(x.get("t")), "u": bool(x.get("u")), "v": bool(x.get("v"))})
+    return out
+
+
 def starting_point(photo: Photo) -> dict:
     """What the watermark form starts with: the last watermark asked for on
     this photo if there was one, otherwise the template from the original's
-    details. `remembered` says which."""
+    details. `remembered` says which. `pieces` is what the form's fields and
+    tick boxes hold: the four fixed ones (title, location, author, date) and any
+    others that were added, each with the lines it is ticked for."""
     last = photo.last_watermark
     if isinstance(last, dict) and any(last.get(k) for k in ("title", "subtitle", "third")):
+        saved = clean_pieces(last.get("pieces")) if isinstance(last.get("pieces"), list) else None
+        if saved is None:
+            # Remembered by an older version, which kept only the lines: each line is kept as a piece
+            # ticked for its own line, so the lines come back exactly.
+            saved = [{"key": "", "label": f"Line {n}", "text": last.get(k, ""), "t": n == 1, "u": n == 2, "v": n == 3}
+                     for n, k in enumerate(("title", "subtitle", "third"), 1) if last.get(k)]
+        have = {x["key"] for x in saved if x["key"]}
+        fixed = [x for x in base_pieces(photo, placed=False) if x["key"] not in have]
+        order = {key: i for i, (key, _) in enumerate(FIXED)}          # the four first, in order; the rest after
+        pieces = sorted(fixed + saved, key=lambda x: order.get(x["key"], len(FIXED)))
         return {"title": last.get("title", ""), "subtitle": last.get("subtitle", ""),
-                "third": last.get("third", ""), "remembered": True}
-    return {**template(photo), "third": "", "remembered": False}
+                "third": last.get("third", ""), "pieces": pieces, "remembered": True}
+    return {**template(photo), "third": "", "pieces": base_pieces(photo, placed=True), "remembered": False}
 
 
 def _line(value, what: str) -> str:
@@ -184,11 +237,15 @@ def locate(store: LibraryStore, recipe, photo_id: str, source: str) -> str:
     return place
 
 
-def add(store: LibraryStore, photo_id: str, title, subtitle, third=None) -> int:
+def add(store: LibraryStore, photo_id: str, title, subtitle, third=None, pieces=None) -> int:
     """Queues the watermark as a request to Claude. Same rules as the chat box
-    (a photo that can't be changed, or too many waiting, is refused)."""
+    (a photo that can't be changed, or too many waiting, is refused). The lines
+    are remembered on the photo, with the pieces and ticks they were made from."""
     text = instruction(title, subtitle, third)
+    cleaned = clean_pieces(pieces)
     message_id = chat.enqueue(store, photo_id, text)
-    lines = {"title": _line(title, "title"), "subtitle": _line(subtitle, "second line"), "third": _line(third, "third line")}
-    store.update_photo(photo_id, lambda p: setattr(p, "last_watermark", lines))
+    last = {"title": _line(title, "title"), "subtitle": _line(subtitle, "second line"), "third": _line(third, "third line")}
+    if cleaned is not None:
+        last["pieces"] = cleaned
+    store.update_photo(photo_id, lambda p: setattr(p, "last_watermark", last))
     return message_id
