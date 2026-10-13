@@ -419,18 +419,21 @@ function originalDetails(sources) {
   return sources.length && sources.every(s => s.meta && s.meta.unavailable)
     ? `<p class="meta aside-note">No details of the original: Immich no longer has it.</p>` : "";
 }
-// The watermark builder: up to three lines, seeded from the original's details,
-// that the reviewer can change before asking Claude to add them as a new step.
+// The watermark builder. Four fields (title, location, author, date), each with the buttons
+// that fill it in right beside it and each editable by hand. The matrix says which line each
+// piece goes on, and the preview at the top shows the watermark as it will read, live.
 function watermarkForm(w) {
-  const where = w.parts && w.parts.place;
-  return `<div class="wm"><div id="wmForm"><label>Title<input class="field" id="wmTitle" maxlength="120" value="${esc(w.title)}"></label>` +
-    `<div class="tools"><label>Hint <small>(optional; blank = the whole picture)</small><input class="field" id="wmHint" maxlength="80" placeholder="e.g. the bird on the left"></label>` +
-    `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><button class="btn sec sm" id="wmPoem">Suggest title</button><span class="meta" id="wmSaw" role="status"></span></div></div>` +
-    `<label>Second line<input class="field" id="wmSub" maxlength="120" value="${esc(w.subtitle)}"></label>` +
-    (Array.isArray(w.parts && w.parts.coordinates) ? `<div class="tools"><div class="row"><span class="meta">${where ? "Immich location" : "Coordinates"}</span>` +
-      `<span class="chip">${where ? esc(where) : esc(w.parts.coordinates[0].toFixed(4)) + ", " + esc(w.parts.coordinates[1].toFixed(4))}</span></div>` +
-      `<div class="row"><button class="btn sec sm" id="wmOsm">Look up (OSM)</button><button class="btn sec sm" id="wmClaudeLoc">Ask Claude</button><span class="meta" id="wmLocSaw" role="status"></span></div></div>` : "") +
-    `<label>Third line<input class="field" id="wmThird" maxlength="120" value="${esc(w.third || "")}"></label>` +
+  const coords = w.parts && Array.isArray(w.parts.coordinates) ? w.parts.coordinates : null;
+  const coordNote = coords && !(w.parts && w.parts.place) ? `Immich has only coordinates: ${esc(coords[0].toFixed(4))}, ${esc(coords[1].toFixed(4))}` : "";
+  return `<div class="wm"><div id="wmForm">` +
+    `<div class="wmpreview" id="wmPreview" role="status" aria-label="Watermark preview"></div>` +
+    `<div class="wmfield"><label for="wmTitle">Title</label><input class="field" id="wmTitle" maxlength="120">` +
+      `<input class="field" id="wmHint" maxlength="80" aria-label="Hint" placeholder="Hint (optional), e.g. the bird on the left. Blank = the whole picture">` +
+      `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><button class="btn sec sm" id="wmPoem">Suggest title</button><span class="meta" id="wmSaw" role="status"></span></div></div>` +
+    `<div class="wmfield"><label for="wmLoc">Location</label><input class="field" id="wmLoc" maxlength="120">` +
+      (coords ? `<div class="row"><button class="btn sec sm" id="wmOsm">Look up (OSM)</button><button class="btn sec sm" id="wmClaudeLoc">Ask Claude</button><span class="meta" id="wmLocSaw" role="status">${coordNote}</span></div>` : "") + `</div>` +
+    `<div class="wmfield"><label for="wmAuthor">Author</label><input class="field" id="wmAuthor" maxlength="120"></div>` +
+    `<div class="wmfield"><label for="wmDate">Date</label><input class="field" id="wmDate" maxlength="120"></div>` +
     `<table class="wmgrid" id="wmGrid"></table>` +
     `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button></div></div></div>`;
 }
@@ -463,51 +466,63 @@ function wireWatermark(id, w) {
   const closeWm = restore => { setFold("wm", false); if (restore) { setFold("hist", before.hist); setFold("chat", before.chat); } };
   head.onclick = () => (folds.wm ? closeWm(true) : openWm());
   $("wmCancel").onclick = () => closeWm(true);
-  // The pieces that can go on any line: what Immich knew (place, owner, date)
-  // and whatever Claude has said so far. Ticking a box puts a piece on that line.
-  // A location keeps its full text in `raw`; `text` leaves off the home country.
-  // When the form starts from the last watermark, the pieces start unticked so
-  // they do not contradict the lines that are already filled in.
-  const parts = w.parts || {}, fromTemplate = !w.remembered;
+
+  // The pieces: the four fixed ones (each has a field above) and any that were added
+  // (a subject, title ideas, another location). Each is ticked for the lines it goes on
+  // (t = first, u = second, v = third). All of it is remembered with the watermark.
+  // `raw` is the location as Immich gave it; the text leaves off the home country until
+  // someone edits it (a location that was saved is already as it was left).
   let home = "";
-  const items = [["Location (Immich)", parts.place, true, false, false, true], ["Owner", parts.owner, false, true, false, false], ["Date", parts.date, false, true, false, false]]
-    .filter(x => x[1]).map(([label, raw, t, u, v, loc]) => ({ label, raw, text: raw, t: t && fromTemplate, u: u && fromTemplate, v: v && fromTemplate, loc, fixed: true }));
-  // Each line is rebuilt from its ticked pieces only when one of its own boxes
-  // changes, so whatever was typed into the other lines is kept.
-  const lines = { t: ["wmTitle", " – "], u: ["wmSub", " · "], v: ["wmThird", " · "] };
-  const wanted = k => items.filter(x => x[k]).map(x => x.text).join(lines[k][1]);
-  const compose = k => { $(lines[k][0]).value = wanted(k); };
-  // Runs a change to the pieces, then rebuilds each line that still holds
-  // exactly what it held before (so nothing the reviewer typed is lost).
-  const refresh = change => {
-    const untouched = ["t", "u", "v"].filter(k => $(lines[k][0]).value === wanted(k));
-    change(); drawGrid(); for (const k of untouched) compose(k);
+  const items = (w.pieces || []).map(x => ({ key: x.key || "", label: x.label, text: x.text || "", t: !!x.t, u: !!x.u, v: !!x.v,
+    raw: x.key === "location" && x.auto ? x.text : undefined }));
+  for (const [key, label] of [["title", "Title"], ["location", "Location"], ["author", "Author"], ["date", "Date"]])
+    if (!items.some(x => x.key === key)) items.push({ key, label, text: "", t: false, u: false, v: false });
+  const fixed = key => items.find(x => x.key === key);
+  const FIELDS = { title: "wmTitle", location: "wmLoc", author: "wmAuthor", date: "wmDate" };
+  const SEP = { t: " – ", u: " · ", v: " · " };
+  const lineText = k => items.filter(x => x[k] && x.text.trim()).map(x => x.text.trim()).join(SEP[k]);
+  // The preview is drawn larger than the watermark will be on the photo, so it can be read.
+  const drawPreview = () => {
+    const [a, b, c] = ["t", "u", "v"].map(lineText);
+    $("wmPreview").innerHTML = a || b || c
+      ? (a ? `<div class="l1">${esc(a)}</div>` : "") + (b ? `<div class="l2">${esc(b)}</div>` : "") + (c ? `<div class="l3">${esc(c)}</div>` : "") +
+        `<div class="cap">Preview, shown larger than on the photo</div>`
+      : `<div class="none">Nothing to write yet. Fill in a field and tick where it goes.</div>`;
   };
-  const setLocations = () => { for (const x of items) if (x.loc) x.text = trimHome(x.raw, home); };
+  const setText = (it, text) => {
+    it.text = text; it.raw = undefined;
+    const box = FIELDS[it.key] && $(FIELDS[it.key]); if (box && box.value !== text) box.value = text;
+    const mirror = $("wmGrid").querySelector(`[data-mirror="${items.indexOf(it)}"]`); if (mirror) mirror.textContent = text;
+    drawPreview();
+  };
+  for (const [key, boxId] of Object.entries(FIELDS)) {
+    const it = fixed(key);
+    $(boxId).value = it.text;
+    $(boxId).oninput = () => setText(it, $(boxId).value);       // a field can always be edited by hand
+  }
   const drawGrid = () => {
-    $("wmGrid").innerHTML = items.length
-      ? `<tr><th>Piece</th><th>Title</th><th>2nd</th><th>3rd</th><th></th></tr>` + items.map((x, i) =>
-        `<tr><td><b>${esc(x.label)}</b> ${esc(x.text)}</td>` +
-        `<td><input type="checkbox" data-i="${i}" data-k="t" aria-label="${esc(x.label)} in the title"${x.t ? " checked" : ""}></td>` +
-        `<td><input type="checkbox" data-i="${i}" data-k="u" aria-label="${esc(x.label)} on the second line"${x.u ? " checked" : ""}></td>` +
-        `<td><input type="checkbox" data-i="${i}" data-k="v" aria-label="${esc(x.label)} on the third line"${x.v ? " checked" : ""}></td>` +
-        `<td>${x.fixed ? "" : `<button class="btn sec sm" data-rm="${i}" aria-label="Remove ${esc(x.label)}">×</button>`}</td></tr>`).join("")
-      : "";
-    for (const c of $("wmGrid").querySelectorAll("input")) c.onchange = () => {
+    $("wmGrid").innerHTML = `<tr><th>Piece</th><th>1st</th><th>2nd</th><th>3rd</th><th></th></tr>` + items.map((x, i) =>
+      `<tr><td><b>${esc(x.label)}</b> ` + (x.key ? `<span data-mirror="${i}">${esc(x.text)}</span>` :
+        `<input class="field" data-text="${i}" maxlength="120" aria-label="${esc(x.label)}" value="${esc(x.text)}">`) + `</td>` +
+      ["t", "u", "v"].map((k, n) => `<td><input type="checkbox" data-i="${i}" data-k="${k}" aria-label="${esc(x.label)} on line ${n + 1}"${x[k] ? " checked" : ""}></td>`).join("") +
+      `<td>${x.key ? "" : `<button class="btn sec sm" data-rm="${i}" aria-label="Remove ${esc(x.label)}">×</button>`}</td></tr>`).join("");
+    for (const c of $("wmGrid").querySelectorAll("input[type=checkbox]")) c.onchange = () => {
       const it = items[+c.dataset.i], k = c.dataset.k;
       it[k] = c.checked;
-      // Only one title idea is the title at a time: choosing one releases the others.
-      if (k === "t" && c.checked && it.label === "Title idea") for (const o of items) if (o !== it && o.label === "Title idea") o.t = false;
-      drawGrid(); compose(k);
+      // Only one title is on the first line at a time: choosing one releases the others.
+      const titleLike = o => o.key === "title" || o.label === "Title idea";
+      if (k === "t" && c.checked && titleLike(it)) for (const o of items) if (o !== it && titleLike(o)) o.t = false;
+      drawGrid(); drawPreview();
     };
-    for (const b of $("wmGrid").querySelectorAll("[data-rm]")) b.onclick = () => { const [gone] = items.splice(+b.dataset.rm, 1); drawGrid(); for (const k of ["t", "u", "v"]) if (gone[k]) compose(k); };
+    for (const t of $("wmGrid").querySelectorAll("input[data-text]")) t.oninput = () => { items[+t.dataset.text].text = t.value; items[+t.dataset.text].raw = undefined; drawPreview(); };
+    for (const b of $("wmGrid").querySelectorAll("[data-rm]")) b.onclick = () => { items.splice(+b.dataset.rm, 1); drawGrid(); drawPreview(); };
   };
-  drawGrid();
-  // On opening: find the home country (to leave it off the locations).
+  drawGrid(); drawPreview();
+  // On opening: find the home country (to leave it off the location Immich gave).
   const loadHome = async () => {
-    const country = await getHomeCountry();
-    home = country;
-    refresh(setLocations);
+    home = await getHomeCountry();
+    const loc = fixed("location");
+    if (loc.raw !== undefined) { const text = trimHome(loc.raw, home), raw = loc.raw; setText(loc, text); loc.raw = raw; }
   };
   // Names the place at the photo's coordinates from one source, to compare
   // with what Immich said. The answer is added as another location, unticked.
@@ -519,44 +534,46 @@ function wireWatermark(id, w) {
       const r = await fetch("/api/photos/" + id + "/locate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) });
       const out = await r.json().catch(() => ({}));
       if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
-      if (items.some(x => x.label === label && x.raw === out.place)) { saw.textContent = label + " says the same again: " + out.place; return; }
+      if (items.some(x => x.label === label && (x.raw !== undefined ? x.raw : x.text) === out.place)) { saw.textContent = label + " says the same again: " + out.place; return; }
       if (items.length >= 20) { saw.textContent = "The list is full; remove a row first."; return; }
       await getHomeCountry();
-      refresh(() => { items.push({ label, raw: out.place, text: trimHome(out.place, home), loc: true, t: false, u: false, v: false }); });
-      saw.textContent = label + " says: " + out.place + " – tick where it goes.";
+      items.push({ key: "", label, text: trimHome(out.place, home), raw: out.place, t: false, u: false, v: false });
+      drawGrid(); drawPreview();
+      saw.textContent = label + " says: " + out.place + " – tick where it goes, or copy it into the Location field.";
     } catch (e) { saw.textContent = "That didn't work."; }
     finally { for (const b of buttons) b.disabled = false; }
   };
   if ($("wmOsm")) { $("wmOsm").onclick = locate("osm", "Location (OSM)"); $("wmClaudeLoc").onclick = locate("claude", "Location (Claude)"); }
-  // Asks Claude to look at the picture; the answer(s) are added to the list, to
-  // be placed (or not) with the boxes. Every ask adds more, and tells Claude
-  // what it already said so a retry gives something different.
+  // Asks Claude to look at the picture. A subject goes in the list to be placed (or not)
+  // with the boxes. For a title, the first idea goes into the Title field and the others
+  // into the list. Every ask adds more, and tells Claude what it already said so a retry
+  // gives something different (the server also remembers the last 15 it gave for this photo).
   const ask = (style, label) => async () => {
     const buttons = [$("wmIdentify"), $("wmPoem")], saw = $("wmSaw");
     for (const b of buttons) b.disabled = true;
     saw.textContent = "Looking…";
     try {
+      const earlier = items.filter(x => x.label === label || (style === "title" && x.key === "title")).map(x => x.text).filter(Boolean);
       const r = await fetch("/api/photos/" + id + "/identify", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hint: $("wmHint").value, style, avoid: items.filter(x => x.label === label).map(x => x.text) }) });
+        body: JSON.stringify({ hint: $("wmHint").value, style, avoid: earlier }) });
       const out = await r.json().catch(() => ({}));
       if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
       const names = out.names || [];
       if (style === "title") {
-        // Title ideas go at the top, the first one is the title, and the
-        // location, owner and date move down a line (the first time only).
-        const fresh = names.map((text, n) => ({ label, text, raw: text, t: n === 0, u: false, v: false }));
-        const firstTime = !items.some(x => x.label === label);
-        refresh(() => {
-          for (const o of items) if (o.label === label) o.t = false;
-          if (firstTime && fromTemplate) for (const o of items) if (o.fixed) { if (o.t) { o.t = false; o.u = true; } else if (o.u) { o.u = false; o.v = true; } }
-          items.unshift(...fresh); items.length = Math.min(items.length, 20);
-        });
-        // Lines 2 and 3 are only rebuilt when the pieces just moved down a line; a form that
-        // started from the last watermark has them filled in already, so only the title changes.
-        for (const k of ["t", "u", "v"]) if ((firstTime && fromTemplate) || k === "t") compose(k);
-        saw.textContent = "Claude suggests: " + names.join(" / ") + " – the first is the title; tick another to switch.";
+        const title = fixed("title");
+        if (!title.t) {
+          // The title goes on the first line, and what was there moves down a line.
+          for (const o of items) if (o !== title) { if (o.t) { o.t = false; o.u = true; } else if (o.u) { o.u = false; o.v = true; } }
+          title.t = true;
+        }
+        for (const o of items) if (o.label === label) o.t = false;
+        setText(title, names[0] || title.text);
+        for (const text of names.slice(1)) if (items.length < 20) items.push({ key: "", label, text, t: false, u: false, v: false });
+        drawGrid(); drawPreview();
+        saw.textContent = "Claude suggests: " + names.join(" / ") + " – the first is in the Title field; tick another to switch.";
       } else {
-        refresh(() => { for (const text of names) if (items.length < 20) items.push({ label, text, raw: text, t: false, u: false, v: false }); });
+        for (const text of names) if (items.length < 20) items.push({ key: "", label, text, t: false, u: false, v: false });
+        drawGrid(); drawPreview();
         saw.textContent = "Claude says: " + names.join(" / ") + " – tick where it goes.";
       }
     } catch (e) { saw.textContent = "That didn't work."; }
@@ -566,13 +583,12 @@ function wireWatermark(id, w) {
   $("wmPoem").onclick = ask("title", "Title idea");
   $("wmSend").onclick = async () => {
     $("wmSend").disabled = true;
+    const [title, subtitle, third] = ["t", "u", "v"].map(lineText);
     const r = await fetch("/api/photos/" + id + "/watermark", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: $("wmTitle").value, subtitle: $("wmSub").value, third: $("wmThird").value }) });
+      body: JSON.stringify({ title, subtitle, third, pieces: items.map(({ key, label, text, t, u, v }) => ({ key, label, text, t, u, v })) }) });
     const out = await r.json().catch(() => ({}));
     if (!r.ok) { say(out.error || "That didn't send.", true); $("wmSend").disabled = false; return; }
     say("Watermark requested.");
-    for (const x of items) x.t = x.u = x.v = false;       // the lines are what was sent; start the pieces fresh
-    drawGrid();
     closeWm(false); setFold("chat", true); $("wmSend").disabled = false;
     const p = await api("/api/photos/" + id), log = $("chatlog");
     if (log) { log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight; }
