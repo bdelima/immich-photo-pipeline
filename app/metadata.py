@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Sequence
 
 from .immich_client import ImmichClient
@@ -24,6 +25,10 @@ log = logging.getLogger(__name__)
 UNAVAILABLE = {"unavailable": True}
 # How many originals one cycle looks up when filling in older photos.
 BACKFILL_PER_CYCLE = 10
+
+# When each asset was last asked about (this run), so one that keeps failing
+# does not use up every cycle's allowance and starve the rest.
+_TRIED: dict[str, float] = {}
 
 _CLOCK = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})")
 
@@ -115,16 +120,21 @@ def fill_source(clients: Sequence[ImmichClient], store: LibraryStore, photo_id: 
     return True
 
 
-def backfill(clients: Sequence[ImmichClient], store: LibraryStore, limit: int = BACKFILL_PER_CYCLE) -> int:
-    """Fills in originals copied before metadata was kept, a few per cycle.
-    Returns how many were looked up."""
-    done = 0
-    for photo in list(store.load().photos.values()):
-        for index, source in enumerate(photo.sources):
-            if source.meta or not source.asset_id:
-                continue
-            if done >= limit:
-                return done
-            fill_source(clients, store, photo.id, index, source)
-            done += 1
-    return done
+def backfill(
+    clients: Sequence[ImmichClient], store: LibraryStore, limit: int = BACKFILL_PER_CYCLE,
+    tried: dict[str, float] | None = None,
+) -> int:
+    """Fills in originals copied before metadata was kept, a few per cycle,
+    those not asked about recently first. Returns how many were looked up."""
+    tried = _TRIED if tried is None else tried
+    wanted = [
+        (photo.id, index, source)
+        for photo in store.load().photos.values()
+        for index, source in enumerate(photo.sources)
+        if source.asset_id and not source.meta
+    ]
+    wanted.sort(key=lambda w: tried.get(w[2].asset_id, 0.0))
+    for photo_id, index, source in wanted[:limit]:
+        tried[source.asset_id] = time.monotonic()
+        fill_source(clients, store, photo_id, index, source)
+    return min(len(wanted), limit)

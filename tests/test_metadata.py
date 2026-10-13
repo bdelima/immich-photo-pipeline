@@ -80,17 +80,19 @@ def stocked(tmp_path, **sources):
 
 def test_backfill_fills_missing_details_and_leaves_known_ones_alone(tmp_path):
     store = stocked(tmp_path, a={}, b={"taken": "2020-01-01 10:00"}, c={})
-    clients = [Account({"a": asset(), "b": asset()})]
-    assert metadata.backfill(clients, store) == 2
+    clients, tried = [Account({"a": asset(), "b": asset()})], {}
+    assert metadata.backfill(clients, store, tried=tried) == 2
     metas = [s.meta for s in store.load().photos["p"].sources]
     assert metas[0]["owner_name"] == "Bob" and metas[1] == {"taken": "2020-01-01 10:00"}
     assert metas[2] == {"unavailable": True}
-    assert metadata.backfill(clients, store) == 0            # nothing left to ask about
+    assert metadata.backfill(clients, store, tried=tried) == 0            # nothing left to ask about
 
 
-def test_backfill_retries_later_when_immich_cannot_be_reached_and_respects_its_limit(tmp_path):
+def test_backfill_retries_later_when_immich_cannot_be_reached_without_starving_the_rest(tmp_path):
     store = stocked(tmp_path, a={}, b={}, c={})
-    assert metadata.backfill([Account(error=ImmichError("down"))], store, limit=2) == 2
+    tried = {}
+    assert metadata.backfill([Account(error=ImmichError("down"))], store, limit=2, tried=tried) == 2
     assert all(not s.meta for s in store.load().photos["p"].sources)
-    assert metadata.backfill([Account({"a": asset(), "b": asset(), "c": asset()})], store, limit=2) == 2
-    assert [bool(s.meta) for s in store.load().photos["p"].sources] == [True, True, False]
+    # the two that just failed go to the back of the line
+    assert metadata.backfill([Account({"a": asset(), "b": asset(), "c": asset()})], store, limit=2, tried=tried) == 2
+    assert [bool(s.meta) for s in store.load().photos["p"].sources] == [True, False, True]
