@@ -220,7 +220,7 @@ def test_the_detail_offers_a_watermark_template_and_the_route_queues_it(tmp_path
     store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", meta=meta)))
     assert client.get("/api/photos/r1").get_json()["watermark"] == {
         "title": "Costa Rica", "subtitle": "Bob · March 2024",
-        "parts": {"place": "Costa Rica", "owner": "Bob", "date": "March 2024"}}
+        "parts": {"place": "Costa Rica", "owner": "Bob", "date": "March 2024", "coordinates": None}}
     ok = client.post("/api/photos/r1/watermark", json={"title": "Costa Rica", "subtitle": "Bob", "third": "Wings at Dusk"})
     assert ok.status_code == 200
     assert "Costa Rica" in store.load().photos["r1"].chat[0].text and "Wings at Dusk" in store.load().photos["r1"].chat[0].text
