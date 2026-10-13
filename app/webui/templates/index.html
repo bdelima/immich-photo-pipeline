@@ -473,14 +473,18 @@ function wireWatermark(id, w) {
   // `raw` is the location as Immich gave it; the text leaves off the home country until
   // someone edits it (a location that was saved is already as it was left).
   let home = "";
-  const items = (w.pieces || []).map(x => ({ key: x.key || "", label: x.label, text: x.text || "", t: !!x.t, u: !!x.u, v: !!x.v,
+  // t/u/v are 0 when a piece is not on that line, otherwise the order it was ticked in: the
+  // line is written in that order, so a later tick goes after the earlier ones.
+  const tick = v => (typeof v === "number" ? Math.max(0, v | 0) : v ? 1 : 0);
+  const items = (w.pieces || []).map(x => ({ key: x.key || "", label: x.label, text: x.text || "", t: tick(x.t), u: tick(x.u), v: tick(x.v),
     raw: x.key === "location" && x.auto ? x.text : undefined }));
   for (const [key, label] of [["title", "Title"], ["location", "Location"], ["author", "Author"], ["date", "Date"]])
-    if (!items.some(x => x.key === key)) items.push({ key, label, text: "", t: false, u: false, v: false });
+    if (!items.some(x => x.key === key)) items.push({ key, label, text: "", t: 0, u: 0, v: 0 });
   const fixed = key => items.find(x => x.key === key);
   const FIELDS = { title: "wmTitle", location: "wmLoc", author: "wmAuthor", date: "wmDate" };
   const SEP = { t: " – ", u: " · ", v: " · " };
-  const lineText = k => items.filter(x => x[k] && x.text.trim()).map(x => x.text.trim()).join(SEP[k]);
+  const onLine = k => items.map((x, i) => [x, i]).filter(([x]) => x[k] > 0).sort((a, b) => a[0][k] - b[0][k] || a[1] - b[1]);
+  const lineText = k => onLine(k).filter(([x]) => x.text.trim()).map(([x]) => x.text.trim()).join(SEP[k]);
   // The preview is drawn larger than the watermark will be on the photo, so it can be read.
   const drawPreview = () => {
     const [a, b, c] = ["t", "u", "v"].map(lineText);
@@ -501,17 +505,16 @@ function wireWatermark(id, w) {
     $(boxId).oninput = () => setText(it, $(boxId).value);       // a field can always be edited by hand
   }
   const drawGrid = () => {
+    const rank = {};
+    for (const k of ["t", "u", "v"]) { const on = onLine(k); rank[k] = on.length > 1 ? new Map(on.map(([x], n) => [x, n + 1])) : new Map(); }
     $("wmGrid").innerHTML = `<tr><th>Piece</th><th>1st</th><th>2nd</th><th>3rd</th><th></th></tr>` + items.map((x, i) =>
       `<tr><td><b>${esc(x.label)}</b> ` + (x.key ? `<span data-mirror="${i}">${esc(x.text)}</span>` :
         `<input class="field" data-text="${i}" maxlength="120" aria-label="${esc(x.label)}" value="${esc(x.text)}">`) + `</td>` +
-      ["t", "u", "v"].map((k, n) => `<td><input type="checkbox" data-i="${i}" data-k="${k}" aria-label="${esc(x.label)} on line ${n + 1}"${x[k] ? " checked" : ""}></td>`).join("") +
+      ["t", "u", "v"].map((k, n) => `<td><input type="checkbox" data-i="${i}" data-k="${k}" aria-label="${esc(x.label)} on line ${n + 1}"${x[k] > 0 ? " checked" : ""}>${rank[k].has(x) ? `<sup title="Written ${rank[k].get(x)} on this line">${rank[k].get(x)}</sup>` : ""}</td>`).join("") +
       `<td>${x.key ? "" : `<button class="btn sec sm" data-rm="${i}" aria-label="Remove ${esc(x.label)}">×</button>`}</td></tr>`).join("");
     for (const c of $("wmGrid").querySelectorAll("input[type=checkbox]")) c.onchange = () => {
       const it = items[+c.dataset.i], k = c.dataset.k;
-      it[k] = c.checked;
-      // Only one title is on the first line at a time: choosing one releases the others.
-      const titleLike = o => o.key === "title" || o.label === "Title idea";
-      if (k === "t" && c.checked && titleLike(it)) for (const o of items) if (o !== it && titleLike(o)) o.t = false;
+      it[k] = c.checked ? Math.max(0, ...items.map(o => o[k])) + 1 : 0;      // ticked later = written later
       drawGrid(); drawPreview();
     };
     for (const t of $("wmGrid").querySelectorAll("input[data-text]")) t.oninput = () => { items[+t.dataset.text].text = t.value; items[+t.dataset.text].raw = undefined; drawPreview(); };
@@ -537,17 +540,17 @@ function wireWatermark(id, w) {
       if (items.some(x => x.label === label && (x.raw !== undefined ? x.raw : x.text) === out.place)) { saw.textContent = label + " says the same again: " + out.place; return; }
       if (items.length >= 20) { saw.textContent = "The list is full; remove a row first."; return; }
       await getHomeCountry();
-      items.push({ key: "", label, text: trimHome(out.place, home), raw: out.place, t: false, u: false, v: false });
+      items.push({ key: "", label, text: trimHome(out.place, home), raw: out.place, t: 0, u: 0, v: 0 });
       drawGrid(); drawPreview();
       saw.textContent = label + " says: " + out.place + " – tick where it goes, or copy it into the Location field.";
     } catch (e) { saw.textContent = "That didn't work."; }
     finally { for (const b of buttons) b.disabled = false; }
   };
   if ($("wmOsm")) { $("wmOsm").onclick = locate("osm", "Location (OSM)"); $("wmClaudeLoc").onclick = locate("claude", "Location (Claude)"); }
-  // Asks Claude to look at the picture. A subject goes in the list to be placed (or not)
-  // with the boxes. For a title, the first idea goes into the Title field and the others
-  // into the list. Every ask adds more, and tells Claude what it already said so a retry
-  // gives something different (the server also remembers the last 15 it gave for this photo).
+  // Asks Claude to look at the picture. What it says is only ever added to the list as ideas,
+  // unticked: it never replaces a field or moves anything between lines. Every ask adds more,
+  // and tells Claude what it already said so a retry gives something different (the server
+  // also remembers the last 15 it gave for this photo).
   const ask = (style, label) => async () => {
     const buttons = [$("wmIdentify"), $("wmPoem")], saw = $("wmSaw");
     for (const b of buttons) b.disabled = true;
@@ -559,23 +562,19 @@ function wireWatermark(id, w) {
       const out = await r.json().catch(() => ({}));
       if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
       const names = out.names || [];
-      if (style === "title") {
-        const title = fixed("title");
-        if (!title.t) {
-          // The title goes on the first line, and what was there moves down a line.
-          for (const o of items) if (o !== title) { if (o.t) { o.t = false; o.u = true; } else if (o.u) { o.u = false; o.v = true; } }
-          title.t = true;
+      // New suggestions are only ideas: they are added to the list, unticked, and never replace
+      // what is in a field or move anything between lines. Tick one (or copy it) to use it.
+      for (const text of names) {
+        if (items.some(x => !x.key && x.label === label && x.text === text)) continue;
+        while (items.length >= 20) {                                    // make room by dropping the oldest unused idea
+          const old = items.findIndex(x => !x.key && x.label === label && !x.t && !x.u && !x.v);
+          if (old < 0) break;
+          items.splice(old, 1);
         }
-        for (const o of items) if (o.label === label) o.t = false;
-        setText(title, names[0] || title.text);
-        for (const text of names.slice(1)) if (items.length < 20) items.push({ key: "", label, text, t: false, u: false, v: false });
-        drawGrid(); drawPreview();
-        saw.textContent = "Claude suggests: " + names.join(" / ") + " – the first is in the Title field; tick another to switch.";
-      } else {
-        for (const text of names) if (items.length < 20) items.push({ key: "", label, text, t: false, u: false, v: false });
-        drawGrid(); drawPreview();
-        saw.textContent = "Claude says: " + names.join(" / ") + " – tick where it goes.";
+        if (items.length < 20) items.push({ key: "", label, text, t: 0, u: 0, v: 0 });
       }
+      drawGrid(); drawPreview();
+      saw.textContent = "Claude " + (style === "title" ? "suggests: " : "says: ") + names.join(" / ") + " – tick where one goes, or copy it into a field.";
     } catch (e) { saw.textContent = "That didn't work."; }
     finally { for (const b of buttons) b.disabled = false; }
   };
