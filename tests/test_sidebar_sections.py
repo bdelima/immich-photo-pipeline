@@ -32,10 +32,17 @@ def test_working_on_the_watermark_folds_the_others_and_adding_it_opens_the_chat(
     assert "wmOpen" not in page            # the header opens the section now
 
 
-def test_the_form_starts_from_the_remembered_lines_without_ticking_pieces():
+def test_the_form_has_four_fields_a_live_preview_and_remembers_the_ticks():
     page = read("templates", "index.html")
-    assert 'value="${esc(w.third || "")}"' in page
-    assert "fromTemplate = !w.remembered" in page
+    for box in ('id="wmTitle"', 'id="wmLoc"', 'id="wmAuthor"', 'id="wmDate"', 'id="wmPreview"'):
+        assert box in page
+    assert "Second line" not in page and "Third line" not in page          # the lines come from the ticks
+    # every field can be edited by hand, and the preview follows what is typed or ticked
+    assert "oninput = () => setText(it, $(boxId).value)" in page
+    assert page.count("drawGrid(); drawPreview();") >= 3
+    sending = page[page.index('$("wmSend").onclick'):]
+    assert "pieces: items.map(" in sending
+    assert "x.t = x.u = x.v = false" not in page                           # the ticks are kept after sending
 
 
 def test_the_sections_have_styles():
@@ -43,7 +50,12 @@ def test_the_sections_have_styles():
     assert "#viewer .foldhead" in css and '#viewer .foldbody[hidden] { display: none; }' in css
 
 
-def test_suggesting_a_title_leaves_the_remembered_second_and_third_lines_alone():
+def test_suggesting_a_title_puts_the_first_idea_in_the_title_field():
     page = read("templates", "index.html")
-    assert "(firstTime && fromTemplate) || k === \"t\"" in page
-    assert "if (firstTime && fromTemplate) for (const o of items) if (o.fixed)" in page
+    assert "setText(title, names[0] || title.text)" in page
+    assert "if (!title.t) {" in page
+
+
+def test_the_preview_is_big_enough_to_read():
+    css = read("static", "pipeline.css")
+    assert "#viewer .wm .wmpreview .l1 { font-size: 1.6rem;" in css

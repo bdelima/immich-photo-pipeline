@@ -28,10 +28,9 @@ def test_the_sidebar_scrolls_so_a_tall_watermark_form_is_never_cut_off():
     assert "max-height" in next(line for line in css.splitlines() if line.startswith("#chatlog {"))
 
 
-def test_each_tool_sits_with_the_line_it_fills_in():
+def test_each_tool_sits_with_the_field_it_fills_in():
     page = read("templates", "index.html")
     form = page[page.index("function watermarkForm"):page.index("// The country this container")]
-    order = [form.index(k) for k in ('id="wmTitle"', 'id="wmHint"', 'id="wmIdentify"', 'id="wmSub"',
-                                       'id="wmOsm"', 'id="wmThird"', 'id="wmGrid"', 'id="wmSend"')]
+    order = [form.index(k) for k in ('id="wmPreview"', 'id="wmTitle"', 'id="wmHint"', 'id="wmIdentify"', 'id="wmPoem"', 'id="wmLoc"',
+                                       'id="wmOsm"', 'id="wmClaudeLoc"', 'id="wmAuthor"', 'id="wmDate"', 'id="wmGrid"', 'id="wmSend"')]
     assert order == sorted(order)
-    assert "Immich location" in form

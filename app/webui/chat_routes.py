@@ -70,7 +70,7 @@ def register_chat_routes(
         data = request.get_json(silent=True)
         data = data if isinstance(data, dict) else {}
         try:
-            message_id = watermark.add(store, photo_id, data.get("title"), data.get("subtitle"), data.get("third"))
+            message_id = watermark.add(store, photo_id, data.get("title"), data.get("subtitle"), data.get("third"), data.get("pieces"))
         except chat.ChatError as exc:
             return jsonify({"error": str(exc)}), exc.status
         if on_job is not None:

@@ -136,7 +136,7 @@ def test_a_retry_passes_the_earlier_answers_so_it_can_differ(tmp_path):
     watermark.identify(store, revisions, recipe, "p")
     watermark.identify(store, revisions, recipe, "p", None, "subject", [' Old "one" ', "", "Two"])
     watermark.identify(store, revisions, recipe, "p", None, "subject", [str(i) for i in range(30)])
-    assert recipe.avoids[0] is None and recipe.avoids[1] == ["Old 'one'", "Two"]
+    assert recipe.avoids[0] is None and recipe.avoids[1] == ["Scarlet macaw", "Old 'one'", "Two"]   # what it said before, then the page's
     assert len(recipe.avoids[2]) == watermark.MAX_AVOID and recipe.avoids[2][-1] == "29"
     for bad in ("Two", [1], {"a": 1}):
         with pytest.raises(chat.ChatError) as e:
@@ -192,7 +192,7 @@ def test_the_identify_route(tmp_path):
     assert client.post("/api/photos/p/identify").status_code == 200
     assert client.post("/api/photos/p/identify", json={"style": "title"}).status_code == 200
     client.post("/api/photos/p/identify", json={"avoid": ["Old"]})
-    assert recipe.avoids[-1] == ["Old"]
+    assert recipe.avoids[-1] == ["Scarlet macaw", "Old"]
     assert client.post("/api/photos/p/identify", json={"avoid": "Old"}).status_code == 400
     assert client.post("/api/photos/p/identify", json={"style": "limerick"}).status_code == 400
     assert client.post("/api/photos/nope/identify", json={}).status_code == 404
@@ -203,20 +203,70 @@ def test_the_identify_route(tmp_path):
 # ---- starting from the last watermark -----------------------------------------------------
 
 
+def lines_of(pieces):
+    """The three lines the pieces make, the way the form's preview does."""
+    seps = {"t": " – ", "u": " · ", "v": " · "}
+    return [seps[k].join(x["text"] for x in pieces if x[k] and x["text"]) for k in ("t", "u", "v")]
+
+
 def test_the_form_starts_from_the_template_until_a_watermark_has_been_asked_for():
     got = watermark.starting_point(photo())
-    assert got == {"title": "Playa Hermosa, Costa Rica", "subtitle": "Bob · March 2024", "third": "", "remembered": False}
+    assert (got["title"], got["subtitle"], got["third"], got["remembered"]) == ("Playa Hermosa, Costa Rica", "Bob · March 2024", "", False)
+    # four fields: title, location, author and date; the title is empty, the rest come from Immich
+    assert [(x["key"], x["text"]) for x in got["pieces"]] == [
+        ("title", ""), ("location", "Playa Hermosa, Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
+    assert lines_of(got["pieces"]) == ["Playa Hermosa, Costa Rica", "Bob · March 2024", ""]
 
 
-def test_asking_for_a_watermark_remembers_its_lines_for_next_time(tmp_path):
+def test_asking_for_a_watermark_remembers_its_lines_pieces_and_ticks_for_next_time(tmp_path):
     store = LibraryStore(str(tmp_path / "lib.json"))
     store.update(lambda lib: lib.photos.update(p=photo()))
-    watermark.add(store, "p", ' Wings "at" Dusk ', "", "Bob")
+    pieces = [
+        {"key": "title", "label": "Title", "text": ' Wings "at" Dusk ', "t": True, "u": False, "v": False},
+        {"key": "location", "label": "Location", "text": "Playa Hermosa", "t": False, "u": True, "v": False},
+        {"key": "author", "label": "Author", "text": "Bob", "t": False, "u": False, "v": True},
+        {"key": "date", "label": "Date", "text": "March 2024", "t": False, "u": False, "v": True},
+        {"key": "", "label": "Title idea", "text": "The Quiet Harbor", "t": False, "u": False, "v": False},
+    ]
+    watermark.add(store, "p", "Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024", pieces)
     last = store.load().photos["p"].last_watermark
-    assert last == {"title": "Wings 'at' Dusk", "subtitle": "", "third": "Bob"}
-    assert watermark.starting_point(store.load().photos["p"]) == {**last, "remembered": True}
+    assert (last["title"], last["subtitle"], last["third"]) == ("Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024")
+    got = watermark.starting_point(store.load().photos["p"])
+    assert got["remembered"] is True
+    assert [(x["key"], x["label"], x["text"], x["t"], x["u"], x["v"]) for x in got["pieces"]] == [
+        ("title", "Title", "Wings 'at' Dusk", True, False, False),
+        ("location", "Location", "Playa Hermosa", False, True, False),
+        ("author", "Author", "Bob", False, False, True),
+        ("date", "Date", "March 2024", False, False, True),
+        ("", "Title idea", "The Quiet Harbor", False, False, False)]
+    assert lines_of(got["pieces"]) == ["Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024"]
     watermark.add(store, "p", "Second try", "x")
     assert store.load().photos["p"].last_watermark["title"] == "Second try"
+
+
+def test_a_watermark_remembered_by_an_older_version_keeps_its_lines_as_pieces():
+    p = photo(last_watermark={"title": "Wings at Dusk", "subtitle": "Bob", "third": ""})
+    got = watermark.starting_point(p)
+    assert got["remembered"] is True and lines_of(got["pieces"]) == ["Wings at Dusk", "Bob", ""]
+    assert [x["key"] for x in got["pieces"]][:4] == ["title", "location", "author", "date"]
+    assert not any(x["t"] or x["u"] or x["v"] for x in got["pieces"] if x["key"])      # the four start unticked
+
+
+def test_pieces_from_the_page_are_cleaned_and_bounded():
+    got = watermark.clean_pieces([
+        {"key": "title", "label": "x", "text": "a  <b>\"q\"</b>", "t": 1},
+        {"key": "title", "label": "dup", "text": "again"},                 # a fixed one only once
+        {"key": "bogus", "label": "Subject", "text": "Macaw", "u": True},   # an unknown key is an extra
+        {"key": "", "label": "", "text": "no label, no key"},               # dropped
+        {"text": 5, "label": 7},
+    ] + [{"label": "Subject", "text": str(i)} for i in range(40)])
+    assert got[0] == {"key": "title", "label": "x", "text": "a b'q'/b", "t": True, "u": False, "v": False}
+    assert got[1]["key"] == "" and got[1]["text"] == "Macaw" and got[1]["u"] is True
+    assert len(got) <= watermark.MAX_PIECES
+    assert watermark.clean_pieces(None) is None
+    for bad in ("x", [1], {"a": 1}):
+        with pytest.raises(chat.ChatError):
+            watermark.clean_pieces(bad)
 
 
 def test_a_refused_watermark_is_not_remembered(tmp_path):
@@ -224,6 +274,8 @@ def test_a_refused_watermark_is_not_remembered(tmp_path):
     store.update(lambda lib: lib.photos.update(p=photo()))
     with pytest.raises(chat.ChatError):
         watermark.add(store, "p", "", "", "")
+    with pytest.raises(chat.ChatError):
+        watermark.add(store, "p", "A", "", "", "not a list")
     assert store.load().photos["p"].last_watermark is None
 
 
@@ -233,3 +285,29 @@ def test_an_older_library_without_the_field_still_loads():
     raw = library_to_dict(lib)
     del raw["photos"]["p"]["last_watermark"]
     assert library_from_dict(raw).photos["p"].last_watermark is None
+
+
+def test_suggestions_are_remembered_on_the_photo_so_a_later_ask_differs(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    recipe = FakeIdentifier(["One", "Two", "Three"])
+    watermark.identify(store, revisions, recipe, "p", None, "title")
+    assert store.load().photos["p"].suggestions == {"title": ["One", "Two", "Three"]}
+    # asked again later (a fresh page sends no earlier answers): the saved ones are passed along
+    recipe.answer = ["Four"]
+    watermark.identify(store, revisions, recipe, "p", None, "title")
+    assert recipe.avoids[-1] == ["One", "Two", "Three"]
+    # the two kinds are kept apart, and only the last 15 are kept
+    watermark.identify(store, revisions, FakeIdentifier("Macaw"), "p", None, "subject")
+    saved = store.load().photos["p"].suggestions
+    assert saved["subject"] == ["Macaw"] and saved["title"] == ["One", "Two", "Three", "Four"]
+    many = FakeIdentifier([f"t{i}" for i in range(20)])
+    watermark.identify(store, revisions, many, "p", None, "title")
+    assert store.load().photos["p"].suggestions["title"] == [f"t{i}" for i in range(5, 20)]
+    assert watermark.MAX_AVOID == 15
+
+
+def test_a_library_without_suggestions_still_loads():
+    from app.library import library_from_dict, library_to_dict, Library
+    raw = library_to_dict(Library(photos={"p": photo()}))
+    del raw["photos"]["p"]["suggestions"]
+    assert library_from_dict(raw).photos["p"].suggestions == {}
