@@ -130,8 +130,8 @@ def detail(photo: Photo, rules: RulesStore | None = None) -> dict:
         # Why chat is off for this photo (None when it is on).
         "chat_blocked": chat.blocked_reason(photo),
         "proposal": proposal,
-        # What the watermark form starts with (the reviewer can change it).
-        "watermark": {**watermark.template(photo), "parts": watermark.parts(photo)},
+        # What the watermark form starts with: the last watermark, or a template (the reviewer can change it).
+        "watermark": {**watermark.starting_point(photo), "parts": watermark.parts(photo)},
     })
     return out
 

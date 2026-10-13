@@ -56,6 +56,17 @@ def template(photo: Photo) -> dict:
     return {"title": p["place"], "subtitle": " · ".join(x for x in (p["owner"], p["date"]) if x)}
 
 
+def starting_point(photo: Photo) -> dict:
+    """What the watermark form starts with: the last watermark asked for on
+    this photo if there was one, otherwise the template from the original's
+    details. `remembered` says which."""
+    last = photo.last_watermark
+    if isinstance(last, dict) and any(last.get(k) for k in ("title", "subtitle", "third")):
+        return {"title": last.get("title", ""), "subtitle": last.get("subtitle", ""),
+                "third": last.get("third", ""), "remembered": True}
+    return {**template(photo), "third": "", "remembered": False}
+
+
 def _line(value, what: str) -> str:
     if value is None:
         return ""
@@ -176,4 +187,8 @@ def locate(store: LibraryStore, recipe, photo_id: str, source: str) -> str:
 def add(store: LibraryStore, photo_id: str, title, subtitle, third=None) -> int:
     """Queues the watermark as a request to Claude. Same rules as the chat box
     (a photo that can't be changed, or too many waiting, is refused)."""
-    return chat.enqueue(store, photo_id, instruction(title, subtitle, third))
+    text = instruction(title, subtitle, third)
+    message_id = chat.enqueue(store, photo_id, text)
+    lines = {"title": _line(title, "title"), "subtitle": _line(subtitle, "second line"), "third": _line(third, "third line")}
+    store.update_photo(photo_id, lambda p: setattr(p, "last_watermark", lines))
+    return message_id
