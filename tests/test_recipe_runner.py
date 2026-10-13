@@ -446,3 +446,52 @@ def test_the_interpreter_is_told_about_an_imported_photo():
     text = _interpret_prompt("add a watermark", CommentContext(imported=True))
     assert "imported already finished" in text and 'scope "imported"' in text
     assert "imported already finished" not in _interpret_prompt("hi", CommentContext())
+
+
+# ---- identify -------------------------------------------------------------------------
+
+
+def _identify(tmp_path, proc=None, hint=None, side_effect=None, style="subject"):
+    class Proc:
+        returncode = 0
+        stderr = ""
+        stdout = _wrapped({"name": " Scarlet macaw "})
+
+    with patch("app.recipe_runner.subprocess.run", return_value=proc or Proc(), side_effect=side_effect) as mock_run:
+        out = _runner(tmp_path).identify("/tmp/i.jpg", hint, style)
+    return out, mock_run.call_args[0][0]
+
+
+def test_identify_asks_for_the_main_subject_or_what_the_hint_points_at(tmp_path):
+    name, cmd = _identify(tmp_path)
+    assert name == "Scarlet macaw" and not cmd[2].startswith("/") and "/tmp/i.jpg" in cmd[2] and "the main subject" in cmd[2]
+    _, cmd = _identify(tmp_path, hint="the bird on the left")
+    assert "this: the bird on the left" in cmd[2] and "main subject" not in cmd[2]
+
+
+def test_identify_raises_with_a_reason_when_it_cannot_answer(tmp_path):
+    import subprocess as sp
+    import pytest
+
+    class Bad:
+        returncode, stderr, stdout = 1, "boom", ""
+
+    class Junk:
+        returncode, stderr, stdout = 0, "", json.dumps({"result": "no idea"})
+
+    class Empty:
+        returncode, stderr, stdout = 0, "", _wrapped({"name": "  "})
+
+    for proc, fragment in ((Bad, "failed"), (Junk, "could not be read"), (Empty, "did not name")):
+        with pytest.raises(RuntimeError, match=fragment):
+            _identify(tmp_path, proc=proc)
+    with pytest.raises(RuntimeError, match="too long"):
+        _identify(tmp_path, side_effect=sp.TimeoutExpired(cmd="claude", timeout=120))
+
+
+def test_identify_can_ask_for_a_painting_style_title_with_an_optional_focus(tmp_path):
+    _, cmd = _identify(tmp_path, style="title")
+    assert "name a painting" in cmd[2] and "as few words as possible" in cmd[2] and "main subject" not in cmd[2]
+    assert "Let this guide" not in cmd[2] and "/tmp/i.jpg" in cmd[2]
+    _, cmd = _identify(tmp_path, hint="the light", style="title")
+    assert "Let this guide the title: the light." in cmd[2]

@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 def create_app(
     cfg: Config, immich: ImmichClient, store: LibraryStore, health: HealthStore,
     rules: RulesStore | None = None, revisions: RevisionStore | None = None,
-    thumbs: ThumbCache | None = None, on_change=None, on_job=None,
+    thumbs: ThumbCache | None = None, on_change=None, on_job=None, recipe=None,
 ) -> Flask:
     app = Flask(__name__)
 
@@ -53,7 +53,7 @@ def create_app(
     if store is not None and revisions is not None and thumbs is not None:
         register_browse_routes(app, store, revisions, thumbs, rules)
         register_action_routes(app, store, revisions, cfg, on_change)
-        register_chat_routes(app, store, on_job)
+        register_chat_routes(app, store, on_job, recipe, revisions)
     if rules is not None:
         _register_rules_routes(app, rules)
 
