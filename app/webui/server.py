@@ -5,6 +5,7 @@ one, or confirm a proposed one. Actions on photos are built on top of this.
 from __future__ import annotations
 
 import logging
+import os
 
 from flask import Flask, jsonify, render_template, request
 
@@ -35,6 +36,11 @@ def create_app(
         if snap.claude_auth_ok:
             return jsonify({"status": "ok"}), 200
         return jsonify({"status": "unhealthy", "reason": snap.last_error}), 503
+
+    @app.get("/api/version")
+    def api_version():
+        # The image bakes its release in as APP_VERSION; a plain checkout has none.
+        return jsonify({"version": os.environ.get("APP_VERSION", "").strip() or "dev"})
 
     @app.get("/")
     def index():
