@@ -380,35 +380,68 @@ class RecipeRunner:
             log.warning("comment interpretation returned unparseable output")
             return None
 
-    def identify(self, image_path: str, hint: str | None = None, style: str = "subject") -> str:
+    def identify(
+        self, image_path: str, hint: str | None = None, style: str = "subject", avoid: list[str] | None = None,
+    ) -> list[str]:
         """Asks Claude to look at a picture and answer in a few words. With
-        style "subject" it names the main subject, or what the reviewer
-        pointed at with `hint`; with "title" it gives the picture a short
-        poetic title, the way a painting is named (`hint` says what to focus
-        on). Returns the text. Raises RuntimeError if the call fails or the
-        reply is unusable. Read-only: nothing about the photo changes."""
+        style "subject" it names the main subject (or what the reviewer
+        pointed at with `hint`) and returns one answer; with "title" it
+        suggests three short, poetic titles, the way a painting is named
+        (`hint` says what to focus on). `avoid` lists earlier answers, so a
+        retry gives something different. Raises RuntimeError if the call fails
+        or the reply is unusable. Read-only: nothing about the photo changes."""
+        count = 3 if style == "title" else 1
+        again = f" Do not repeat any of these earlier answers: {'; '.join(avoid)}." if avoid else ""
         if style == "title":
-            focus = f" Let this guide the title: {hint}." if hint else ""
+            focus = f" Let this guide the titles: {hint}." if hint else ""
             ask = (
-                f"Look at the image at {image_path} and give it a title, the way you would name a painting: "
-                "as few words as possible (two to five), poetic and evocative rather than descriptive, "
-                f"with no sentence around it (for example \"Wings at Dusk\" or \"The Quiet Harbor\").{focus} "
+                f"Look at the image at {image_path} and suggest {count} different titles for it, the way you would "
+                "name a painting: as few words as possible (two to five each), poetic and evocative rather than "
+                "descriptive, each with no sentence around it (for example \"Wings at Dusk\" or \"The Quiet Harbor\")."
+                f"{focus}{again} "
             )
+            shape = '{"names": ["<title>", "<title>", "<title>"]}'
         else:
             what = f"this: {hint}" if hint else "the main subject"
             ask = (
                 f"Look at the image at {image_path} and name {what}. Be specific but brief: a common name of at "
                 "most six words (for example \"Scarlet macaw\" or \"Brick lighthouse\"), with no sentence around it. "
-                "If you cannot tell, name your best guess. "
+                f"If you cannot tell, name your best guess.{again} "
             )
-        prompt = ask + 'Reply with ONLY this JSON and no other text: {"name": "<the text>"}'
+            shape = '{"names": ["<the name>"]}'
+        payload = self._ask_json(ask + "Reply with ONLY this JSON and no other text: " + shape)
+        found = payload.get("names") if isinstance(payload.get("names"), list) else [payload.get("name")]
+        names = [n.strip() for n in found if isinstance(n, str) and n.strip()][:count]
+        if not names:
+            raise RuntimeError("Claude did not name anything")
+        return names
+
+    def locate(self, latitude: float, longitude: float) -> str:
+        """Asks Claude which place is at these coordinates, from what it knows
+        (no map service, no picture). Returns "City, Region, Country" as well
+        as Claude can say it. Raises RuntimeError if the call fails or the
+        reply is unusable."""
+        payload = self._ask_json(
+            f"Which place is at latitude {latitude}, longitude {longitude}? Name the nearest town or city, its "
+            "state or region, and its country, in English, written as City, Region, Country (leave out a part "
+            "that does not apply). If it is open water, name the sea or ocean and the nearest country. "
+            'Reply with ONLY this JSON and no other text: {"place": "<City, Region, Country>"}'
+        )
+        place = _text(payload, "place")
+        if not place:
+            raise RuntimeError("Claude did not name a place")
+        return place
+
+    def _ask_json(self, prompt: str, timeout: int = 120) -> dict:
+        """One read-only headless call; returns the JSON object Claude replied
+        with. Raises RuntimeError with a readable reason on any failure."""
         token = resolve_oauth_token(self._secrets_file)
         env = os.environ.copy()
         if token:
             env[ENV_TOKEN_VAR] = token
         cmd = [self._claude_binary, "-p", prompt, "--output-format", "json", "--permission-mode", _PERMISSION_MODE]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             raise RuntimeError("Claude took too long to answer")
         except FileNotFoundError:
@@ -416,13 +449,9 @@ class RecipeRunner:
         if proc.returncode != 0:
             raise RuntimeError(f"claude invocation failed ({proc.returncode}): {(proc.stderr or '')[:300]}")
         try:
-            payload = _extract_json_object(json.loads(proc.stdout).get("result", ""))
+            return _extract_json_object(json.loads(proc.stdout).get("result", ""))
         except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
             raise RuntimeError("Claude's answer could not be read")
-        name = _text(payload, "name")
-        if not name:
-            raise RuntimeError("Claude did not name anything")
-        return name
 
     def check_auth(self) -> tuple[bool, str | None]:
         """A cheap, trivial invocation used purely to confirm a session can

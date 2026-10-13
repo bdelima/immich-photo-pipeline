@@ -451,20 +451,20 @@ def test_the_interpreter_is_told_about_an_imported_photo():
 # ---- identify -------------------------------------------------------------------------
 
 
-def _identify(tmp_path, proc=None, hint=None, side_effect=None, style="subject"):
+def _identify(tmp_path, proc=None, hint=None, side_effect=None, style="subject", avoid=None, reply=None):
     class Proc:
         returncode = 0
         stderr = ""
-        stdout = _wrapped({"name": " Scarlet macaw "})
+        stdout = _wrapped(reply or {"name": " Scarlet macaw "})
 
     with patch("app.recipe_runner.subprocess.run", return_value=proc or Proc(), side_effect=side_effect) as mock_run:
-        out = _runner(tmp_path).identify("/tmp/i.jpg", hint, style)
+        out = _runner(tmp_path).identify("/tmp/i.jpg", hint, style, avoid)
     return out, mock_run.call_args[0][0]
 
 
 def test_identify_asks_for_the_main_subject_or_what_the_hint_points_at(tmp_path):
     name, cmd = _identify(tmp_path)
-    assert name == "Scarlet macaw" and not cmd[2].startswith("/") and "/tmp/i.jpg" in cmd[2] and "the main subject" in cmd[2]
+    assert name == ["Scarlet macaw"] and not cmd[2].startswith("/") and "/tmp/i.jpg" in cmd[2] and "the main subject" in cmd[2]
     _, cmd = _identify(tmp_path, hint="the bird on the left")
     assert "this: the bird on the left" in cmd[2] and "main subject" not in cmd[2]
 
@@ -494,4 +494,14 @@ def test_identify_can_ask_for_a_painting_style_title_with_an_optional_focus(tmp_
     assert "name a painting" in cmd[2] and "as few words as possible" in cmd[2] and "main subject" not in cmd[2]
     assert "Let this guide" not in cmd[2] and "/tmp/i.jpg" in cmd[2]
     _, cmd = _identify(tmp_path, hint="the light", style="title")
-    assert "Let this guide the title: the light." in cmd[2]
+    assert "Let this guide the titles: the light." in cmd[2]
+
+
+def test_identify_title_style_returns_up_to_three_titles_and_retries_avoid_earlier_ones(tmp_path):
+    reply = {"names": [" Wings at Dusk ", "", "The Quiet Harbor", "Red Hour", "A Fourth"]}
+    names, cmd = _identify(tmp_path, style="title", reply=reply)
+    assert names == ["Wings at Dusk", "The Quiet Harbor", "Red Hour"] and "suggest 3 different titles" in cmd[2]
+    assert "Do not repeat" not in cmd[2]
+    names, cmd = _identify(tmp_path, avoid=["Scarlet macaw", "Parrot"])
+    assert names == ["Scarlet macaw"] and "Do not repeat any of these earlier answers: Scarlet macaw; Parrot." in cmd[2]
+    assert _identify(tmp_path, style="title", reply={"name": "Lone Gull"})[0] == ["Lone Gull"]
