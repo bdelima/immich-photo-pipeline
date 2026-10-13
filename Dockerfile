@@ -40,6 +40,9 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app/ app/
+# The running version is read from this file (app/version.py), not from the
+# APP_VERSION env var, which a recreated container can keep from an older image.
+COPY VERSION VERSION
 # Claude Code only discovers a skill from a `.claude/skills/<name>/`
 # folder relative to the subprocess's working directory (confirmed live
 # against the real CLI -- see app/recipe_runner.py's module docstring);
