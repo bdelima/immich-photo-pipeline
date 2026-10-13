@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from ..config import Config
 from ..health import HealthStore
@@ -16,6 +16,7 @@ from ..revisions import RevisionStore
 from ..rules import MAX_ACTIVE_RULES, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
 from ..thumbs import ThumbCache
 from ..version import current as current_version
+from . import events
 from .action_routes import register_action_routes
 from .browse import register_browse_routes
 from .chat_routes import register_chat_routes
@@ -45,6 +46,15 @@ def create_app(
     @app.get("/")
     def index():
         return render_template("index.html", overview=_overview(store.load()))
+
+    @app.get("/api/events")
+    def api_events():
+        # One long-lived stream per open page: a line each time the library changes.
+        if store is None:
+            return jsonify({"error": "no library"}), 404
+        return Response(
+            stream_with_context(events.stream(store.path)), mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/albums")
     def api_albums():

@@ -144,11 +144,14 @@ async function select(v, keep, keepViewer) {
   $("grid").innerHTML = list.map((p, i) => tile(p, i)).join("");
   $("empty").hidden = list.length > 0;
   $("empty").textContent = "Nothing here.";
-  for (const el of $("grid").querySelectorAll(".tile")) {
-    el.onclick = () => openViewer(+el.dataset.i);
-    el.querySelector(".pick").onclick = e => { e.stopPropagation(); toggle(list[+el.dataset.i].id, el); };
-  }
+  for (const el of $("grid").querySelectorAll(".tile")) wireTile(el);
   updateBar();
+}
+// A tile finds its photo by position when clicked, so moving tiles around only
+// means renumbering them.
+function wireTile(el) {
+  el.onclick = () => openViewer(+el.dataset.i);
+  el.querySelector(".pick").onclick = e => { e.stopPropagation(); toggle(list[+el.dataset.i].id, el); };
 }
 function toggle(id, el) {
   if (selected.has(id)) selected.delete(id); else selected.add(id);
@@ -218,13 +221,15 @@ async function revertTo(id, step) {
   const i = list.findIndex(p => p.id === id);
   if (i >= 0) openViewer(i);
 }
+// What a thumbnail shows; when it is unchanged the tile is left alone.
+const tileSig = p => [p.version, p.status, p.live, p.has_image, p.media_type].join("|");
 function tile(p, i) {
   const label = p.status !== "ready" ? p.status.replace("_", " ") : p.media_type === "video" ? "video" : "";
   const inner = p.media_type === "image" && p.has_image
     ? `<img loading="lazy" src="/media/${p.id}/thumb?v=${p.version}" alt="">`
     : `<div class="ph">${esc(p.media_type === "video" ? "Video" : p.status.replace("_", " "))}</div>`;
   const on = selected.has(p.id);
-  return `<div class="tile${on ? " sel" : ""}" data-i="${i}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""} aria-label="Select">${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
+  return `<div class="tile${on ? " sel" : ""}" data-i="${i}" data-id="${esc(p.id)}" data-sig="${esc(tileSig(p))}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""} aria-label="Select">${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
          `${p.live ? `<span class="badge live">Live</span>` : ""}</div>`;
 }
 
@@ -593,6 +598,72 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowRight") openViewer(open + 1);
   else if (e.key === "ArrowLeft") openViewer(open - 1);
 });
+
+// ---- live updates ----
+// The server says when the library changes (a photo arrives, finishes, moves).
+// Only what changed is touched: the sidebar counts, and the tiles that were
+// added, removed or changed. The open photo, the form being filled in, the
+// selection and the scroll position are left as they are.
+async function syncCounts() {
+  const t = await api("/api/tree");
+  const links = [...document.querySelectorAll("#tree a.item")];
+  const want = ["queue", "review", "live", ...t.albums.map(a => a.view), "trash"];
+  if (links.length !== want.length || links.some((a, i) => a.dataset.view !== want[i])) {
+    // An album appeared or went: redraw the (small) sidebar.
+    treeAlbums = t.albums; albums = t.albums.map(a => a.name);
+    await renderTree(canonicalView(view, treeAlbums), "");
+    return;
+  }
+  const counts = [t.queue, t.review, t.live, ...t.albums.map(a => a.count), t.trash];
+  links.forEach((a, i) => { const c = a.querySelector(".count"); if (c.textContent !== String(counts[i])) c.textContent = counts[i]; });
+}
+async function syncGrid() {
+  const token = loadToken, v = view;
+  const photos = (await api("/api/photos?view=" + encodeURIComponent(v))).photos;
+  if (token !== loadToken || v !== view) return;       // the person went elsewhere meanwhile
+  const openId = open >= 0 ? (list[open] || {}).id : null;
+  const grid = $("grid"), have = new Map([...grid.children].map(el => [el.dataset.id, el]));
+  const next = [];
+  photos.forEach((p, i) => {
+    let el = have.get(p.id);
+    if (!el || el.dataset.sig !== tileSig(p)) {
+      const box = document.createElement("div");
+      box.innerHTML = tile(p, i);
+      const fresh = box.firstElementChild;
+      wireTile(fresh);
+      if (el) el.replaceWith(fresh);
+      el = fresh;
+    }
+    have.delete(p.id);
+    next.push(el);
+  });
+  for (const gone of have.values()) gone.remove();
+  next.forEach((el, i) => { el.dataset.i = i; if (grid.children[i] !== el) grid.insertBefore(el, grid.children[i] || null); });
+  list = photos;
+  for (const id of [...selected]) if (!list.some(p => p.id === id)) selected.delete(id);
+  $("total").textContent = list.length + (list.length === 1 ? " photo" : " photos");
+  $("empty").hidden = list.length > 0;
+  if (openId) { const i = list.findIndex(p => p.id === openId); if (i >= 0) open = i; else closeViewer(); }
+  updateBar();
+}
+let liveBusy = false, livePending = false, liveTimer = null, liveSeen = null;
+async function syncLive() {
+  if (liveBusy) { livePending = true; return; }
+  liveBusy = true;
+  try { await Promise.all([syncCounts(), syncGrid()]); } catch (e) { /* the next change tries again */ }
+  finally { liveBusy = false; if (livePending) { livePending = false; syncLive(); } }
+}
+function liveChanged() {
+  clearTimeout(liveTimer);
+  // Wait for a burst of writes to settle, and for any open menu to be done with.
+  if (document.hidden) return;                          // it is picked up when the tab is shown again
+  liveTimer = setTimeout(() => { if (menuEl) liveChanged(); else syncLive(); }, menuEl ? 2000 : 400);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && liveSeen !== null) liveChanged(); });
+if (window.EventSource) {
+  const events = new EventSource("/api/events");
+  events.onmessage = e => { const changed = liveSeen !== null && e.data !== liveSeen; liveSeen = e.data; if (changed) liveChanged(); };
+}
 
 // The address fragment picks the place: /#album:costa-rica opens that album.
 // Clicking the sidebar changes the fragment, which comes back through here.
