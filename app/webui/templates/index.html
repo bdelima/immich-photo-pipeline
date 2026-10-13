@@ -460,7 +460,7 @@ document.addEventListener("keydown", e => {
 // Clicking the sidebar changes the fragment, which comes back through here.
 window.addEventListener("hashchange", () => { const v = hashView(location.hash); if (v && v !== view) select(v); });
 const first = hashView(location.hash);
-if (!first) history.replaceState(null, "", viewHash("first") === "" ? "" : viewHash("review"));
+if (!first) history.replaceState(null, "", viewHash("review"));
 select(first || "review");
 </script>
 </body>
