@@ -8,16 +8,17 @@ every answer is kept so a place is only asked for once."""
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 
 import requests
 
+from . import version
+
 log = logging.getLogger(__name__)
 
 URL = "https://nominatim.openstreetmap.org/reverse"
-USER_AGENT = f"immich-photo-pipeline/{os.environ.get('APP_VERSION', 'dev')} (+https://github.com/bdelima/immich-photo-pipeline)"
+USER_AGENT = f"immich-photo-pipeline/{version.current()} (+https://github.com/bdelima/immich-photo-pipeline)"
 MIN_GAP_SECONDS = 1.0
 TIMEOUT_SECONDS = 8
 

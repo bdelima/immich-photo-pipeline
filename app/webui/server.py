@@ -5,7 +5,6 @@ one, or confirm a proposed one. Actions on photos are built on top of this.
 from __future__ import annotations
 
 import logging
-import os
 
 from flask import Flask, jsonify, render_template, request
 
@@ -16,6 +15,7 @@ from ..library import REVIEW, STATUS_FAILED, STATUS_PROCESSING, Library, Library
 from ..revisions import RevisionStore
 from ..rules import MAX_ACTIVE_RULES, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
 from ..thumbs import ThumbCache
+from ..version import current as current_version
 from .action_routes import register_action_routes
 from .browse import register_browse_routes
 from .chat_routes import register_chat_routes
@@ -39,8 +39,8 @@ def create_app(
 
     @app.get("/api/version")
     def api_version():
-        # The image bakes its release in as APP_VERSION; a plain checkout has none.
-        return jsonify({"version": os.environ.get("APP_VERSION", "").strip() or "dev"})
+        # Read from the VERSION file the image carries (see app/version.py).
+        return jsonify({"version": current_version()})
 
     @app.get("/")
     def index():
