@@ -66,14 +66,27 @@ MAX_LABEL = 40
 def base_pieces(photo: Photo, *, placed: bool) -> list[dict]:
     """The four fields filled in from the original's details: the title is empty, the location
     comes from Immich, the author is the uploader, the date is the month. `placed` puts the
-    location on the first line and the author and date on the second, as the template always did."""
+    location on the first line and the author, then the date, on the second, as the template always did."""
     p = parts(photo)
     texts = {"title": "", "location": p["place"], "author": p["owner"], "date": p["date"]}
     lines = {"title": "", "location": "t", "author": "u", "date": "u"}
     # `auto` marks a piece as taken from Immich just now (the page may tidy it, e.g. leave off the home country)
     return [{"key": key, "label": label, "text": texts[key], "auto": True,
-             "t": placed and lines[key] == "t", "u": placed and lines[key] == "u", "v": False}
+             "t": int(placed and lines[key] == "t"), "u": int(placed and lines[key] == "u") * (2 if key == "date" else 1), "v": 0}
             for key, label in FIXED]
+
+
+MAX_TICK = 999
+
+
+def _tick(value) -> int:
+    """Whether a piece is on a line, and where: 0 is off, otherwise the order it was ticked in
+    (the smaller comes first on the line). A plain true, as older versions saved, is 1."""
+    if value is True:
+        return 1
+    if isinstance(value, int) and not isinstance(value, bool):
+        return max(0, min(value, MAX_TICK))
+    return 0
 
 
 def clean_pieces(pieces) -> list[dict] | None:
@@ -93,7 +106,7 @@ def clean_pieces(pieces) -> list[dict] | None:
         if not key and not label:
             continue
         out.append({"key": key, "label": label or dict(FIXED)[key], "text": text,
-                    "t": bool(x.get("t")), "u": bool(x.get("u")), "v": bool(x.get("v"))})
+                    "t": _tick(x.get("t")), "u": _tick(x.get("u")), "v": _tick(x.get("v"))})
     return out
 
 
@@ -122,7 +135,7 @@ def starting_point(photo: Photo) -> dict:
         if saved is None:
             # Remembered by an older version, which kept only the lines: each line is kept as a piece
             # ticked for its own line, so the lines come back exactly.
-            saved = [{"key": "", "label": f"Line {n}", "text": last.get(k, ""), "t": n == 1, "u": n == 2, "v": n == 3}
+            saved = [{"key": "", "label": f"Line {n}", "text": last.get(k, ""), "t": int(n == 1), "u": int(n == 2), "v": int(n == 3)}
                      for n, k in enumerate(("title", "subtitle", "third"), 1) if last.get(k)]
         have = {x["key"] for x in saved if x["key"]}
         fixed = [x for x in base_pieces(photo, placed=False) if x["key"] not in have]

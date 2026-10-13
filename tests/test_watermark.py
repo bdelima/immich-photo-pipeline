@@ -208,7 +208,7 @@ def test_the_identify_route(tmp_path):
 def lines_of(pieces):
     """The three lines the pieces make, the way the form's preview does."""
     seps = {"t": " – ", "u": " · ", "v": " · "}
-    return [seps[k].join(x["text"] for x in pieces if x[k] and x["text"]) for k in ("t", "u", "v")]
+    return [seps[k].join(x["text"] for x in sorted((x for x in pieces if x[k] and x["text"]), key=lambda x: x[k])) for k in ("t", "u", "v")]
 
 
 def test_the_form_starts_from_the_template_until_a_watermark_has_been_asked_for():
@@ -263,7 +263,7 @@ def test_pieces_from_the_page_are_cleaned_and_bounded():
         {"text": 5, "label": 7},
     ] + [{"label": "Subject", "text": str(i)} for i in range(40)])
     assert got[0] == {"key": "title", "label": "x", "text": "a b'q'/b", "t": True, "u": False, "v": False}
-    assert got[1]["key"] == "" and got[1]["text"] == "Macaw" and got[1]["u"] is True
+    assert got[1]["key"] == "" and got[1]["text"] == "Macaw" and got[1]["u"] == 1
     assert len(got) <= watermark.MAX_PIECES
     assert watermark.clean_pieces(None) is None
     for bad in ("x", [1], {"a": 1}):
@@ -386,3 +386,17 @@ def test_a_watermark_asked_through_a_question_still_reaches_its_step(tmp_path):
     assert run(store, revisions, recipe, rules) is True
     photo = store.load().photos["a"]
     assert photo.current_revision().watermark == _wm("Dusk") and photo.pending_watermark is None
+
+
+def test_ticks_keep_the_order_they_were_made_in():
+    got = watermark.clean_pieces([
+        {"key": "author", "label": "Author", "text": "Bob", "u": 2},
+        {"key": "date", "label": "Date", "text": "March 2024", "u": 1, "t": True},
+        {"key": "", "label": "Subject", "text": "Macaw", "u": 99999, "v": -3},
+        {"key": "location", "label": "Location", "text": "CR", "u": "yes", "v": 2.5}])
+    assert [(x["t"], x["u"], x["v"]) for x in got] == [(0, 2, 0), (1, 1, 0), (0, watermark.MAX_TICK, 0), (0, 0, 0)]
+    p = photo(last_watermark={"title": "", "subtitle": "x", "third": "", "pieces": [
+        {"key": "author", "label": "Author", "text": "Bob", "t": 0, "u": 2, "v": 0},
+        {"key": "date", "label": "Date", "text": "March 2024", "t": 0, "u": 1, "v": 0}]})
+    assert lines_of(watermark.starting_point(p)["pieces"]) == ["", "March 2024 · Bob", ""]
+    assert lines_of(watermark.starting_point(photo())["pieces"])[1] == "Bob · March 2024"
