@@ -390,65 +390,132 @@ function originalDetails(sources) {
   return sources.length && sources.every(s => s.meta && s.meta.unavailable)
     ? `<p class="meta aside-note">No details of the original: Immich no longer has it.</p>` : "";
 }
-// The watermark builder: two lines, seeded from the original's details, that
-// the reviewer can change before asking Claude to add them as a new step.
+// The watermark builder: up to three lines, seeded from the original's details,
+// that the reviewer can change before asking Claude to add them as a new step.
 function watermarkForm(w) {
   return `<div class="wm"><button class="btn sec sm" id="wmOpen">Add a watermark…</button>` +
     `<div id="wmForm" hidden><label>Title<input class="field" id="wmTitle" maxlength="120" value="${esc(w.title)}"></label>` +
-    `<label>Underneath<input class="field" id="wmSub" maxlength="120" value="${esc(w.subtitle)}"></label>` +
-    `<label>Third line <small>(optional)</small><input class="field" id="wmThird" maxlength="120"></label>` +
+    `<label>Second line<input class="field" id="wmSub" maxlength="120" value="${esc(w.subtitle)}"></label>` +
+    `<label>Third line<input class="field" id="wmThird" maxlength="120"></label>` +
     `<div class="ident"><label>Hint <small>(optional; blank = the whole picture)</small><input class="field" id="wmHint" maxlength="80" placeholder="e.g. the bird on the left"></label>` +
-    `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><button class="btn sec sm" id="wmPoem">Title it</button><span class="meta" id="wmSaw" role="status"></span></div>` +
+    `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><button class="btn sec sm" id="wmPoem">Suggest title</button><span class="meta" id="wmSaw" role="status"></span></div>` +
     `<table class="wmgrid" id="wmGrid"></table></div>` +
     `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button></div></div></div>`;
+}
+// The country of the browser's time zone, asked for once ("" if unknown).
+let homeCountry = null;
+function getHomeCountry() {
+  if (!homeCountry) {
+    let tz = ""; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+    homeCountry = tz ? fetch("/api/home-country?tz=" + encodeURIComponent(tz)).then(r => r.json()).then(o => o.country || "").catch(() => "") : Promise.resolve("");
+  }
+  return homeCountry;
+}
+// A country's name in a comparable form ("United States of America" = "USA").
+const COUNTRY_ALIASES = { "usa": "united states", "us": "united states", "united states of america": "united states",
+  "uk": "united kingdom", "great britain": "united kingdom", "england": "united kingdom" };
+const countryKey = c => { const k = c.toLowerCase().replace(/[().,]/g, " ").replace(/^the /, "").split(/\s+/).filter(Boolean).join(" "); return COUNTRY_ALIASES[k] || k; };
+// Leaves off the last part of a place ("Costa Rica") when it is the home country.
+function trimHome(place, home) {
+  const bits = place.split(", ");
+  return home && bits.length > 1 && countryKey(bits[bits.length - 1]) === countryKey(home) ? bits.slice(0, -1).join(", ") : place;
 }
 function wireWatermark(id, w) {
   const open = $("wmOpen"); if (!open) return;
   const form = $("wmForm");
-  const toggle = show => { form.hidden = !show; open.hidden = show; };
+  let looked = false;
+  const toggle = show => { form.hidden = !show; open.hidden = show; if (show && !looked) { looked = true; lookUp(); } };
   open.onclick = () => { toggle(true); $("wmTitle").focus(); };
   $("wmCancel").onclick = () => toggle(false);
-  // The pieces that can go on either line: what Immich knew (place, owner, date)
+  // The pieces that can go on any line: what Immich knew (place, owner, date)
   // and whatever Claude has said so far. Ticking a box puts a piece on that line.
+  // Location keeps its full text in `raw`; `text` leaves off the home country.
   const parts = w.parts || {};
-  const items = [["Location", parts.place, true, false], ["Owner", parts.owner, false, true], ["Date", parts.date, false, true]]
-    .filter(x => x[1]).map(([label, text, t, u]) => ({ label, text, t, u, fixed: true }));
+  let home = "";
+  const items = [["Location", parts.place, true, false, false], ["Owner", parts.owner, false, true, false], ["Date", parts.date, false, true, false]]
+    .filter(x => x[1]).map(([label, raw, t, u, v]) => ({ label, raw, text: raw, t, u, v, fixed: true }));
   // Each line is rebuilt from its ticked pieces only when one of its own boxes
   // changes, so whatever was typed into the other lines is kept.
   const lines = { t: ["wmTitle", " – "], u: ["wmSub", " · "], v: ["wmThird", " · "] };
-  const compose = k => { $(lines[k][0]).value = items.filter(x => x[k]).map(x => x.text).join(lines[k][1]); };
+  const wanted = k => items.filter(x => x[k]).map(x => x.text).join(lines[k][1]);
+  const compose = k => { $(lines[k][0]).value = wanted(k); };
+  // Runs a change to the pieces, then rebuilds each line that still holds
+  // exactly what it held before (so nothing the reviewer typed is lost).
+  const refresh = change => {
+    const untouched = ["t", "u", "v"].filter(k => $(lines[k][0]).value === wanted(k));
+    change(); drawGrid(); for (const k of untouched) compose(k);
+  };
+  const setLocation = () => { const loc = items.find(x => x.label === "Location"); if (loc) loc.text = trimHome(loc.raw, home); };
   const drawGrid = () => {
     $("wmGrid").innerHTML = items.length
-      ? `<tr><th>Piece</th><th>Title</th><th>Under</th><th>3rd</th><th></th></tr>` + items.map((x, i) =>
+      ? `<tr><th>Piece</th><th>Title</th><th>2nd</th><th>3rd</th><th></th></tr>` + items.map((x, i) =>
         `<tr><td><b>${esc(x.label)}</b> ${esc(x.text)}</td>` +
         `<td><input type="checkbox" data-i="${i}" data-k="t" aria-label="${esc(x.label)} in the title"${x.t ? " checked" : ""}></td>` +
-        `<td><input type="checkbox" data-i="${i}" data-k="u" aria-label="${esc(x.label)} underneath"${x.u ? " checked" : ""}></td>` +
+        `<td><input type="checkbox" data-i="${i}" data-k="u" aria-label="${esc(x.label)} on the second line"${x.u ? " checked" : ""}></td>` +
         `<td><input type="checkbox" data-i="${i}" data-k="v" aria-label="${esc(x.label)} on the third line"${x.v ? " checked" : ""}></td>` +
         `<td>${x.fixed ? "" : `<button class="btn sec sm" data-rm="${i}" aria-label="Remove ${esc(x.label)}">×</button>`}</td></tr>`).join("")
       : "";
-    for (const c of $("wmGrid").querySelectorAll("input")) c.onchange = () => { items[+c.dataset.i][c.dataset.k] = c.checked; compose(c.dataset.k); };
+    for (const c of $("wmGrid").querySelectorAll("input")) c.onchange = () => {
+      const it = items[+c.dataset.i], k = c.dataset.k;
+      it[k] = c.checked;
+      // Only one title idea is the title at a time: choosing one releases the others.
+      if (k === "t" && c.checked && it.label === "Title idea") for (const o of items) if (o !== it && o.label === "Title idea") o.t = false;
+      drawGrid(); compose(k);
+    };
     for (const b of $("wmGrid").querySelectorAll("[data-rm]")) b.onclick = () => { const [gone] = items.splice(+b.dataset.rm, 1); drawGrid(); for (const k of ["t", "u", "v"]) if (gone[k]) compose(k); };
   };
   drawGrid();
-  // Asks Claude to look at the picture; the answer is added to the list, to be
-  // placed (or not) with the boxes. Every ask adds another piece.
+  // On opening: work out the home country (to leave it off the location) and,
+  // when Immich gave coordinates but no place, name the place from them.
+  const lookUp = async () => {
+    const saw = $("wmSaw"), needPlace = !parts.place && Array.isArray(parts.coordinates);
+    if (needPlace) saw.textContent = "Looking up the place…";
+    const [country, found] = await Promise.all([getHomeCountry(),
+      needPlace ? fetch("/api/photos/" + id + "/place").then(r => r.json()).then(o => o.place || "").catch(() => "") : Promise.resolve("")]);
+    home = country;
+    refresh(() => {
+      if (found && !items.some(x => x.label === "Location")) {
+        const titled = items.some(x => x.label === "Title idea" && x.t);
+        items.unshift({ label: "Location", raw: found, text: found, t: !titled, u: titled, v: false, fixed: true });
+      }
+      setLocation();
+    });
+    saw.textContent = needPlace ? (found ? "Place found from the coordinates: " + found : "Couldn't name the place from the coordinates.") : "";
+  };
+  // Asks Claude to look at the picture; the answer(s) are added to the list, to
+  // be placed (or not) with the boxes. Every ask adds more, and tells Claude
+  // what it already said so a retry gives something different.
   const ask = (style, label) => async () => {
     const buttons = [$("wmIdentify"), $("wmPoem")], saw = $("wmSaw");
     for (const b of buttons) b.disabled = true;
     saw.textContent = "Looking…";
     try {
       const r = await fetch("/api/photos/" + id + "/identify", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hint: $("wmHint").value, style }) });
+        body: JSON.stringify({ hint: $("wmHint").value, style, avoid: items.filter(x => x.label === label).map(x => x.text) }) });
       const out = await r.json().catch(() => ({}));
       if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
-      if (items.length < 20) items.push({ label, text: out.name, t: false, u: false, v: false });
-      drawGrid();
-      saw.textContent = "Claude says: " + out.name + " – tick where it goes.";
+      const names = out.names || [];
+      if (style === "title") {
+        // Title ideas go at the top, the first one is the title, and the
+        // location, owner and date move down a line (the first time only).
+        const fresh = names.map((text, n) => ({ label, text, raw: text, t: n === 0, u: false, v: false }));
+        const firstTime = !items.some(x => x.label === label);
+        refresh(() => {
+          for (const o of items) if (o.label === label) o.t = false;
+          if (firstTime) for (const o of items) if (o.fixed) { if (o.t) { o.t = false; o.u = true; } else if (o.u) { o.u = false; o.v = true; } }
+          items.unshift(...fresh); items.length = Math.min(items.length, 20);
+        });
+        for (const k of ["t", "u", "v"]) if (firstTime || k === "t") compose(k);
+        saw.textContent = "Claude suggests: " + names.join(" / ") + " – the first is the title; tick another to switch.";
+      } else {
+        refresh(() => { for (const text of names) if (items.length < 20) items.push({ label, text, raw: text, t: false, u: false, v: false }); });
+        saw.textContent = "Claude says: " + names.join(" / ") + " – tick where it goes.";
+      }
     } catch (e) { saw.textContent = "That didn't work."; }
     finally { for (const b of buttons) b.disabled = false; }
   };
   $("wmIdentify").onclick = ask("subject", "Subject");
-  $("wmPoem").onclick = ask("title", "Painting title");
+  $("wmPoem").onclick = ask("title", "Title idea");
   $("wmSend").onclick = async () => {
     $("wmSend").disabled = true;
     const r = await fetch("/api/photos/" + id + "/watermark", { method: "POST", headers: { "Content-Type": "application/json" },
