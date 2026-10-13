@@ -197,3 +197,16 @@ button.orig .ph { color: var(--muted); font-size: .8rem; }
 #viewer .wm .wmgrid th { text-align: left; font-weight: 600; padding: .15rem .3rem; }
 #viewer .wm .wmgrid td { padding: .2rem .3rem; border-top: 1px solid rgba(128,128,128,.2); }
 #viewer .wm .wmgrid td + td, #viewer .wm .wmgrid th + th { text-align: center; width: 3.2rem; }
+
+/* Where the photo view's Close button sits follows its layout. Side by side it is
+   at the top right of the sidebar. On a phone or a tablet held upright the photo
+   and its sidebar are stacked, the sidebar is below the photo, and Close moves to
+   the photo's own header so it is always in reach. */
+#viewer .close-top { display: none; }
+@media (max-width: 760px), (orientation: portrait) and (max-width: 1100px) {
+  #viewer .dialog { flex-direction: column; overflow-y: auto; }
+  #viewer aside { width: auto; border-left: 0; overflow-y: visible; }
+  #viewer .stage { min-height: 50vh; }
+  #viewer .close-top { display: inline-block; }
+  #viewer .asidebar .btn { display: none; }
+}

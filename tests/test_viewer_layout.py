@@ -17,7 +17,7 @@ def test_close_sits_in_the_sidebar_header_not_the_photo_header():
     bar = page[page.index('class="asidebar"'):]
     assert bar.index('id="vClose"') < bar.index("</div>")
     head = page[page.index('$("vhead").innerHTML ='):page.index('const run = (path, what)')]
-    assert "vClose" not in head
+    assert 'id="vClose"' not in head   # the header has only the narrow-layout copy (vClose2)
 
 
 def test_the_sidebar_scrolls_so_a_tall_watermark_form_is_never_cut_off():
