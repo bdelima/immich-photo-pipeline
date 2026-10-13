@@ -114,7 +114,8 @@ def detail(photo: Photo, rules: RulesStore | None = None) -> dict:
             proposal = {"id": found.id, "text": found.text, "scope": found.scope}
     out.update({
         "sources": [
-            {"index": i, "name": s.name or s.asset_id, "has_copy": bool(s.file), "media_type": _source_media_type(s)}
+            {"index": i, "name": s.name or s.asset_id, "has_copy": bool(s.file), "media_type": _source_media_type(s),
+             "meta": s.meta}
             for i, s in enumerate(photo.sources)
         ],
         "history": [

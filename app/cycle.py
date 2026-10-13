@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 
+from . import metadata
 from .albums import ensure_home_albums
 from .immich_client import ImmichClient
 from .intake import Intake
@@ -40,6 +41,7 @@ class Cycle:
         revisions: RevisionStore | None = None,
         review_album_id: str = "",
         pipeline_url: str = "",
+        extra_clients: list[ImmichClient] = (),
     ):
         self.immich = immich
         self.store = store
@@ -50,11 +52,13 @@ class Cycle:
         self.revisions = revisions
         self.review_album_id = review_album_id
         self.pipeline_url = pipeline_url
+        self.extra_clients = list(extra_clients)
         # Managed albums already shared, so each is checked once, not every cycle.
         self._shared: set[str] = set()
 
     def run_once(self) -> None:
         self._step("looking for new originals", self._intake)
+        self._step("reading original details", lambda: metadata.backfill((self.immich, *self.extra_clients), self.store))
         self._step("creating albums", lambda: ensure_home_albums(self.immich, self.store))
         self._step("sharing albums", self._share)
         if self.revisions is not None:

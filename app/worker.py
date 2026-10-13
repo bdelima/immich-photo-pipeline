@@ -29,7 +29,7 @@ import threading
 import time
 from typing import Callable
 
-from . import chat
+from . import chat, metadata
 from .immich_client import ImmichClient, ImmichError
 from .library import (
     REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
@@ -243,16 +243,21 @@ class Worker:
         """Copies every original into the store (the contributor may delete
         theirs at any time), recording each as it is done."""
         for index, source in enumerate(photo.sources):
-            if source.file and self.revisions.exists(source.file):
-                continue
-            path = self.immich.download_asset_original(source.asset_id, tmp)
-            rel = self.revisions.save_source(photo.id, index, path, os.path.basename(path))
+            if not (source.file and self.revisions.exists(source.file)):
+                path = self.immich.download_asset_original(source.asset_id, tmp)
+                rel = self.revisions.save_source(photo.id, index, path, os.path.basename(path))
 
-            def record(p: Photo, index=index, rel=rel, name=os.path.basename(path)) -> None:
-                p.sources[index].file = rel
-                p.sources[index].name = p.sources[index].name or name
+                def record(p: Photo, index=index, rel=rel, name=os.path.basename(path)) -> None:
+                    p.sources[index].file = rel
+                    p.sources[index].name = p.sources[index].name or name
 
-            self.store.update_photo(photo.id, record)
+                self.store.update_photo(photo.id, record)
+            if not source.meta:
+                # Best-effort: the details are nice to have, never a reason to fail a photo.
+                try:
+                    metadata.fill_source((self.immich, *self.extra_clients), self.store, photo.id, index, source)
+                except Exception:
+                    log.exception("could not record the details of %s", source.asset_id)
         return self.store.load().photos[photo.id]
 
     def _run_recipe(self, photo: Photo, tmp: str) -> tuple[str, list[str], str | None] | None:

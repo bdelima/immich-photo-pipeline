@@ -97,6 +97,32 @@ def test_a_queued_image_is_processed_into_review(tmp_path):
     assert immich.uploads == [("a.jpg", b"matted")]
 
 
+def test_the_details_of_each_original_are_recorded_when_it_is_copied(tmp_path):
+    class Described(FakeImmich):
+        def get_asset(self, asset_id):
+            return {"id": asset_id, "ownerId": "u1", "owner": {"name": "Bob"}, "localDateTime": "2024-03-02T14:05:09.000Z",
+                    "exifInfo": {"dateTimeOriginal": "2024-03-02T20:05:09.000Z", "country": "Costa Rica"}}
+
+    worker, store, _, _, _ = build(tmp_path, immich=Described())
+    queue(store, "a", ("a", "b"), kind="collage", queue="collage")
+    worker.run_one()
+    metas = [s.meta for s in store.load().photos["a"].sources]
+    assert [m["taken"] for m in metas] == ["2024-03-02 14:05"] * 2 and metas[0]["place"] == "Costa Rica"
+    assert metas[0]["owner_name"] == "Bob"
+
+
+def test_details_that_cannot_be_read_never_fail_the_photo(tmp_path):
+    class Broken(FakeImmich):
+        def get_asset(self, asset_id):
+            raise RuntimeError("boom")
+
+    worker, store, _, _, _ = build(tmp_path, immich=Broken())
+    queue(store)
+    worker.run_one()
+    photo = store.load().photos["a"]
+    assert photo.status == "ready" and photo.sources[0].meta == {}
+
+
 def test_the_original_is_cleared_from_its_entry_queue(tmp_path):
     worker, store, _, immich, _ = build(tmp_path)
     queue(store)

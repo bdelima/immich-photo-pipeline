@@ -322,3 +322,17 @@ def test_no_notes_are_written_without_a_pipeline_url(tmp_path):
     immich, cycle = noted(tmp_path)
     cycle.run_once()
     assert immich.writes == [] and immich.descriptions["REVIEW"] == "my own words"
+
+
+def test_older_photos_get_their_original_details_filled_in(tmp_path):
+    from app.library import Source
+
+    class Described(FakeImmich):
+        def get_asset(self, asset_id):
+            return {"id": asset_id, "owner": {"name": "Bob"}, "exifInfo": {"dateTimeOriginal": "x", "country": "Costa Rica"},
+                    "localDateTime": "2024-03-02T14:05:09.000Z"}
+
+    cycle, store, _ = build(tmp_path, Described())
+    store.update(lambda lib: lib.photos.update(a=Photo(id="a", status="ready", sources=[Source(asset_id="x")])))
+    cycle.run_once()
+    assert store.load().photos["a"].sources[0].meta["place"] == "Costa Rica"

@@ -84,6 +84,7 @@ class ImmichClient:
             "x-api-key": api_key,
             "Accept": "application/json",
         })
+        self._user_names: dict[str, str] = {}
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
         url = f"{self.base_url}/api{path}"
@@ -133,6 +134,16 @@ class ImmichClient:
         """The id of the account this client's API key belongs to
         (GET /users/me)."""
         return self._request("GET", "/users/me")["id"]
+
+    def get_user_name(self, user_id: str) -> str:
+        """An account's display name (GET /users/{id}), or "" if it can't be
+        read. Names are looked up once per account."""
+        if user_id not in self._user_names:
+            try:
+                self._user_names[user_id] = (self._request("GET", f"/users/{user_id}") or {}).get("name", "") or ""
+            except ImmichError:
+                return ""
+        return self._user_names[user_id]
 
     def get_album(self, album_id: str) -> dict:
         return self._request("GET", f"/albums/{album_id}") or {}
