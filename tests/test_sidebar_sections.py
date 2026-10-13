@@ -50,10 +50,18 @@ def test_the_sections_have_styles():
     assert "#viewer .foldhead" in css and '#viewer .foldbody[hidden] { display: none; }' in css
 
 
-def test_suggesting_a_title_puts_the_first_idea_in_the_title_field():
+def test_suggestions_are_added_as_ideas_and_never_replace_the_title_or_move_the_lines():
     page = read("templates", "index.html")
-    assert "setText(title, names[0] || title.text)" in page
-    assert "if (!title.t) {" in page
+    ask = page[page.index("const ask = "):page.index('$("wmIdentify").onclick')]
+    assert "setText(" not in ask and "fixed(" not in ask and ".t = false" not in ask and ".u = true" not in ask
+    assert "items.push({ key: \"\", label, text" in ask
+
+
+def test_the_order_of_the_ticks_on_a_line_is_the_order_it_is_written_in():
+    page = read("templates", "index.html")
+    assert "c.checked ? Math.max(0, ...items.map(o => o[k])) + 1 : 0" in page      # a later tick comes later
+    assert "sort((a, b) => a[0][k] - b[0][k] || a[1] - b[1])" in page              # lineText orders by it
+    assert "titleLike" not in page                                                   # nothing is released behind your back
 
 
 def test_the_preview_is_big_enough_to_read():
