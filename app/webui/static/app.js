@@ -35,3 +35,16 @@ async function renderTree(active, base) {
     `<div class="group">&nbsp;</div>` + treeItem("trash", "Trash", t.trash, active, base);
   return t;
 }
+
+// A small version hint under the title, so it is clear which build is running.
+(async () => {
+  const h = document.querySelector("nav h1");
+  if (!h) return;
+  try {
+    const v = (await api("/api/version")).version;
+    const el = document.createElement("div");
+    el.className = "ver";
+    el.textContent = /^\d/.test(v) ? "v" + v : v;
+    h.after(el);
+  } catch (e) { /* the hint is optional */ }
+})();
