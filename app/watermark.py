@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import calendar
 import os
+import re
 
-from . import chat
+from . import chat, geocode
 from .library import LibraryStore, Photo
 
 MAX_LINE = 120
@@ -22,16 +23,25 @@ def month_year(taken: str) -> str:
         return ""
 
 
+# Immich can leave a place that is just the coordinates; that is not a place name.
+_COORDS = re.compile(r"^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;]\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
+
+
 def parts(photo: Photo) -> dict:
     """What Immich knew about the photo, as separate pieces the builder can
     place on a line: the place, the uploader's name and the month. Each is
     taken from the first original that has it ("" when none does). The
-    coordinates (None when none has them) let the page ask for a place when
-    Immich could not name one."""
+    coordinates (None when none has them) let the page offer to name the place
+    when Immich could not. A place that is only a pair of numbers counts as no
+    place (the numbers are kept as coordinates)."""
     place, owner, date, coordinates = "", "", "", None
     for source in photo.sources:
         m = source.meta or {}
-        place = place or m.get("place", "")
+        text = m.get("place", "")
+        looks = _COORDS.match(text) if isinstance(text, str) else None
+        if looks and coordinates is None:
+            coordinates = [float(looks.group(1)), float(looks.group(2))]
+        place = place or ("" if looks else text)
         owner = owner or m.get("owner_name", "")
         date = date or month_year(m.get("taken", ""))
         if coordinates is None and m.get("latitude") is not None and m.get("longitude") is not None:
@@ -129,6 +139,38 @@ def identify(store: LibraryStore, revisions, recipe, photo_id: str, hint=None, s
     if not names:
         raise chat.ChatError("Claude did not name anything", 502)
     return names
+
+
+SOURCES = ("osm", "claude")
+
+
+def locate(store: LibraryStore, recipe, photo_id: str, source: str) -> str:
+    """Names the place at the photo's coordinates, from OpenStreetMap
+    (source "osm") or by asking Claude ("claude"), so the two can be compared.
+    Read-only: nothing about the photo changes."""
+    if source not in SOURCES:
+        raise chat.ChatError("the source must be 'osm' or 'claude'")
+    photo = store.load().photos.get(photo_id)
+    if photo is None:
+        raise chat.ChatError("no such photo", 404)
+    coordinates = parts(photo)["coordinates"]
+    if not coordinates:
+        raise chat.ChatError("This photo has no coordinates.")
+    if source == "claude":
+        if recipe is None:
+            raise chat.ChatError("Claude isn't available here right now.", 503)
+        try:
+            place = recipe.locate(*coordinates)
+        except RuntimeError as exc:
+            raise chat.ChatError(f"Claude couldn't name the place: {exc}", 502)
+    else:
+        place = geocode.reverse(*coordinates)
+        if not place:
+            raise chat.ChatError("OpenStreetMap couldn't name that place (or couldn't be reached).", 502)
+    place = _clean(place)[:MAX_LINE]
+    if not place:
+        raise chat.ChatError("No place came back.", 502)
+    return place
 
 
 def add(store: LibraryStore, photo_id: str, title, subtitle, third=None) -> int:
