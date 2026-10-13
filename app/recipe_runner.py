@@ -409,14 +409,39 @@ class RecipeRunner:
                 f"If you cannot tell, name your best guess.{again} "
             )
             shape = '{"names": ["<the name>"]}'
-        prompt = ask + "Reply with ONLY this JSON and no other text: " + shape
+        payload = self._ask_json(ask + "Reply with ONLY this JSON and no other text: " + shape)
+        found = payload.get("names") if isinstance(payload.get("names"), list) else [payload.get("name")]
+        names = [n.strip() for n in found if isinstance(n, str) and n.strip()][:count]
+        if not names:
+            raise RuntimeError("Claude did not name anything")
+        return names
+
+    def locate(self, latitude: float, longitude: float) -> str:
+        """Asks Claude which place is at these coordinates, from what it knows
+        (no map service, no picture). Returns "City, Region, Country" as well
+        as Claude can say it. Raises RuntimeError if the call fails or the
+        reply is unusable."""
+        payload = self._ask_json(
+            f"Which place is at latitude {latitude}, longitude {longitude}? Name the nearest town or city, its "
+            "state or region, and its country, in English, written as City, Region, Country (leave out a part "
+            "that does not apply). If it is open water, name the sea or ocean and the nearest country. "
+            'Reply with ONLY this JSON and no other text: {"place": "<City, Region, Country>"}'
+        )
+        place = _text(payload, "place")
+        if not place:
+            raise RuntimeError("Claude did not name a place")
+        return place
+
+    def _ask_json(self, prompt: str, timeout: int = 120) -> dict:
+        """One read-only headless call; returns the JSON object Claude replied
+        with. Raises RuntimeError with a readable reason on any failure."""
         token = resolve_oauth_token(self._secrets_file)
         env = os.environ.copy()
         if token:
             env[ENV_TOKEN_VAR] = token
         cmd = [self._claude_binary, "-p", prompt, "--output-format", "json", "--permission-mode", _PERMISSION_MODE]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             raise RuntimeError("Claude took too long to answer")
         except FileNotFoundError:
@@ -424,14 +449,9 @@ class RecipeRunner:
         if proc.returncode != 0:
             raise RuntimeError(f"claude invocation failed ({proc.returncode}): {(proc.stderr or '')[:300]}")
         try:
-            payload = _extract_json_object(json.loads(proc.stdout).get("result", ""))
+            return _extract_json_object(json.loads(proc.stdout).get("result", ""))
         except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
             raise RuntimeError("Claude's answer could not be read")
-        found = payload.get("names") if isinstance(payload.get("names"), list) else [payload.get("name")]
-        names = [n.strip() for n in found if isinstance(n, str) and n.strip()][:count]
-        if not names:
-            raise RuntimeError("Claude did not name anything")
-        return names
 
     def check_auth(self) -> tuple[bool, str | None]:
         """A cheap, trivial invocation used purely to confirm a session can
