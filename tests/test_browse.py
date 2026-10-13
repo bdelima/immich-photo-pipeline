@@ -165,12 +165,20 @@ def test_the_original_is_served_and_listed_in_the_detail(tmp_path):
     rel = revisions.save_source("r1", 0, make_image(tmp_path / "orig.jpg", color=(10, 200, 10)), "orig.jpg")
     store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", file=rel, name="orig.jpg")))
     d = client.get("/api/photos/r1").get_json()
-    assert d["sources"] == [{"index": 0, "name": "orig.jpg", "has_copy": True, "media_type": "image"}]
+    assert d["sources"] == [{"index": 0, "name": "orig.jpg", "has_copy": True, "media_type": "image", "meta": {}}]
     full = client.get("/media/r1/source/0")
     assert full.status_code == 200 and "immutable" in full.headers["Cache-Control"]
     thumb = client.get("/media/r1/source/0/thumb")
     assert thumb.status_code == 200 and thumb.mimetype == "image/jpeg"
     thumb.close(); full.close()
+
+
+def test_the_detail_carries_the_details_of_each_original(tmp_path):
+    from app.library import Source
+    client, store, _ = build(tmp_path)
+    meta = {"taken": "2024-03-02 14:05", "taken_kind": "captured", "place": "Costa Rica", "owner_name": "Bob"}
+    store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", meta=meta)))
+    assert client.get("/api/photos/r1").get_json()["sources"][0]["meta"] == meta
 
 
 def test_original_routes_404_without_a_stored_copy(tmp_path):
