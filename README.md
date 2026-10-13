@@ -101,7 +101,7 @@ This is why each household member who should take part needs an `IMMICH_EXTRA_AP
 ### 7. Use it
 
 - Drop any photo or video into **Wallpaper Maker**. A photo is processed solo on the next poll cycle; a video is kept as it is (videos are managed, not processed).
-- Drop any photo or video into **Import Only** to have it managed but never processed: it is copied into the library exactly as it is, lands in Review, and can be browsed, moved, promoted to Live and trashed like anything else. It can't be revised (there is nothing to reprocess), and the original is cleared from Import Only once it is in.
+- Drop any photo or video into **Import Only** to have it managed but never processed: it is copied into the library exactly as it is, lands in Review, and can be browsed, moved, promoted to Live and trashed like anything else. It is not run through the matting recipe, but you can still ask Claude for a change in the photo's chat box (a watermark, a brightness fix): see "Imported photos" under step 9. The original is cleared from Import Only once it is in.
 - Drop a **portrait** photo into **Collage Maker**; it waits there until a second portrait arrives, then groups 2–3 into one collage. Videos can't go in a collage.
 - Each result lands in **Review**, which is kept in the pipeline's library and mirrored to the Review album in Immich so it can be browsed there. The original and every later version are kept in the revision store (`REVISIONS_PATH`); Immich only ever holds the current version.
 - The originals are copied into the store and then removed from the entry queue (see "A photo sits in an entry queue" below if one stays).
@@ -127,7 +127,7 @@ docker exec immich-photo-pipeline python -m app.import_cli --from "Screensaver" 
 - Each photo's current image is copied into the revision store and published again as a new asset owned by the pipeline account (the source album usually belongs to someone else, so the pipeline could not manage the original). Nothing is deleted and nothing is removed from the source album.
 - It's safe to re-run: anything already in the library is skipped, and a photo that fails (reported at the end) is skipped and can be retried.
 - Under Portainer, open the container's **Console** (connect as the default user, `/bin/sh`) and run the `python -m app.import_cli ...` part of either command there instead of using `docker exec`.
-- **Imported photos can't be revised.** With no original to work from, a "make it brighter" request would run the recipe on an already-matted image.
+- **Imported photos are edited, not reprocessed.** With no original to work from, a request such as "make it brighter" or the watermark builder edits the image the photo came in as; see "Imported photos" under step 9.
 - **Coming from the old comment-and-like version?** The few photos it processed can be carried over, with the instructions it recorded, by `docker exec immich-photo-pipeline python -m app.import_legacy` (dry run; add `--apply`). It reads the old `state.json` (`STATE_PATH`), and the photo in the album that was live is marked as live.
 
 ### 9. Teach the recipe (optional)
@@ -157,7 +157,7 @@ Nothing is used until you reply `yes`; a `no`, or no reply, leaves it unused. On
 Things worth knowing:
 
 - Rules apply to photos processed or revised *after* they're saved. To re-apply one to a photo that's already finished, comment on it.
-- Imported photos (step 8) can't be revised, but a rule taught in a comment on one is still saved and used for future photos.
+- **Imported photos** (step 8, and anything from Import Only) can be changed in the photo's chat box, and the watermark builder works on them. Because there is no original, Claude starts from the image the photo came in as (step 0) and re-applies every earlier request plus the new one; this is not the matting recipe, and the rules above for single photos and collages are not applied. Rules are kept apart: a rule can apply to **imported photos**, which is the scope Claude's suggestions get after editing one, and those rules are used only for edits of imported photos. Each request is a new step in the history and can be reverted. It costs Claude plan credits like any other revision.
 - Rules are plain data in the prompt: they're framed as preferences about the image only and can't change the reply format, file access, or the other instructions.
 - To make a rule permanent, fold it into `photo-mat-recipe/SKILL.md` through a normal reviewed change and retire it here.
 
