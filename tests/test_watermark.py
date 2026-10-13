@@ -198,3 +198,38 @@ def test_the_identify_route(tmp_path):
     assert client.post("/api/photos/nope/identify", json={}).status_code == 404
     bare = create_app(None, None, store, None, revisions=revisions, thumbs=ThumbCache(str(tmp_path / "th"))).test_client()
     assert bare.post("/api/photos/p/identify", json={}).status_code == 503
+
+
+# ---- starting from the last watermark -----------------------------------------------------
+
+
+def test_the_form_starts_from_the_template_until_a_watermark_has_been_asked_for():
+    got = watermark.starting_point(photo())
+    assert got == {"title": "Playa Hermosa, Costa Rica", "subtitle": "Bob · March 2024", "third": "", "remembered": False}
+
+
+def test_asking_for_a_watermark_remembers_its_lines_for_next_time(tmp_path):
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    store.update(lambda lib: lib.photos.update(p=photo()))
+    watermark.add(store, "p", ' Wings "at" Dusk ', "", "Bob")
+    last = store.load().photos["p"].last_watermark
+    assert last == {"title": "Wings 'at' Dusk", "subtitle": "", "third": "Bob"}
+    assert watermark.starting_point(store.load().photos["p"]) == {**last, "remembered": True}
+    watermark.add(store, "p", "Second try", "x")
+    assert store.load().photos["p"].last_watermark["title"] == "Second try"
+
+
+def test_a_refused_watermark_is_not_remembered(tmp_path):
+    store = LibraryStore(str(tmp_path / "lib.json"))
+    store.update(lambda lib: lib.photos.update(p=photo()))
+    with pytest.raises(chat.ChatError):
+        watermark.add(store, "p", "", "", "")
+    assert store.load().photos["p"].last_watermark is None
+
+
+def test_an_older_library_without_the_field_still_loads():
+    from app.library import library_from_dict, library_to_dict, Library
+    lib = Library(photos={"p": photo()})
+    raw = library_to_dict(lib)
+    del raw["photos"]["p"]["last_watermark"]
+    assert library_from_dict(raw).photos["p"].last_watermark is None

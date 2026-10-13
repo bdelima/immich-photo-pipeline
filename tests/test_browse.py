@@ -219,10 +219,14 @@ def test_the_detail_offers_a_watermark_template_and_the_route_queues_it(tmp_path
     meta = {"taken": "2024-03-02 14:05", "place": "Costa Rica", "owner_name": "Bob"}
     store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", meta=meta)))
     assert client.get("/api/photos/r1").get_json()["watermark"] == {
-        "title": "Costa Rica", "subtitle": "Bob · March 2024",
+        "title": "Costa Rica", "subtitle": "Bob · March 2024", "third": "", "remembered": False,
         "parts": {"place": "Costa Rica", "owner": "Bob", "date": "March 2024", "coordinates": None}}
     ok = client.post("/api/photos/r1/watermark", json={"title": "Costa Rica", "subtitle": "Bob", "third": "Wings at Dusk"})
     assert ok.status_code == 200
     assert "Costa Rica" in store.load().photos["r1"].chat[0].text and "Wings at Dusk" in store.load().photos["r1"].chat[0].text
     assert client.post("/api/photos/r1/watermark", json={"title": "", "subtitle": ""}).status_code == 400
+    # The next time the form opens it starts from what was asked for.
+    again = client.get("/api/photos/r1").get_json()["watermark"]
+    assert (again["title"], again["subtitle"], again["third"], again["remembered"]) == ("Costa Rica", "Bob", "Wings at Dusk", True)
+    assert again["parts"]["place"] == "Costa Rica"
     assert client.post("/api/photos/nope/watermark", json={"title": "x"}).status_code == 404

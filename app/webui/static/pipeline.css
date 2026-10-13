@@ -148,6 +148,17 @@ select.field { appearance: none; padding-right: 2rem; box-shadow: 0 3px 0 var(--
 .composer .send:disabled { opacity: .45; cursor: default; }
 #chatform .hint { font-size: .74rem; color: var(--muted); padding: .35rem .5rem 0; }
 #viewer .aside-note { padding: .5rem 1.1rem; }
+/* the sidebar's collapsible sections: History, Chat, Watermark */
+#viewer .fold { border-top: 1px solid var(--line); }
+#viewer .foldhead { display: flex; width: 100%; align-items: center; justify-content: space-between; padding: .8rem 1.1rem; font: inherit;
+                    font-weight: 600; font-size: .95rem; color: var(--text); background: none; border: 0; cursor: pointer; text-align: left; }
+#viewer .foldhead:hover { background: var(--accent-soft); }
+#viewer .foldhead:focus-visible { outline: 3px solid var(--accent-2); outline-offset: -3px; }
+#viewer .foldhead .chev { width: .55rem; height: .55rem; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+                          transform: rotate(45deg); margin-top: -.25rem; transition: transform .15s; }
+#viewer .foldhead[aria-expanded="false"] .chev { transform: rotate(-45deg); margin-top: 0; }
+#viewer .foldbody[hidden] { display: none; }
+#viewer .foldbody > .hist { padding-top: 0; }
 
 /* ---- recipe rules page ---- */
 .rules-page { max-width: 62rem; }
