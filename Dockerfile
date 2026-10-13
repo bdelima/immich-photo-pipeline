@@ -24,8 +24,10 @@ WORKDIR /app
 # imagemagick and tesseract-ocr: command-line image tools (and the OCR engine
 # behind pytesseract) for the recipe's Claude runs. ffmpeg is deliberately not
 # installed: the distro build is GPL-enabled, and nothing here needs it yet.
+# fonts-liberation: the slim base has no fonts at all, and the watermark builder
+# asks for Arial; Liberation Sans is the metric-compatible stand-in (SIL OFL).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates imagemagick tesseract-ocr \
+    && apt-get install -y --no-install-recommends nodejs npm ca-certificates imagemagick tesseract-ocr fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CLAUDE_CLI_PREFIX=/data/claude-cli \
