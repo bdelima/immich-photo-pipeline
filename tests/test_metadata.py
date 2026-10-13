@@ -71,6 +71,22 @@ def test_an_asset_nobody_can_see_is_unavailable_but_an_unreachable_immich_is_not
     assert metadata.fetch([], "a") is None
 
 
+def test_an_account_that_is_refused_or_fails_does_not_stop_the_next_one_being_asked():
+    refused = Account(error=ImmichError("GET /assets/a -> 403: no access"))
+    broken = Account(error=ImmichError("GET /assets/a -> 500"))
+    for first in (refused, broken):
+        meta = metadata.fetch([first, Account({"a": asset()})], "a")
+        assert meta["owner_name"] == "Bob"
+
+
+def test_refused_everywhere_is_unavailable_but_a_failure_anywhere_leaves_it_unsettled():
+    refused = Account(error=ImmichError("GET /assets/a -> 403: no access"))
+    broken = Account(error=ImmichError("GET /assets/a -> 500"))
+    assert metadata.fetch([refused, Account()], "a") == {"unavailable": True}
+    assert metadata.fetch([broken, Account()], "a") is None
+    assert metadata.fetch([Account(), broken], "a") is None
+
+
 def stocked(tmp_path, **sources):
     store = LibraryStore(str(tmp_path / "lib.json"))
     store.update(lambda lib: lib.photos.update(

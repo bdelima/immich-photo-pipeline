@@ -17,7 +17,7 @@ import re
 import time
 from typing import Sequence
 
-from .immich_client import ImmichClient
+from .immich_client import ImmichClient, ImmichError
 from .library import LibraryStore, Source
 
 log = logging.getLogger(__name__)
@@ -77,16 +77,26 @@ def meta_from_asset(item: dict) -> dict:
 def fetch(clients: Sequence[ImmichClient], asset_id: str, owner_id: str = "") -> dict | None:
     """The metadata for one asset, asking each account in turn (the pipeline's
     own account can only see an original while it is in an album shared with
-    it, but its contributor always can). Returns UNAVAILABLE if no account can
-    see it any more, and None if that could not be settled this time (Immich
-    unreachable), so the caller tries again later."""
-    answered = False
+    it, but its contributor always can). An account that cannot see the asset
+    (not found, or access refused) or that fails (Immich unreachable) never
+    stops the next account being asked. Returns UNAVAILABLE if every account
+    answered that it cannot see it, and None if that could not be settled this
+    time (some account failed), so the caller tries again later."""
+    answered = unsettled = False
     for client in clients:
         try:
             item = client.get_asset(asset_id)
+        except ImmichError as exc:
+            if "-> 403" in str(exc):
+                answered = True                     # access refused: this account cannot see it
+            else:
+                unsettled = True
+                log.warning("could not read the details of asset %s: %s", asset_id, exc)
+            continue
         except Exception as exc:
+            unsettled = True
             log.warning("could not read the details of asset %s: %s", asset_id, exc)
-            return None
+            continue
         if item is None:
             answered = True
             continue
@@ -96,7 +106,7 @@ def fetch(clients: Sequence[ImmichClient], asset_id: str, owner_id: str = "") ->
             if name:
                 meta["owner_name"] = name
         return meta or dict(UNAVAILABLE)
-    return dict(UNAVAILABLE) if answered else None
+    return dict(UNAVAILABLE) if answered and not unsettled else None
 
 
 def record(store: LibraryStore, photo_id: str, index: int, meta: dict) -> None:
