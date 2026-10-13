@@ -267,6 +267,9 @@ class CommentContext:
     # The adjustments already applied to this photo at the reviewer's
     # request, oldest first (what "undo" would take back).
     history: list[str] = field(default_factory=list)
+    # The photo was imported already finished (edits are made on the image
+    # itself, and rules for it have their own scope).
+    imported: bool = False
 
 
 MAX_ALBUM_NAME_CHARS = 60
@@ -298,8 +301,23 @@ class RecipeRunner:
         )
         return self._invoke(self._finish_prompt(prompt, output_path, note, rules))
 
+    def run_edit(
+        self, source_path: str, output_path: str, note: str, rules: list[str] | None = None,
+    ) -> RecipeResult:
+        """Changes an already finished photo (an imported one) as the
+        reviewer asked, without the matting recipe."""
+        prompt = (
+            f"Edit the finished photo at {source_path} and write the result to {output_path}. "
+            "This photo is already finished: do NOT use the photo recipe, and do not re-mat, "
+            "re-crop, reframe or restyle it. Make only the change the reviewer asks for and "
+            "keep everything else about the image as it is."
+        )
+        return self._invoke(self._finish_prompt(prompt, output_path, note, rules, _LESSON_CONTRACT_EDIT), use_skill=False)
+
     @staticmethod
-    def _finish_prompt(prompt: str, output_path: str, note: str | None, rules: list[str] | None) -> str:
+    def _finish_prompt(
+        prompt: str, output_path: str, note: str | None, rules: list[str] | None, lesson: str | None = None,
+    ) -> str:
         """Appends, in order: the standing reviewer preferences (if any),
         this run's reviewer note (if any), the reply contract, and -- only
         for a revision, since that's when there's feedback to learn from --
@@ -309,7 +327,7 @@ class RecipeRunner:
             prompt += f" Additional instruction from the reviewer: {note}"
         prompt += " " + _OUTPUT_CONTRACT.format(output_path=output_path)
         if note:
-            prompt += " " + _LESSON_CONTRACT
+            prompt += " " + (lesson or _LESSON_CONTRACT)
         return prompt
 
     def resume(self, session_id: str, answer: str, output_path: str | None = None) -> RecipeResult:
@@ -384,12 +402,12 @@ class RecipeRunner:
             return False, (proc.stderr or "").strip()[:500] or f"exit code {proc.returncode}"
         return True, None
 
-    def _invoke(self, prompt: str, resume: str | None = None) -> RecipeResult:
+    def _invoke(self, prompt: str, resume: str | None = None, use_skill: bool = True) -> RecipeResult:
         token = resolve_oauth_token(self._secrets_file)
         env = os.environ.copy()
         if token:
             env[ENV_TOKEN_VAR] = token
-        if resume:
+        if resume or not use_skill:
             full_prompt = prompt
         else:
             full_prompt = f"/{self._skill_name} {prompt}"
@@ -517,6 +535,12 @@ def _interpret_prompt(comment_text: str, ctx: CommentContext) -> str:
         )
     else:
         lines.append("- No adjustments have been applied to this photo yet.")
+    if ctx.imported:
+        lines.append(
+            "- This photo was imported already finished, so requests are edits to the image as it is "
+            "(for example a watermark or a colour change). A standing preference about such edits has "
+            "scope \"imported\"."
+        )
     if ctx.rules:
         lines.append("- Saved rules: " + "; ".join(f"{rid}: {text!r}" for rid, text in ctx.rules) + ".")
     lines += [
@@ -534,7 +558,7 @@ def _interpret_prompt(comment_text: str, ctx: CommentContext) -> str:
         "- teach: asks for something to apply to FUTURE photos too, with an "
         "explicit cue (always, never, from now on, next time, going forward, "
         "in general, remember). Give \"rule\" (one general sentence) and "
-        "\"scope\" (\"collage\", \"single\" or \"all\"). A note about only this "
+        "\"scope\" (\"collage\", \"single\", \"imported\" or \"all\"). A note about only this "
         "photo is not teach.",
         "- forget: asks to stop following a saved rule. Give \"rule_id\".",
         "- yes / no: accepts / declines the proposed rule above (only when "
@@ -570,6 +594,15 @@ _OUTPUT_CONTRACT = (
     'before you can proceed, reply with ONLY this exact JSON and no '
     'other text instead: {{"needs_clarification": true, "question": '
     '"<your question>"}}'
+)
+
+# The same for an edit of an imported photo; its lessons are always for imported
+# photos, so no scope is asked for.
+_LESSON_CONTRACT_EDIT = (
+    'If this feedback reveals a general rule that should apply to FUTURE edits of '
+    'imported photos too -- not just a fix for this one -- add a field "lesson" '
+    '(the rule, as one general sentence) to that same JSON object. Omit it '
+    'when the feedback was specific to this photo.'
 )
 
 # Appended to revision prompts only. No braces on purpose: this is joined

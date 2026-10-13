@@ -31,6 +31,7 @@ def test_junk_dates_are_left_out():
 def test_the_request_to_claude_carries_both_lines_and_says_it_is_for_this_photo():
     text = watermark.instruction("Costa Rica", "Bob · March 2024")
     assert '"Costa Rica"' in text and '"Bob · March 2024"' in text and "this photo only" in text
+    assert "lower right corner" in text and "Arial" in text and "3D" in text
 
 
 def test_a_single_line_and_quotes_are_handled():
@@ -57,7 +58,7 @@ def test_adding_queues_a_message_for_the_worker(tmp_path):
 
 def test_a_photo_that_cannot_be_changed_is_refused(tmp_path):
     store = LibraryStore(str(tmp_path / "lib.json"))
-    store.update(lambda lib: lib.photos.update(p=photo(imported=True)))
+    store.update(lambda lib: lib.photos.update(p=photo(media_type="video")))
     with pytest.raises(chat.ChatError):
         watermark.add(store, "p", "Costa Rica", "Bob")
     with pytest.raises(chat.ChatError) as e:

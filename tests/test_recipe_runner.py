@@ -423,3 +423,26 @@ def test_interpret_prompt_for_the_album_question(tmp_path):
         _runner(tmp_path).interpret_comment("holiday please", ctx)
     prompt = mock_run.call_args.args[0][2]
     assert "Which album should this be promoted to?" in prompt and "Holiday" in prompt and "the Review queue" in prompt
+
+
+def test_an_edit_of_a_finished_photo_does_not_use_the_recipe_skill(tmp_path):
+    class Proc:
+        returncode = 0
+        stderr = ""
+        stdout = _wrapped({"output_path": "/tmp/out.jpg", "lesson": "Small watermarks."})
+
+    runner = RecipeRunner("claude", SKILL_PATH, str(tmp_path / "none"))
+    with patch("app.recipe_runner.subprocess.run", return_value=Proc()) as mock_run:
+        result = runner.run_edit("/tmp/in.jpg", "/tmp/out.jpg", "add a watermark", rules=["Keep it small."])
+    prompt = mock_run.call_args[0][0][2]
+    assert not prompt.startswith("/") and "/tmp/in.jpg" in prompt and "/tmp/out.jpg" in prompt
+    assert "do NOT use the photo recipe" in prompt and "add a watermark" in prompt and "Keep it small." in prompt
+    assert "imported photos" in prompt            # the lesson contract for edits
+    assert result.status == "done" and result.lesson == "Small watermarks."
+
+
+def test_the_interpreter_is_told_about_an_imported_photo():
+    from app.recipe_runner import _interpret_prompt
+    text = _interpret_prompt("add a watermark", CommentContext(imported=True))
+    assert "imported already finished" in text and 'scope "imported"' in text
+    assert "imported already finished" not in _interpret_prompt("hi", CommentContext())

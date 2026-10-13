@@ -47,6 +47,11 @@ class FakeRecipe:
         self.runs.append((list(source_paths), note, rules))
         return self._next(output_path)
 
+    def run_edit(self, source_path, output_path, note, rules=None):
+        self.edits = getattr(self, "edits", [])
+        self.edits.append((source_path, note, rules))
+        return self._next(output_path)
+
     def resume(self, session_id, answer, output_path=None):
         self.resumed.append((session_id, answer, output_path))
         return self._next(output_path)
@@ -119,7 +124,6 @@ def test_enqueue_unknown_photo_is_a_404(tmp_path):
 @pytest.mark.parametrize("fields,fragment", [
     ({"trashed": True}, "trash"),
     ({"media_type": "video"}, "Videos"),
-    ({"imported": True}, "already finished"),
     ({"status": "processing"}, "being processed"),
     ({"status": "waiting"}, "partner"),
     ({"status": "failed"}, "failed"),
@@ -555,3 +559,58 @@ def test_a_trashed_photo_is_not_claimed_for_chat(tmp_path):
     store.update_photo("a", lambda p: setattr(p, "trashed", True))
     worker = make_worker(store, revisions, recipe, rules)
     assert worker.run_one() is False
+
+
+# ---- imported photos ----------------------------------------------------------------
+
+
+def test_an_imported_photo_can_be_changed_by_editing_its_first_image_with_every_request_replayed(tmp_path):
+    store, revisions, recipe, rules = build(tmp_path)
+    add_photo(tmp_path, store, revisions, steps=("first", "make it warmer"), imported=True)
+    chat.enqueue(store, "a", "add a watermark")
+    assert chat.run_job(store, revisions, recipe, rules, "a") is True
+    photo = store.load().photos["a"]
+    assert recipe.runs == [] and len(recipe.edits) == 1
+    source, note, active = recipe.edits[0]
+    assert source == revisions.path(photo.revisions[0].file)          # step 0, not the latest image
+    assert "make it warmer" in note and "add a watermark" in note
+    assert photo.current == 2 and photo.revisions[2].instruction == "add a watermark" and photo.status == "ready"
+
+
+def test_the_matting_rules_are_not_applied_to_an_imported_photo_but_its_own_rules_are(tmp_path):
+    store, revisions, recipe, rules = build(tmp_path)
+    rules.add("Thin bevels.", "all")
+    rules.add("Keep watermarks small.", "imported")
+    add_photo(tmp_path, store, revisions, imported=True)
+    chat.enqueue(store, "a", "add a watermark")
+    chat.run_job(store, revisions, recipe, rules, "a")
+    assert recipe.edits[0][2] == ["Keep watermarks small."]
+    # and the imported rule never reaches an ordinary photo
+    assert rules.active_texts("single") == ["Thin bevels."] and rules.active_texts("collage") == ["Thin bevels."]
+
+
+def test_a_lesson_from_editing_an_imported_photo_is_proposed_for_imported_photos(tmp_path):
+    store, revisions, _, rules = build(tmp_path)
+    recipe = FakeRecipe(results=[RecipeResult(status="done", lesson="Put watermarks bottom left.", lesson_scope="single")])
+    add_photo(tmp_path, store, revisions, imported=True)
+    chat.enqueue(store, "a", "add a watermark")
+    chat.run_job(store, revisions, recipe, rules, "a")
+    proposed = [r for r in rules.all() if r.status == "proposed"]
+    assert [(r.text, r.scope) for r in proposed] == [("Put watermarks bottom left.", "imported")]
+
+
+def test_an_imported_photo_with_no_stored_image_fails_cleanly(tmp_path):
+    store, revisions, recipe, rules = build(tmp_path)
+    add_photo(tmp_path, store, revisions, imported=True)
+    os.unlink(revisions.path(store.load().photos["a"].revisions[0].file))
+    chat.enqueue(store, "a", "add a watermark")
+    assert chat.run_job(store, revisions, recipe, rules, "a") is False
+    assert store.load().photos["a"].chat[0].state == CHAT_FAILED and not hasattr(recipe, "edits")
+
+
+def test_the_interpreter_is_told_when_a_photo_was_imported(tmp_path):
+    store, revisions, recipe, rules = build(tmp_path)
+    add_photo(tmp_path, store, revisions, imported=True)
+    chat.enqueue(store, "a", "add a watermark")
+    chat.run_job(store, revisions, recipe, rules, "a")
+    assert recipe.interpreted[0][1].imported is True

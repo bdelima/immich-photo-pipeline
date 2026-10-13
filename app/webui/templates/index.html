@@ -305,7 +305,7 @@ async function openViewer(i) {
   if ($("vNext")) $("vNext").onclick = () => openViewer(open + 1);
   const cur = p.history.find(h => h.current);
   $("vfoot").textContent = `${i + 1} of ${list.length}` + (cur ? ` · showing step ${cur.step}` : "") +
-    (p.imported ? " · imported, can't be modified" : "") + ` · ← → to move, Esc to close`;
+    (p.imported ? " · imported" : "") + ` · ← → to move, Esc to close`;
 
   const hist = p.history.map(h =>
     `<div class="rev${h.current ? " current" : ""}"><div class="t"><b>Step ${h.step}</b><br><span class="note">` +
