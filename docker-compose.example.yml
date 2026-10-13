@@ -51,6 +51,11 @@ services:
       # is view-only and gives this address, opening the matching view. Leave
       # it out and no notes are written.
       # PIPELINE_URL: "https://immich-pipeline.example.com"
+      # The container's time zone. The watermark builder takes the home country
+      # from it and leaves that country off a place ("Quepos, Puntarenas" at
+      # home, "Nice, Provence-Alpes-Cote d'Azur, France" abroad). Without it
+      # (or a LANG with a region, such as en_US.UTF-8) nothing is trimmed.
+      # TZ: "America/Costa_Rica"
       POLL_INTERVAL_SECONDS: "15"
       # How many photos are processed at once (each is a Claude run).
       # WORKER_COUNT: "1"

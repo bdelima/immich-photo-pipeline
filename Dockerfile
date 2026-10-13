@@ -26,8 +26,11 @@ WORKDIR /app
 # installed: the distro build is GPL-enabled, and nothing here needs it yet.
 # fonts-liberation: the slim base has no fonts at all, and the watermark builder
 # asks for Arial; Liberation Sans is the metric-compatible stand-in (SIL OFL).
+# tzdata: the zone tables (zone.tab, iso3166.tab) that turn the container's time
+# zone (TZ) into a country name, so the watermark builder can leave out the home
+# country; the slim base may not carry them.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates imagemagick tesseract-ocr fonts-liberation \
+    && apt-get install -y --no-install-recommends nodejs npm ca-certificates imagemagick tesseract-ocr fonts-liberation tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CLAUDE_CLI_PREFIX=/data/claude-cli \
