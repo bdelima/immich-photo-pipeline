@@ -195,7 +195,8 @@ async function moveAndFollow(id, home) {
   if (!r.ok) { say(out.error || "That didn't work.", true); return; }
   if (!out.done.includes(id)) { say("Not moved: " + out.skipped.map(s => s.reason).join("; "), true); return; }
   const t = await api("/api/tree");
-  const want = home.toLowerCase();
+  // The server collapses runs of spaces in a name, so compare the same way.
+  const want = home.split(/\s+/).filter(Boolean).join(" ").toLowerCase();
   const album = t.albums.find(a => a.name.toLowerCase() === want);
   const dest = want === "review" ? "review" : album ? album.view : view;
   if (dest !== view) history.replaceState(null, "", viewHash(dest));
@@ -459,7 +460,7 @@ document.addEventListener("keydown", e => {
 // Clicking the sidebar changes the fragment, which comes back through here.
 window.addEventListener("hashchange", () => { const v = hashView(location.hash); if (v && v !== view) select(v); });
 const first = hashView(location.hash);
-if (!first) history.replaceState(null, "", viewHash("review"));
+if (!first) history.replaceState(null, "", viewHash("first") === "" ? "" : viewHash("review"));
 select(first || "review");
 </script>
 </body>
