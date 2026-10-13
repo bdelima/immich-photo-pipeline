@@ -398,17 +398,16 @@ function watermarkForm(w) {
     `<label>Second line<input class="field" id="wmSub" maxlength="120" value="${esc(w.subtitle)}"></label>` +
     `<label>Third line<input class="field" id="wmThird" maxlength="120"></label>` +
     `<div class="ident"><label>Hint <small>(optional; blank = the whole picture)</small><input class="field" id="wmHint" maxlength="80" placeholder="e.g. the bird on the left"></label>` +
+    (Array.isArray(w.parts && w.parts.coordinates) ? `<div class="row"><span class="meta">Coordinates ${esc(w.parts.coordinates[0].toFixed(4))}, ${esc(w.parts.coordinates[1].toFixed(4))}</span>` +
+      `<button class="btn sec sm" id="wmOsm">Look up (OSM)</button><button class="btn sec sm" id="wmClaudeLoc">Ask Claude</button><span class="meta" id="wmLocSaw" role="status"></span></div>` : "") +
     `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><button class="btn sec sm" id="wmPoem">Suggest title</button><span class="meta" id="wmSaw" role="status"></span></div>` +
     `<table class="wmgrid" id="wmGrid"></table></div>` +
     `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button></div></div></div>`;
 }
-// The country of the browser's time zone, asked for once ("" if unknown).
+// The country this container is in, asked for once ("" if unknown).
 let homeCountry = null;
 function getHomeCountry() {
-  if (!homeCountry) {
-    let tz = ""; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
-    homeCountry = tz ? fetch("/api/home-country?tz=" + encodeURIComponent(tz)).then(r => r.json()).then(o => o.country || "").catch(() => "") : Promise.resolve("");
-  }
+  if (!homeCountry) homeCountry = fetch("/api/home-country").then(r => r.json()).then(o => o.country || "").catch(() => "");
   return homeCountry;
 }
 // A country's name in a comparable form ("United States of America" = "USA").
@@ -424,16 +423,16 @@ function wireWatermark(id, w) {
   const open = $("wmOpen"); if (!open) return;
   const form = $("wmForm");
   let looked = false;
-  const toggle = show => { form.hidden = !show; open.hidden = show; if (show && !looked) { looked = true; lookUp(); } };
+  const toggle = show => { form.hidden = !show; open.hidden = show; if (show && !looked) { looked = true; loadHome(); } };
   open.onclick = () => { toggle(true); $("wmTitle").focus(); };
   $("wmCancel").onclick = () => toggle(false);
   // The pieces that can go on any line: what Immich knew (place, owner, date)
   // and whatever Claude has said so far. Ticking a box puts a piece on that line.
-  // Location keeps its full text in `raw`; `text` leaves off the home country.
+  // A location keeps its full text in `raw`; `text` leaves off the home country.
   const parts = w.parts || {};
   let home = "";
-  const items = [["Location", parts.place, true, false, false], ["Owner", parts.owner, false, true, false], ["Date", parts.date, false, true, false]]
-    .filter(x => x[1]).map(([label, raw, t, u, v]) => ({ label, raw, text: raw, t, u, v, fixed: true }));
+  const items = [["Location (Immich)", parts.place, true, false, false, true], ["Owner", parts.owner, false, true, false, false], ["Date", parts.date, false, true, false, false]]
+    .filter(x => x[1]).map(([label, raw, t, u, v, loc]) => ({ label, raw, text: raw, t, u, v, loc, fixed: true }));
   // Each line is rebuilt from its ticked pieces only when one of its own boxes
   // changes, so whatever was typed into the other lines is kept.
   const lines = { t: ["wmTitle", " – "], u: ["wmSub", " · "], v: ["wmThird", " · "] };
@@ -445,7 +444,7 @@ function wireWatermark(id, w) {
     const untouched = ["t", "u", "v"].filter(k => $(lines[k][0]).value === wanted(k));
     change(); drawGrid(); for (const k of untouched) compose(k);
   };
-  const setLocation = () => { const loc = items.find(x => x.label === "Location"); if (loc) loc.text = trimHome(loc.raw, home); };
+  const setLocations = () => { for (const x of items) if (x.loc) x.text = trimHome(x.raw, home); };
   const drawGrid = () => {
     $("wmGrid").innerHTML = items.length
       ? `<tr><th>Piece</th><th>Title</th><th>2nd</th><th>3rd</th><th></th></tr>` + items.map((x, i) =>
@@ -465,23 +464,31 @@ function wireWatermark(id, w) {
     for (const b of $("wmGrid").querySelectorAll("[data-rm]")) b.onclick = () => { const [gone] = items.splice(+b.dataset.rm, 1); drawGrid(); for (const k of ["t", "u", "v"]) if (gone[k]) compose(k); };
   };
   drawGrid();
-  // On opening: work out the home country (to leave it off the location) and,
-  // when Immich gave coordinates but no place, name the place from them.
-  const lookUp = async () => {
-    const saw = $("wmSaw"), needPlace = !parts.place && Array.isArray(parts.coordinates);
-    if (needPlace) saw.textContent = "Looking up the place…";
-    const [country, found] = await Promise.all([getHomeCountry(),
-      needPlace ? fetch("/api/photos/" + id + "/place").then(r => r.json()).then(o => o.place || "").catch(() => "") : Promise.resolve("")]);
+  // On opening: find the home country (to leave it off the locations).
+  const loadHome = async () => {
+    const country = await getHomeCountry();
     home = country;
-    refresh(() => {
-      if (found && !items.some(x => x.label === "Location")) {
-        const titled = items.some(x => x.label === "Title idea" && x.t);
-        items.unshift({ label: "Location", raw: found, text: found, t: !titled, u: titled, v: false, fixed: true });
-      }
-      setLocation();
-    });
-    saw.textContent = needPlace ? (found ? "Place found from the coordinates: " + found : "Couldn't name the place from the coordinates.") : "";
+    refresh(setLocations);
   };
+  // Names the place at the photo's coordinates from one source, to compare
+  // with what Immich said. The answer is added as another location, unticked.
+  const locate = (source, label) => async () => {
+    const buttons = [$("wmOsm"), $("wmClaudeLoc")], saw = $("wmLocSaw");
+    for (const b of buttons) b.disabled = true;
+    saw.textContent = "Looking…";
+    try {
+      const r = await fetch("/api/photos/" + id + "/locate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
+      if (items.some(x => x.label === label && x.raw === out.place)) { saw.textContent = label + " says the same again: " + out.place; return; }
+      if (items.length >= 20) { saw.textContent = "The list is full; remove a row first."; return; }
+      await getHomeCountry();
+      refresh(() => { items.push({ label, raw: out.place, text: trimHome(out.place, home), loc: true, t: false, u: false, v: false }); });
+      saw.textContent = label + " says: " + out.place + " – tick where it goes.";
+    } catch (e) { saw.textContent = "That didn't work."; }
+    finally { for (const b of buttons) b.disabled = false; }
+  };
+  if ($("wmOsm")) { $("wmOsm").onclick = locate("osm", "Location (OSM)"); $("wmClaudeLoc").onclick = locate("claude", "Location (Claude)"); }
   // Asks Claude to look at the picture; the answer(s) are added to the list, to
   // be placed (or not) with the boxes. Every ask adds more, and tells Claude
   // what it already said so a retry gives something different.
