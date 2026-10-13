@@ -157,3 +157,15 @@ def test_overview_counts_what_the_library_holds(tmp_path):
     assert body == {"albums": {"Holiday": 1}, "review": 1, "live": 1, "processing": 1, "failed": 1, "trashed": 1}
     assert client.get("/").status_code == 200
     assert client.post("/api/live-album", json={"name": "Holiday"}).status_code in (404, 405)
+
+
+def test_imported_photo_rules_have_their_own_scope(tmp_path):
+    from app.rules import RulesStore, SCOPES
+    rules = RulesStore(str(tmp_path / "r.json"))
+    rules.add("Thin bevels.", "all")
+    rules.add("Single only.", "single")
+    rules.add("Small watermarks.", "imported")
+    assert "imported" in SCOPES
+    assert rules.active_texts("single") == ["Thin bevels.", "Single only."]
+    assert rules.active_texts("collage") == ["Thin bevels."]
+    assert rules.active_texts("imported") == ["Small watermarks."]
