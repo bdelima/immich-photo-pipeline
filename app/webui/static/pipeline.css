@@ -197,31 +197,49 @@ button.orig .ph { color: var(--muted); font-size: .8rem; }
 #overlay .close { position: absolute; top: 1rem; right: 1rem; }
 
 /* the watermark builder in the photo panel */
-#viewer .wm { padding: .4rem 1.1rem; }
-#viewer .wm label { display: block; font-size: .8rem; margin-top: .5rem; }
-#viewer .wm .field { display: block; width: 100%; margin-top: .2rem; }
-#viewer .wm .row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .6rem; align-items: center; }
-#viewer .wm .row .btn { white-space: nowrap; }
+#viewer .wm { padding: .4rem 1.1rem .6rem; }
+#viewer .wm .row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .8rem; align-items: center; }
 #viewer .wm .row .meta { flex-basis: 100%; }
-/* The live preview of the watermark, drawn larger than it will be on the photo so it can be read. */
-#viewer .wm .wmpreview { background: #10141f; color: #fff; border-radius: 12px; padding: .9rem 1rem; margin: .4rem 0 .5rem; text-align: right;
-                         text-shadow: 0 1px 3px rgba(0, 0, 0, .85); min-height: 5rem; overflow-wrap: anywhere; font-family: Arial, Helvetica, sans-serif;
+/* The preview: the corner of the photo the text will sit on, drawn by the server. */
+#viewer .wm .wmpreview { position: relative; background: #10141f; border-radius: 12px; overflow: hidden; margin: .4rem 0 .6rem; min-height: 4rem;
                          position: sticky; top: 3.4rem; z-index: 1; box-shadow: 0 6px 10px -6px rgba(0, 0, 0, .5); }
-#viewer .wm .wmpreview .l1 { font-size: 1.6rem; font-weight: 700; line-height: 1.25; }
-#viewer .wm .wmpreview .l2 { font-size: 1.25rem; line-height: 1.3; }
-#viewer .wm .wmpreview .l3 { font-size: 1.1rem; line-height: 1.3; opacity: .92; }
-#viewer .wm .wmpreview .cap { font-size: .7rem; text-shadow: none; opacity: .55; margin-top: .5rem; }
-#viewer .wm .wmpreview .none { font-size: .85rem; text-shadow: none; color: #93a0ba; text-align: center; padding: 1rem 0; }
-/* a field with the buttons that fill it in stays together */
-#viewer .wm .wmfield { margin-top: .7rem; padding-bottom: .5rem; border-bottom: 1px solid rgba(128, 128, 128, .2); }
-#viewer .wm .wmfield label { margin-top: 0; font-weight: 600; font-size: .85rem; }
-#viewer .wm .wmfield .field + .field { margin-top: .4rem; }
-#viewer .wm .wmgrid td .field { display: inline-block; width: 100%; margin-top: .2rem; padding: .3rem .5rem; font-size: .8rem; }
-#viewer .wm .tools { margin-top: .8rem; padding-top: .2rem; border-top: 1px solid rgba(128,128,128,.25); }
-#viewer .wm .wmgrid { width: 100%; margin-top: .6rem; border-collapse: collapse; font-size: .8rem; }
-#viewer .wm .wmgrid th { text-align: left; font-weight: 600; padding: .15rem .3rem; }
-#viewer .wm .wmgrid td { padding: .2rem .3rem; border-top: 1px solid rgba(128,128,128,.2); }
-#viewer .wm .wmgrid td + td, #viewer .wm .wmgrid th + th { text-align: center; width: 3.2rem; }
+#viewer .wm .wmpreview img { display: block; width: 100%; height: auto; }
+#viewer .wm .wmpreview img:not([src]) { display: none; }
+#viewer .wm .wmpreview .cap { position: absolute; left: .5rem; bottom: .35rem; font-size: .66rem; color: #fff; background: rgba(0, 0, 0, .5); padding: .1rem .45rem; border-radius: 99px; }
+/* The three lines, built from chips. */
+#viewer .wm .wmrows { border-bottom: 1px solid rgba(128, 128, 128, .25); padding-bottom: .4rem; }
+#viewer .wm .wmrow { display: flex; align-items: center; gap: .4rem; padding: .2rem 0; }
+#viewer .wm .chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; min-height: 1.7rem; }
+#viewer .wm .chip { display: inline-flex; align-items: center; background: var(--accent-soft); color: var(--accent-text); border-radius: 99px; padding: .1rem .25rem .1rem .6rem; font-size: .8rem; font-weight: 600; }
+#viewer .wm .chip button { font: inherit; font-weight: 400; color: inherit; background: none; border: 0; cursor: pointer; padding: 0 .3rem; opacity: .7; }
+#viewer .wm .chip button:hover { opacity: 1; }
+#viewer .wm .blank { color: var(--muted); font-size: .78rem; font-style: italic; }
+#viewer .wm .pd { font: inherit; font-size: .82rem; color: var(--text); background: var(--field); border: 1px solid var(--line-2); border-radius: 9px; padding: .3rem .5rem; min-width: 0; }
+#viewer .wm .pd.add { flex: none; width: 5.4rem; }
+#viewer .wm .aa, #viewer .wm .tog { flex: none; width: 1.9rem; height: 1.75rem; font: inherit; font-size: .75rem; font-weight: 600; color: var(--muted); background: var(--field);
+                                   border: 1px solid var(--line-2); border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+#viewer .wm .tog { width: 1.7rem; font-weight: 700; }
+#viewer .wm .tog.it { font-style: italic; font-weight: 400; }
+#viewer .wm .aa.on, #viewer .wm .tog.on { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-text); }
+#viewer .wm .strip { display: flex; align-items: center; gap: .35rem; margin: .1rem 0 .3rem; padding: .4rem .5rem; background: var(--field); border: 1px dashed var(--line-2); border-radius: 9px; }
+#viewer .wm .strip .pd { flex: 1; min-width: 4rem; background: var(--panel); }
+#viewer .wm .strip .pd[data-color] { flex: 0 1 7rem; }
+#viewer .wm .sw { flex: none; width: 1.7rem; height: 1.7rem; border-radius: 7px; border: 1px solid var(--line-2); }
+/* A hint box with its send button, under a line's style or under a field. */
+#viewer .wm .hint { display: flex; gap: .4rem; align-items: center; margin-top: .4rem; }
+#viewer .wm .hint .field { flex: 1; margin: 0; min-width: 0; }
+#viewer .wm .send { flex: none; width: 2rem; height: 2rem; border-radius: 50%; padding: 0; font-size: 1rem; border: 1px solid #2253b8; color: #fff; cursor: pointer;
+                    background: linear-gradient(var(--accent-2), var(--accent)); box-shadow: 0 2px 0 var(--accent-edge); display: flex; align-items: center; justify-content: center; }
+#viewer .wm .send:disabled { opacity: .45; cursor: default; }
+#viewer .wm .res { margin: .3rem 0 .2rem; font-size: .84rem; color: var(--muted); overflow-wrap: anywhere; }
+#viewer .wm .res:empty { display: none; }
+#viewer .wm .res b { color: var(--text); }
+/* The fields: one per piece, each with its choices under it. */
+#viewer .wm .wmel { margin-top: .6rem; }
+#viewer .wm .wmel label { display: block; font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }
+#viewer .wm .wmel .field { display: block; width: 100%; margin-bottom: .3rem; }
+#viewer .wm .wmel .pd { display: block; width: 100%; }
+#viewer .wm .askbox[hidden] { display: none; }
 
 /* Where the photo view's Close button sits follows its layout. Side by side it is
    at the top right of the sidebar. On a phone or a tablet held upright the photo
