@@ -209,6 +209,9 @@ button.orig .ph { color: var(--muted); font-size: .8rem; }
 #viewer .wm .wmpreview img { display: block; width: 100%; height: auto; }
 #viewer .wm .wmpreview img:not([src]) { display: none; }
 #viewer .wm .wmpreview .cap { position: absolute; left: .5rem; bottom: .35rem; font-size: .66rem; color: #fff; background: rgba(0, 0, 0, .5); padding: .1rem .45rem; border-radius: 99px; }
+#viewer .wm .wmpreview .hint { position: absolute; right: .5rem; top: .35rem; font-size: .66rem; color: #fff; background: rgba(0, 0, 0, .5); padding: .1rem .45rem; border-radius: 99px; }
+#viewer .wm .wmpreview.whole { cursor: zoom-in; }
+#viewer .wm .wmpreview.whole:hover { outline: 2px solid var(--accent); }
 /* The three lines, built from chips. */
 #viewer .wm .wmrows { border-bottom: 1px solid rgba(128, 128, 128, .25); padding-bottom: .4rem; }
 #viewer .wm .wmrow { display: flex; align-items: center; gap: .4rem; padding: .2rem 0; }

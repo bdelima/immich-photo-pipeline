@@ -42,6 +42,11 @@ FONT_HOST = "https://fonts.gstatic.com/"          # where Google Fonts serves it
 # from the photo's shorter side, so it lays out the same, and a preview (redrawn as the form is edited)
 # stays quick and light on memory even for a 40-megapixel frame.
 PREVIEW_MAX = 1600
+# The whole-photo picture behind the preview (the original with the watermark on it, shown when the
+# preview is clicked) is drawn no larger than this on its longer side: it is for a screen, not a file.
+WHOLE_MAX = 2000
+# What a preview is drawn on when there is no original to draw on: a plain dark panel.
+PLAIN_PANEL = (42, 47, 58)
 
 
 class FontError(Exception):
@@ -300,15 +305,25 @@ def render(src_path: str, dest_path: str, lines: list[dict], cache_dir: str | No
     return {"corner": lay["corner"], "colors": ["#%02x%02x%02x" % c for c in colors]}
 
 
-def preview(src_path: str, lines: list[dict], cache_dir: str | None, width: int = 560, height: int = 180,
+def _reduced(src_path: str, longest: int) -> Image.Image:
+    """The photo upright, in RGB, no larger than `longest` on its longer side."""
+    with Image.open(src_path) as im:
+        im.draft("RGB", (longest, longest))               # a JPEG is decoded at a reduced size
+        img = ImageOps.exif_transpose(im).convert("RGB")
+    img.thumbnail((longest, longest))
+    return img
+
+
+def preview(src_path: str | None, lines: list[dict], cache_dir: str | None, width: int = 560, height: int = 180,
             corner: str = "auto") -> tuple[bytes, dict]:
     """A PNG of the corner the text will sit on, with the text drawn by the same code, scaled to
     `width` x `height`. Returns (png bytes, {"corner", "colors"}). With nothing to write it shows
-    the corner plain."""
-    with Image.open(src_path) as im:
-        im.draft("RGB", (PREVIEW_MAX, PREVIEW_MAX))       # a JPEG is decoded at a reduced size
-        img = ImageOps.exif_transpose(im).convert("RGB")
-    img.thumbnail((PREVIEW_MAX, PREVIEW_MAX))
+    the corner plain. With no photo (`src_path` None) the text is drawn on a plain dark panel of
+    the preview's shape, so the font and colour can still be seen."""
+    if src_path is None:
+        img = Image.new("RGB", (PREVIEW_MAX, int(PREVIEW_MAX * height / width)), PLAIN_PANEL)
+    else:
+        img = _reduced(src_path, PREVIEW_MAX)
     lay = _layout(img, lines, cache_dir, corner)
     colors = _draw_block(img, lay) if lay["lines"] else []
     # The window: the block plus room around it, in the preview's shape, scaled so the text is
@@ -326,3 +341,14 @@ def preview(src_path: str, lines: list[dict], cache_dir: str | None, width: int 
     out = io.BytesIO()
     crop.save(out, "PNG")
     return out.getvalue(), {"corner": corner, "colors": ["#%02x%02x%02x" % c for c in colors]}
+
+
+def whole(src_path: str, lines: list[dict], cache_dir: str | None, corner: str = "auto") -> tuple[bytes, dict]:
+    """The whole photo with the watermark on it, as a JPEG for the screen (no larger than
+    WHOLE_MAX on its longer side). Returns (jpeg bytes, {"corner", "colors"}). Nothing is written."""
+    img = _reduced(src_path, WHOLE_MAX)
+    lay = _layout(img, lines, cache_dir, corner)
+    colors = _draw_block(img, lay) if lay["lines"] else []
+    out = io.BytesIO()
+    img.save(out, "JPEG", quality=88)
+    return out.getvalue(), {"corner": lay["corner"], "colors": ["#%02x%02x%02x" % c for c in colors]}
