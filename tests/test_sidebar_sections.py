@@ -64,6 +64,12 @@ def test_the_order_of_the_ticks_on_a_line_is_the_order_it_is_written_in():
     assert "titleLike" not in page                                                   # nothing is released behind your back
 
 
+def test_a_piece_is_on_one_line_only():
+    page = read("templates", "index.html")
+    assert 'for (const other of ["t", "u", "v"]) it[other] = 0;' in page           # ticking a line clears the others
+    assert "if (x[k] > 0 && seen) x[k] = 0;" in page                               # and an older save is tidied on opening
+
+
 def test_the_preview_is_big_enough_to_read():
     css = read("static", "pipeline.css")
     assert "#viewer .wm .wmpreview .l1 { font-size: 1.6rem;" in css

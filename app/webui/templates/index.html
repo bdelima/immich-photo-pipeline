@@ -478,6 +478,8 @@ function wireWatermark(id, w) {
   const tick = v => (typeof v === "number" ? Math.max(0, v | 0) : v ? 1 : 0);
   const items = (w.pieces || []).map(x => ({ key: x.key || "", label: x.label, text: x.text || "", t: tick(x.t), u: tick(x.u), v: tick(x.v),
     raw: x.key === "location" && x.auto ? x.text : undefined }));
+  // A piece goes on one line only (an older save that has it on several keeps the first of them).
+  for (const x of items) { let seen = false; for (const k of ["t", "u", "v"]) { if (x[k] > 0 && seen) x[k] = 0; else if (x[k] > 0) seen = true; } }
   for (const [key, label] of [["title", "Title"], ["location", "Location"], ["author", "Author"], ["date", "Date"]])
     if (!items.some(x => x.key === key)) items.push({ key, label, text: "", t: 0, u: 0, v: 0 });
   const fixed = key => items.find(x => x.key === key);
@@ -514,6 +516,7 @@ function wireWatermark(id, w) {
       `<td>${x.key ? "" : `<button class="btn sec sm" data-rm="${i}" aria-label="Remove ${esc(x.label)}">×</button>`}</td></tr>`).join("");
     for (const c of $("wmGrid").querySelectorAll("input[type=checkbox]")) c.onchange = () => {
       const it = items[+c.dataset.i], k = c.dataset.k;
+      for (const other of ["t", "u", "v"]) it[other] = 0;                      // a piece goes on one line only
       it[k] = c.checked ? Math.max(0, ...items.map(o => o[k])) + 1 : 0;      // ticked later = written later
       drawGrid(); drawPreview();
     };
