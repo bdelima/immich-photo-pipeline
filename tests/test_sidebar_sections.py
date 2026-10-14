@@ -91,3 +91,13 @@ def test_a_photo_opens_with_every_section_of_the_sidebar_folded():
     assert "const folds = { hist: false, chat: false, wm: false };" in page
     opening = page[page.index("async function openViewer"):page.index('$("viewer").classList.add("open")')]
     assert 'if (!$("viewer").classList.contains("open")) for (const k of Object.keys(folds)) folds[k] = false;' in opening
+
+
+def test_the_corner_can_be_picked_under_the_rows_and_a_chat_edits_note_is_shown():
+    page = read("templates", "index.html")
+    assert 'WM_CORNERS = [["auto", "Auto"], ["lower right", "Lower right"]' in page
+    assert '<div class="wmrow corner"><span class="fl">Corner</span><select class="pd" data-corner' in page
+    assert 'Look, from a chat edit: <b>${esc(styleNote)}</b>' in page
+    sending = page[page.index('$("wmSend").onclick'):]
+    assert "corner, style_note: styleNote" in sending
+    assert "lines: WM_LINES.map(k => lines[k]), corner })" in page                  # the preview follows the corner
