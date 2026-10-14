@@ -219,6 +219,9 @@ class RecipeResult:
     # after a revision; the pipeline asks the reviewer before saving it.
     lesson: str | None = None
     lesson_scope: str = "all"
+    # What the recipe says it drew as a watermark, if the image carries one (see
+    # _WATERMARK_CONTRACT and watermark.from_report); None when it reported none.
+    watermark: dict | None = None
 
 
 @dataclass
@@ -328,6 +331,8 @@ class RecipeRunner:
         prompt += " " + _OUTPUT_CONTRACT.format(output_path=output_path)
         if note:
             prompt += " " + (lesson or _LESSON_CONTRACT)
+            if "atermark" in note:
+                prompt += " " + _WATERMARK_CONTRACT
         return prompt
 
     def resume(self, session_id: str, answer: str, output_path: str | None = None) -> RecipeResult:
@@ -531,12 +536,14 @@ class RecipeRunner:
             )
         lesson = payload.get("lesson")
         lesson_scope = payload.get("lesson_scope")
+        reported = payload.get("watermark")
         return RecipeResult(
             status="done",
             output_path=payload.get("output_path"),
             session_id=session_id,
             lesson=lesson.strip() if isinstance(lesson, str) and lesson.strip() else None,
             lesson_scope=lesson_scope if lesson_scope in SCOPES else "all",
+            watermark=reported if isinstance(reported, dict) and reported else None,
         )
 
 
@@ -698,6 +705,19 @@ _LESSON_CONTRACT_EDIT = (
     'imported photos too -- not just a fix for this one -- add a field "lesson" '
     '(the rule, as one general sentence) to that same JSON object. Omit it '
     'when the feedback was specific to this photo.'
+)
+
+# Appended to a revision prompt that mentions a watermark, so what Claude drew comes
+# back in a form the watermark builder can show and draw again (watermark.from_report).
+_WATERMARK_CONTRACT = (
+    'If the image you wrote carries a watermark (text drawn on the photo), also add a field '
+    '"watermark" to that same JSON object describing exactly what is on it now: {"lines": '
+    '[{"text": "<the text of one line>", "font": "<font family as Google Fonts names it, or '
+    'Liberation Sans/Serif/Mono>", "color": "#rrggbb", "bold": false, "italic": false}, ...] '
+    '(top line first), "corner": "lower right" | "lower left" | "upper right" | "upper left", '
+    '"style_note": "<anything about its look the fields cannot say, such as a glow or a tilt, '
+    'else empty>", "font_files": {"<family>": "<path of the font file you used>"}}. Keep any '
+    'font file you fetch in the fonts folder named in the request, not in /tmp.'
 )
 
 # Appended to revision prompts only. No braces on purpose: this is joined
