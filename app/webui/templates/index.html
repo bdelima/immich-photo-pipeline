@@ -452,6 +452,7 @@ const WM_FIXED = [["title", "Title"], ["subject", "Subject"], ["location", "Loca
 const WM_LINES = ["t", "u", "v"];
 const WM_SEP = { t: " – ", u: " · ", v: " · " };
 const WM_COLORS = [["auto", "Auto"], ["white", "White"], ["black", "Black"]];
+const WM_CORNERS = [["auto", "Auto"], ["lower right", "Lower right"], ["lower left", "Lower left"], ["upper right", "Upper right"], ["upper left", "Upper left"]];
 function wireWatermark(id, w) {
   const head = document.querySelector('#panel .foldhead[data-key="wm"]'); if (!head) return;
   // Working on the watermark folds History and Chat out of the way; cancelling
@@ -491,7 +492,10 @@ function wireWatermark(id, w) {
   }
   items = items.filter(x => x.key);
   items.sort((a, b) => WM_FIXED.findIndex(f => f[0] === a.key) - WM_FIXED.findIndex(f => f[0] === b.key));
-  // The style of each line.
+  // The style of each line, the corner (auto = the renderer picks), and a note about the look that the
+  // fields can't say (set by a chat edit, kept so a later chat edit can reproduce it).
+  let corner = WM_CORNERS.some(([v]) => v === w.corner) ? w.corner : "auto";
+  const styleNote = typeof w.style_note === "string" ? w.style_note : "";
   const lines = {};
   WM_LINES.forEach((k, i) => { const s = (w.lines || [])[i] || {}; lines[k] = { font: s.font || "Liberation Sans", color: s.color || "auto", bold: !!s.bold, italic: !!s.italic }; });
   // The choices under the fields, filled in from the server when the section opens.
@@ -511,7 +515,7 @@ function wireWatermark(id, w) {
       const [title, subtitle, third] = WM_LINES.map(lineText);
       try {
         const r = await fetch("/api/photos/" + id + "/watermark/preview", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, subtitle, third, lines: WM_LINES.map(k => lines[k]) }) });
+          body: JSON.stringify({ title, subtitle, third, lines: WM_LINES.map(k => lines[k]), corner }) });
         if (seq !== previewSeq) return;
         if (!r.ok) { const out = await r.json().catch(() => ({})); status(out.error || "The preview couldn't be drawn."); return; }
         const blob = await r.blob();
@@ -519,8 +523,8 @@ function wireWatermark(id, w) {
         if (previewUrl) URL.revokeObjectURL(previewUrl);
         previewUrl = URL.createObjectURL(blob);
         const img = $("wmPreviewImg"); if (img) img.src = previewUrl;
-        const corner = r.headers.get("X-Watermark-Corner") || "lower right";
-        if ($("wmCorner")) $("wmCorner").textContent = (title || subtitle || third ? "Preview · " : "Nothing to write yet · ") + corner + " corner";
+        const drawn = r.headers.get("X-Watermark-Corner") || "lower right";
+        if ($("wmCorner")) $("wmCorner").textContent = (title || subtitle || third ? "Preview · " : "Nothing to write yet · ") + drawn + " corner";
         lastColors = (r.headers.get("X-Watermark-Colors") || "").split(",").filter(Boolean);
         drawSwatches();
       } catch (e) { if (seq === previewSeq) status("The preview couldn't be drawn."); }
@@ -559,8 +563,11 @@ function wireWatermark(id, w) {
           (fontSaw[k] ? `<div class="res">${fontSaw[k]}</div>` : "");
       }
       return `<div class="wmrow" data-line="${k}"><span class="chips">${chips}</span>${add}${aa}</div>${strip}`;
-    }).join("");
+    }).join("") +
+      `<div class="wmrow corner"><span class="fl">Corner</span><select class="pd" data-corner aria-label="Corner">${WM_CORNERS.map(([v, l]) => `<option value="${v}"${v === corner ? " selected" : ""}>${l}</option>`).join("")}</select></div>` +
+      (styleNote ? `<div class="res">Look, from a chat edit: <b>${esc(styleNote)}</b></div>` : "");
     const rows = $("wmRows");
+    rows.querySelector("[data-corner]").onchange = e => { corner = e.target.value; drawPreview(); };
     for (const b of rows.querySelectorAll("[data-off]")) b.onclick = () => { const it = fixed(b.dataset.off); for (const k of WM_LINES) it[k] = 0; drawRows(); drawPreview(); };
     for (const s of rows.querySelectorAll("[data-add]")) s.onchange = () => {
       const it = fixed(s.value), k = s.dataset.add; if (!it) return;
@@ -719,7 +726,7 @@ function wireWatermark(id, w) {
     $("wmSend").disabled = true;
     const [title, subtitle, third] = WM_LINES.map(lineText);
     const r = await fetch("/api/photos/" + id + "/watermark", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, subtitle, third, pieces: items.map(({ key, label, text, t, u, v }) => ({ key, label, text, t, u, v })), lines: WM_LINES.map(k => lines[k]) }) });
+      body: JSON.stringify({ title, subtitle, third, pieces: items.map(({ key, label, text, t, u, v }) => ({ key, label, text, t, u, v })), lines: WM_LINES.map(k => lines[k]), corner, style_note: styleNote }) });
     const out = await r.json().catch(() => ({}));
     $("wmSend").disabled = false;
     if (!r.ok) { status(out.error || "That didn't work."); return; }
