@@ -28,6 +28,9 @@ a { color: var(--accent-text); }
 /* ---- sidebar ---- */
 nav { width: 15rem; flex: none; background: var(--panel); border-right: 1px solid var(--line); padding: 1.1rem .8rem; overflow-y: auto; }
 nav h1 { font-size: 1.15rem; margin: 0 .75rem .15rem; }
+nav .brand { display: flex; align-items: center; gap: .6rem; margin: 0 .75rem .15rem; }
+nav .brand h1 { margin: 0; line-height: 1.15; }
+nav .brand img { flex: none; }
 nav .ver { font-size: .75rem; color: var(--muted); margin: 0 .75rem 1rem; }
 nav a.item { display: flex; justify-content: space-between; align-items: center; padding: .5rem .75rem; border-radius: 10px;
              color: var(--text); text-decoration: none; cursor: pointer; }

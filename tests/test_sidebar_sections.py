@@ -101,3 +101,12 @@ def test_the_corner_can_be_picked_under_the_rows_and_a_chat_edits_note_is_shown(
     sending = page[page.index('$("wmSend").onclick'):]
     assert "corner, style_note: styleNote" in sending
     assert "lines: WM_LINES.map(k => lines[k]), corner })" in page                  # the preview follows the corner
+
+
+def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it():
+    page = read("templates", "index.html")
+    brand = page[page.index('<div class="brand">'):page.index("</nav>")]
+    assert "icon-small.svg" in brand and brand.index("<img") < brand.index("<h1>")      # the icon is to the left
+    assert "<h1>Immich Photo Pipeline</h1>" in brand
+    assert "nav .brand { display: flex;" in read("static", "pipeline.css")
+    assert '(h.closest(".brand") || h).after(el)' in read("static", "app.js")           # the version goes under the row

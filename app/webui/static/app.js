@@ -45,6 +45,6 @@ async function renderTree(active, base) {
     const el = document.createElement("div");
     el.className = "ver";
     el.textContent = /^\d/.test(v) ? "v" + v : v;
-    h.after(el);
+    (h.closest(".brand") || h).after(el);       // under the icon and title, not inside the row
   } catch (e) { /* the hint is optional */ }
 })();
