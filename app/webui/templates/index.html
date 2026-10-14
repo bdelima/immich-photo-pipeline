@@ -428,7 +428,7 @@ function originalDetails(sources) {
 // back. Adding draws the text here as a new step in the history; Claude is only asked for ideas.
 function watermarkForm(w) {
   return `<div class="wm"><div id="wmForm">` +
-    `<div class="wmpreview" id="wmPreview"><img id="wmPreviewImg" alt="Watermark preview"><span class="cap" id="wmCorner">Preview</span></div>` +
+    `<div class="wmpreview" id="wmPreview"><img id="wmPreviewImg" alt="Watermark preview"><span class="cap" id="wmCorner">Preview</span><span class="hint" id="wmWhole" hidden>Click to see it whole</span></div>` +
     `<div class="wmrows" id="wmRows"></div>` +
     `<div id="wmFields"></div>` +
     `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button><span class="meta" id="wmStatus" role="status"></span></div></div></div>`;
@@ -499,7 +499,7 @@ function wireWatermark(id, w) {
   const lines = {};
   WM_LINES.forEach((k, i) => { const s = (w.lines || [])[i] || {}; lines[k] = { font: s.font || "Liberation Sans", color: s.color || "auto", bold: !!s.bold, italic: !!s.italic }; });
   // The choices under the fields, filled in from the server when the section opens.
-  const options = { title: extras.title, location: extras.location, people: [], users: [], dates: [], fonts: ["Liberation Sans", "Liberation Serif", "Liberation Mono"], suggested_fonts: [], suggested_colors: [] };
+  const options = { title: extras.title, location: extras.location, subject: "", users: [], dates: [], fonts: ["Liberation Sans", "Liberation Serif", "Liberation Mono"], suggested_fonts: [], suggested_colors: [] };
   let home = "";
   const FIELDS = { title: "wmTitle", subject: "wmSubject", location: "wmLoc", author: "wmAuthor", date: "wmDate" };
   const onLine = k => items.filter(x => x[k] > 0).sort((a, b) => a[k] - b[k]);
@@ -507,15 +507,16 @@ function wireWatermark(id, w) {
   const status = text => { $("wmStatus").textContent = text || ""; };
 
   // ---- the preview: drawn by the server, a moment after the last change ----
-  let previewTimer = null, previewUrl = null, previewSeq = 0, lastColors = [];
+  let previewTimer = null, previewUrl = null, previewSeq = 0, lastColors = [], onOriginal = false;
+  const previewBody = () => { const [title, subtitle, third] = WM_LINES.map(lineText); return { title, subtitle, third, lines: WM_LINES.map(k => lines[k]), corner }; };
   const drawPreview = () => {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(async () => {
       const seq = ++previewSeq;
-      const [title, subtitle, third] = WM_LINES.map(lineText);
+      const body = previewBody(), { title, subtitle, third } = body;
       try {
         const r = await fetch("/api/photos/" + id + "/watermark/preview", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, subtitle, third, lines: WM_LINES.map(k => lines[k]), corner }) });
+          body: JSON.stringify(body) });
         if (seq !== previewSeq) return;
         if (!r.ok) { const out = await r.json().catch(() => ({})); status(out.error || "The preview couldn't be drawn."); return; }
         const blob = await r.blob();
@@ -524,11 +525,37 @@ function wireWatermark(id, w) {
         previewUrl = URL.createObjectURL(blob);
         const img = $("wmPreviewImg"); if (img) img.src = previewUrl;
         const drawn = r.headers.get("X-Watermark-Corner") || "lower right";
-        if ($("wmCorner")) $("wmCorner").textContent = (title || subtitle || third ? "Preview · " : "Nothing to write yet · ") + drawn + " corner";
+        const src = r.headers.get("X-Watermark-Source");
+        onOriginal = src === "original";
+        // On the original when there is one (a rough idea of the text against the picture, with no
+        // mat or earlier watermark in the way); on a plain panel when there is none to draw on.
+        if ($("wmCorner")) $("wmCorner").textContent = (title || subtitle || third ? "Preview" : "Nothing to write yet") +
+          (onOriginal ? " on the original · " + drawn + " corner"
+            : src === "current" ? " on the current image (the original can't be opened here) · " + drawn + " corner"
+            : " · no original on file");
+        if ($("wmWhole")) $("wmWhole").hidden = !onOriginal;
+        if ($("wmPreview")) $("wmPreview").classList.toggle("whole", onOriginal);
         lastColors = (r.headers.get("X-Watermark-Colors") || "").split(",").filter(Boolean);
         drawSwatches();
       } catch (e) { if (seq === previewSeq) status("The preview couldn't be drawn."); }
     }, 300);
+  };
+  // A click on the preview: the whole original with the watermark on it as the form stands, in the
+  // same overlay the original's thumbnail opens. Drawn when clicked, not kept up with later edits.
+  $("wmPreview").onclick = async () => {
+    if (!onOriginal) return;
+    status("Drawing…");
+    try {
+      const r = await fetch("/api/photos/" + id + "/watermark/whole", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(previewBody()) });
+      if (!r.ok) { const out = await r.json().catch(() => ({})); status(out.error || "That couldn't be drawn."); return; }
+      const url = URL.createObjectURL(await r.blob());
+      status("");
+      const o = $("overlay");
+      o.innerHTML = `<img src="${url}" alt="The original with the watermark"><button class="btn sec sm close" aria-label="Close">Close</button>`;
+      o.hidden = false;
+      o.onclick = () => { closeOriginal(); URL.revokeObjectURL(url); };
+    } catch (e) { status("That couldn't be drawn."); }
   };
   // The colour each line was drawn in (the server skips empty lines, so count the ones with text).
   const drawnColor = k => { let n = 0; for (const j of WM_LINES) { if (!lineText(j)) continue; if (j === k) return lastColors[n] || ""; n++; } return ""; };
@@ -625,7 +652,7 @@ function wireWatermark(id, w) {
       if (w.parts && w.parts.coordinates) out.push(["__osm", "Look up (OSM)…"], ["__claude", "Ask Claude…"]);
       return [...out, ...options.location.map(t => [t, t])];
     }
-    if (key === "subject") { const all = options.people.length > 1 ? [[options.people.slice(0, -1).join(", ") + " & " + options.people[options.people.length - 1], options.people.slice(0, -1).join(", ") + " & " + options.people[options.people.length - 1]]] : []; return [...options.people.map(t => [t, t]), ...all]; }
+    if (key === "subject") return options.subject ? [[options.subject, options.subject]] : [];   // Current, and the people Immich named, as one entry
     if (key === "author") return options.users.map(t => [t, t]);
     if (key === "date") return options.dates.map(t => [t, t]);
     return [];
@@ -708,7 +735,7 @@ function wireWatermark(id, w) {
       const o = await api("/api/photos/" + id + "/watermark/options");
       options.title = [...o.title, ...options.title.filter(t => !o.title.includes(t))];
       options.location = [...o.location, ...options.location.filter(t => !o.location.includes(t))];
-      options.people = o.people || []; options.users = o.users || []; options.dates = o.dates || [];
+      options.subject = o.subject || ""; options.users = o.users || []; options.dates = o.dates || [];
       options.fonts = o.fonts || options.fonts; options.suggested_fonts = o.suggested_fonts || []; options.suggested_colors = o.suggested_colors || [];
       for (const [key] of WM_FIXED) refreshChoices(key);
       if (openStrip) drawRows();

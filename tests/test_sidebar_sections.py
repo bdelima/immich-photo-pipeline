@@ -100,7 +100,25 @@ def test_the_corner_can_be_picked_under_the_rows_and_a_chat_edits_note_is_shown(
     assert 'Look, from a chat edit: <b>${esc(styleNote)}</b>' in page
     sending = page[page.index('$("wmSend").onclick'):]
     assert "corner, style_note: styleNote" in sending
-    assert "lines: WM_LINES.map(k => lines[k]), corner })" in page                  # the preview follows the corner
+    assert "lines: WM_LINES.map(k => lines[k]), corner }" in page                   # the preview follows the corner
+
+
+def test_the_preview_is_drawn_on_the_original_and_a_click_shows_it_whole():
+    page = read("templates", "index.html")
+    assert 'id="wmWhole" hidden>Click to see it whole</span>' in page
+    assert 'const src = r.headers.get("X-Watermark-Source");' in page
+    assert '(onOriginal ? " on the original · " + drawn + " corner"' in page and '" · no original on file"' in page
+    click = page[page.index('$("wmPreview").onclick'):page.index("// The colour each line was drawn in")]
+    assert "if (!onOriginal) return;" in click and '"/api/photos/" + id + "/watermark/whole"' in click
+    assert 'const o = $("overlay");' in click and "closeOriginal()" in click      # the overlay the original's thumbnail uses
+    css = read("static", "pipeline.css")
+    assert "#viewer .wm .wmpreview.whole { cursor: zoom-in; }" in css
+
+
+def test_the_subject_pulldown_is_current_and_one_combined_entry():
+    page = read("templates", "index.html")
+    assert 'if (key === "subject") return options.subject ? [[options.subject, options.subject]] : [];' in page
+    assert "options.people" not in page
 
 
 def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it():
@@ -110,3 +128,9 @@ def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it
     assert "<h1>Immich Photo Pipeline</h1>" in brand
     assert "nav .brand { display: flex;" in read("static", "pipeline.css")
     assert '(h.closest(".brand") || h).after(el)' in read("static", "app.js")           # the version goes under the row
+
+
+def test_the_preview_says_when_it_was_drawn_on_the_current_image_because_the_original_cannot_be_opened():
+    page = read("templates", "index.html")
+    assert 'src === "current" ? " on the current image (the original can\'t be opened here) · "' in page
+    assert 'onOriginal = src === "original";' in page

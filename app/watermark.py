@@ -373,14 +373,66 @@ def _request(data: dict) -> tuple[list[str], dict]:
     return texts, last
 
 
+def original_path(photo: Photo, revisions) -> str | None:
+    """The stored copy of the photo's first original, or None when there is none on file (an
+    imported photo). The preview is drawn on this rather than on the current step: it is a rough
+    idea of how the text looks against the picture, and the original has no mat and no earlier
+    watermark on it to muddle that."""
+    if revisions is None:
+        return None
+    for source in photo.sources:
+        if source.file:
+            path = revisions.path(source.file)
+            if os.path.exists(path):
+                return path
+    return None
+
+
+def _preview_texts(data: dict) -> list[str]:
+    return [_line(data.get("title"), "title"), _line(data.get("subtitle"), "second line"), _line(data.get("third"), "third line")]
+
+
 def preview(store: LibraryStore, revisions, photo_id: str, data: dict) -> tuple[bytes, dict]:
-    """A picture of the corner the watermark will sit on, with the text drawn as it will be.
-    Nothing is changed. The texts may all be empty (the corner is shown plain)."""
-    photo, path = _workable(store, revisions, photo_id)
+    """A picture of the corner the watermark will sit on, drawn on the original (or, with no
+    original on file, on a plain panel), with the text as it will be. Nothing is changed. The
+    texts may all be empty (the corner is shown plain). The info says which: "source" is
+    "original", "current" (the original can't be opened here, a HEIC for example, so the photo's
+    current image is used) or "none"."""
+    photo, current = _workable(store, revisions, photo_id)
     data = data if isinstance(data, dict) else {}
-    texts = [_line(data.get("title"), "title"), _line(data.get("subtitle"), "second line"), _line(data.get("third"), "third line")]
+    path = original_path(photo, revisions)
+    lines = _styled(_preview_texts(data), data.get("lines"))
+    corner = clean_corner(data.get("corner"))
+    source = "original" if path else "none"
     try:
-        return wmrender.preview(path, _styled(texts, data.get("lines")), font_dir(revisions), corner=clean_corner(data.get("corner")))
+        try:
+            png, info = wmrender.preview(path, lines, font_dir(revisions), corner=corner)
+        except wmrender.ImageError:
+            if not path:
+                raise
+            png, info = wmrender.preview(current, lines, font_dir(revisions), corner=corner)
+            source = "current"
+    except wmrender.ImageError as exc:
+        raise chat.ChatError(f"The picture can't be drawn on: {exc}", 422)
+    except wmrender.FontError as exc:
+        raise chat.ChatError(str(exc), 502)
+    info["source"] = source
+    return png, info
+
+
+def whole(store: LibraryStore, revisions, photo_id: str, data: dict) -> tuple[bytes, dict]:
+    """The whole original with the watermark drawn on it as the form stands, as a JPEG for the
+    screen (what a click on the preview shows). 404 when there is no original on file."""
+    photo, _ = _workable(store, revisions, photo_id)
+    data = data if isinstance(data, dict) else {}
+    path = original_path(photo, revisions)
+    if not path:
+        raise chat.ChatError("There is no original on file to show.", 404)
+    try:
+        return wmrender.whole(path, _styled(_preview_texts(data), data.get("lines")), font_dir(revisions),
+                              corner=clean_corner(data.get("corner")))
+    except wmrender.ImageError:
+        raise chat.ChatError("The original can't be shown here (its format isn't one this server can open).", 422)
     except wmrender.FontError as exc:
         raise chat.ChatError(str(exc), 502)
 
@@ -595,11 +647,35 @@ def _taken(photo: Photo) -> str:
     return ""
 
 
-def options(store: LibraryStore, immich, photo_id: str) -> dict:
+def people_in(photo: Photo, clients) -> list[str]:
+    """The people Immich has named in the photo's originals, without repeats, in the order the
+    originals were added. Named people are per account in Immich: the pipeline's own account can
+    see a household member's original but not the names they gave the faces in it, so each
+    account is asked in turn (the pipeline's first, then every extra key) and the first that
+    names anyone is taken for that original. An account that fails or sees nothing never stops
+    the next being asked."""
+    people: list[str] = []
+    for source in photo.sources:
+        if not source.asset_id:
+            continue
+        for client in clients:
+            try:
+                found = [n for n in client.asset_people(source.asset_id) if n]
+            except Exception:
+                continue
+            if found:
+                people += [n for n in found if n not in people]
+                break
+    return people
+
+
+def options(store: LibraryStore, immich, photo_id: str, extra=()) -> dict:
     """What the pulldowns under the fields offer: the titles and subjects Claude suggested
-    (newest first), the places found, the people Immich named in the photo, every Immich user
-    (for the author), ways of writing the date, and the fonts and colours suggested. Immich is
-    asked for the users and people; when it can't be, those lists are empty."""
+    (newest first), the places found, the people Immich named in the photo (one entry, the
+    names joined with commas), every Immich user (for the author), ways of writing the date,
+    and the fonts and colours suggested. Immich is asked for the users and people, with the
+    extra accounts' keys tried for the people (see people_in); when it can't be, those are
+    empty."""
     photo = store.load().photos.get(photo_id)
     if photo is None:
         raise chat.ChatError("no such photo", 404)
@@ -612,15 +688,12 @@ def options(store: LibraryStore, immich, photo_id: str) -> dict:
             users = [u for u in immich.list_user_names() if u]
         except Exception:
             users = []
-        for source in photo.sources:
-            try:
-                people += [n for n in immich.asset_people(source.asset_id) if n and n not in people]
-            except Exception:
-                continue
+        people = people_in(photo, (immich, *extra))
     return {
         "title": recent("title") + [t for t in recent("subject") if t not in recent("title")],
         "location": recent("location"),
         "people": people,
+        "subject": ", ".join(people),
         "users": users,
         "dates": date_choices(_taken(photo)),
         "fonts": list(wmrender.INSTALLED),
