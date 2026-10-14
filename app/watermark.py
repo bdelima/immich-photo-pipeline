@@ -396,16 +396,27 @@ def preview(store: LibraryStore, revisions, photo_id: str, data: dict) -> tuple[
     """A picture of the corner the watermark will sit on, drawn on the original (or, with no
     original on file, on a plain panel), with the text as it will be. Nothing is changed. The
     texts may all be empty (the corner is shown plain). The info says which: "source" is
-    "original" or "none"."""
-    photo, _ = _workable(store, revisions, photo_id)
+    "original", "current" (the original can't be opened here, a HEIC for example, so the photo's
+    current image is used) or "none"."""
+    photo, current = _workable(store, revisions, photo_id)
     data = data if isinstance(data, dict) else {}
     path = original_path(photo, revisions)
+    lines = _styled(_preview_texts(data), data.get("lines"))
+    corner = clean_corner(data.get("corner"))
+    source = "original" if path else "none"
     try:
-        png, info = wmrender.preview(path, _styled(_preview_texts(data), data.get("lines")), font_dir(revisions),
-                                     corner=clean_corner(data.get("corner")))
+        try:
+            png, info = wmrender.preview(path, lines, font_dir(revisions), corner=corner)
+        except wmrender.ImageError:
+            if not path:
+                raise
+            png, info = wmrender.preview(current, lines, font_dir(revisions), corner=corner)
+            source = "current"
+    except wmrender.ImageError as exc:
+        raise chat.ChatError(f"The picture can't be drawn on: {exc}", 422)
     except wmrender.FontError as exc:
         raise chat.ChatError(str(exc), 502)
-    info["source"] = "original" if path else "none"
+    info["source"] = source
     return png, info
 
 
@@ -420,6 +431,8 @@ def whole(store: LibraryStore, revisions, photo_id: str, data: dict) -> tuple[by
     try:
         return wmrender.whole(path, _styled(_preview_texts(data), data.get("lines")), font_dir(revisions),
                               corner=clean_corner(data.get("corner")))
+    except wmrender.ImageError:
+        raise chat.ChatError("The original can't be shown here (its format isn't one this server can open).", 422)
     except wmrender.FontError as exc:
         raise chat.ChatError(str(exc), 502)
 

@@ -49,6 +49,15 @@ WHOLE_MAX = 2000
 PLAIN_PANEL = (42, 47, 58)
 
 
+class ImageError(Exception):
+    """The picture can't be opened here (a format Pillow doesn't read, such as HEIC, or a damaged file)."""
+
+
+# What opening a picture can raise: an unknown format (UnidentifiedImageError is an OSError), a damaged
+# file, or one so large Pillow refuses it.
+_OPEN_ERRORS = (OSError, ValueError, getattr(Image, "DecompressionBombError", OSError))
+
+
 class FontError(Exception):
     """The font can't be had (not installed, not on Google Fonts, or no network)."""
 
@@ -307,9 +316,12 @@ def render(src_path: str, dest_path: str, lines: list[dict], cache_dir: str | No
 
 def _reduced(src_path: str, longest: int) -> Image.Image:
     """The photo upright, in RGB, no larger than `longest` on its longer side."""
-    with Image.open(src_path) as im:
-        im.draft("RGB", (longest, longest))               # a JPEG is decoded at a reduced size
-        img = ImageOps.exif_transpose(im).convert("RGB")
+    try:
+        with Image.open(src_path) as im:
+            im.draft("RGB", (longest, longest))           # a JPEG is decoded at a reduced size
+            img = ImageOps.exif_transpose(im).convert("RGB")
+    except _OPEN_ERRORS as exc:
+        raise ImageError(f"{os.path.basename(src_path)} can't be opened here: {exc}") from exc
     img.thumbnail((longest, longest))
     return img
 

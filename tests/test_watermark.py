@@ -822,3 +822,27 @@ def test_a_click_on_the_preview_gets_the_whole_original_with_the_watermark_on_it
     with pytest.raises(chat.ChatError) as e:
         watermark.whole(none, revisions2, "p", {"title": "Hello"})
     assert e.value.status == 404
+
+
+def test_an_unreadable_picture_is_reported_as_an_image_error(tmp_path):
+    from app import wmrender
+    bad = tmp_path / "x.heic"
+    bad.write_bytes(b"not a picture this server can read")
+    with pytest.raises(wmrender.ImageError):
+        wmrender._reduced(str(bad), 100)
+
+
+def test_an_original_this_server_cannot_open_falls_back_to_the_current_image_and_says_so(tmp_path):
+    from PIL import Image
+    import io
+    store, revisions = _with_original(tmp_path)
+    rel = store.load().photos["p"].sources[0].file
+    with open(revisions.path(rel), "wb") as fh:
+        fh.write(b"\x00\x00\x00\x18ftypheic this is not something Pillow can open")        # like a HEIC
+    png, info = watermark.preview(store, revisions, "p", {"title": "Hello"})
+    assert info["source"] == "current" and info["colors"] == ["#1a1a1a"]                   # dark text: the current step is pale
+    with Image.open(io.BytesIO(png)) as im:
+        assert im.size == (560, 180) and min(im.getpixel((5, 5))) > 200
+    with pytest.raises(chat.ChatError) as e:
+        watermark.whole(store, revisions, "p", {"title": "Hello"})
+    assert e.value.status == 422

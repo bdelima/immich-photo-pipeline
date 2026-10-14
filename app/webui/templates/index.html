@@ -525,11 +525,14 @@ function wireWatermark(id, w) {
         previewUrl = URL.createObjectURL(blob);
         const img = $("wmPreviewImg"); if (img) img.src = previewUrl;
         const drawn = r.headers.get("X-Watermark-Corner") || "lower right";
-        onOriginal = r.headers.get("X-Watermark-Source") === "original";
+        const src = r.headers.get("X-Watermark-Source");
+        onOriginal = src === "original";
         // On the original when there is one (a rough idea of the text against the picture, with no
         // mat or earlier watermark in the way); on a plain panel when there is none to draw on.
         if ($("wmCorner")) $("wmCorner").textContent = (title || subtitle || third ? "Preview" : "Nothing to write yet") +
-          (onOriginal ? " on the original · " + drawn + " corner" : " · no original on file");
+          (onOriginal ? " on the original · " + drawn + " corner"
+            : src === "current" ? " on the current image (the original can't be opened here) · " + drawn + " corner"
+            : " · no original on file");
         if ($("wmWhole")) $("wmWhole").hidden = !onOriginal;
         if ($("wmPreview")) $("wmPreview").classList.toggle("whole", onOriginal);
         lastColors = (r.headers.get("X-Watermark-Colors") || "").split(",").filter(Boolean);
