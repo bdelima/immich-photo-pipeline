@@ -420,23 +420,18 @@ function originalDetails(sources) {
   return sources.length && sources.every(s => s.meta && s.meta.unavailable)
     ? `<p class="meta aside-note">No details of the original: Immich no longer has it.</p>` : "";
 }
-// The watermark builder. Four fields (title, location, author, date), each with the buttons
-// that fill it in right beside it and each editable by hand. The matrix says which line each
-// piece goes on, and the preview at the top shows the watermark as it will read, live.
+// The watermark builder. At the top, a preview drawn by the server on the corner of the photo the
+// text will sit on. Under it, the three lines, each built from chips (Title, Subject, Location,
+// Author, Date) in the order they were added, with its own font, colour and weight behind the "Aa"
+// button. Below that, a field for each piece with a pulldown of choices under it. "Current" in a
+// pulldown is what the field holds now: picking something else fills the field, and Current puts it
+// back. Adding draws the text here as a new step in the history; Claude is only asked for ideas.
 function watermarkForm(w) {
-  const coords = w.parts && Array.isArray(w.parts.coordinates) ? w.parts.coordinates : null;
-  const coordNote = coords && !(w.parts && w.parts.place) ? `Immich has only coordinates: ${esc(coords[0].toFixed(4))}, ${esc(coords[1].toFixed(4))}` : "";
   return `<div class="wm"><div id="wmForm">` +
-    `<div class="wmpreview" id="wmPreview" role="status" aria-label="Watermark preview"></div>` +
-    `<div class="wmfield"><label for="wmTitle">Title</label><input class="field" id="wmTitle" maxlength="120">` +
-      `<input class="field" id="wmHint" maxlength="80" aria-label="Hint" placeholder="Hint (optional), e.g. the bird on the left. Blank = the whole picture">` +
-      `<div class="row"><button class="btn sec sm" id="wmIdentify">Identify</button><button class="btn sec sm" id="wmPoem">Suggest title</button><span class="meta" id="wmSaw" role="status"></span></div></div>` +
-    `<div class="wmfield"><label for="wmLoc">Location</label><input class="field" id="wmLoc" maxlength="120">` +
-      (coords ? `<div class="row"><button class="btn sec sm" id="wmOsm">Look up (OSM)</button><button class="btn sec sm" id="wmClaudeLoc">Ask Claude</button><span class="meta" id="wmLocSaw" role="status">${coordNote}</span></div>` : "") + `</div>` +
-    `<div class="wmfield"><label for="wmAuthor">Author</label><input class="field" id="wmAuthor" maxlength="120"></div>` +
-    `<div class="wmfield"><label for="wmDate">Date</label><input class="field" id="wmDate" maxlength="120"></div>` +
-    `<table class="wmgrid" id="wmGrid"></table>` +
-    `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button></div></div></div>`;
+    `<div class="wmpreview" id="wmPreview"><img id="wmPreviewImg" alt="Watermark preview"><span class="cap" id="wmCorner">Preview</span></div>` +
+    `<div class="wmrows" id="wmRows"></div>` +
+    `<div id="wmFields"></div>` +
+    `<div class="row"><button class="btn sm" id="wmSend">Add watermark</button><button class="btn sec sm" id="wmCancel">Cancel</button><span class="meta" id="wmStatus" role="status"></span></div></div></div>`;
 }
 // The country this container is in, asked for once ("" if unknown).
 let homeCountry = null;
@@ -453,148 +448,288 @@ function trimHome(place, home) {
   const bits = place.split(", ");
   return home && bits.length > 1 && countryKey(bits[bits.length - 1]) === countryKey(home) ? bits.slice(0, -1).join(", ") : place;
 }
+const WM_FIXED = [["title", "Title"], ["subject", "Subject"], ["location", "Location"], ["author", "Author"], ["date", "Date"]];
+const WM_LINES = ["t", "u", "v"];
+const WM_SEP = { t: " – ", u: " · ", v: " · " };
+const WM_COLORS = [["auto", "Auto"], ["white", "White"], ["black", "Black"]];
 function wireWatermark(id, w) {
   const head = document.querySelector('#panel .foldhead[data-key="wm"]'); if (!head) return;
   // Working on the watermark folds History and Chat out of the way; cancelling
-  // puts them back as they were, and adding the watermark opens the Chat.
+  // puts them back as they were.
   let looked = false, before = { hist: folds.hist, chat: folds.chat };
-  const startHome = () => { if (!looked) { looked = true; loadHome(); } };
+  const start = () => { if (!looked) { looked = true; loadHome(); loadOptions(); } };
   const openWm = () => {
     before = { hist: folds.hist, chat: folds.chat };
     setFold("hist", false); setFold("chat", false); setFold("wm", true);
-    startHome(); $("wmTitle").focus();
+    start(); drawPreview();
   };
   const closeWm = restore => { setFold("wm", false); if (restore) { setFold("hist", before.hist); setFold("chat", before.chat); } };
   head.onclick = () => (folds.wm ? closeWm(true) : openWm());
   $("wmCancel").onclick = () => closeWm(true);
 
-  // The pieces: the four fixed ones (each has a field above) and any that were added
-  // (a subject, title ideas, another location). Each is ticked for the lines it goes on
-  // (t = first, u = second, v = third). All of it is remembered with the watermark.
-  // `raw` is the location as Immich gave it; the text leaves off the home country until
-  // someone edits it (a location that was saved is already as it was left).
-  let home = "";
-  // t/u/v are 0 when a piece is not on that line, otherwise the order it was ticked in: the
-  // line is written in that order, so a later tick goes after the earlier ones.
+  // ---- the state: pieces, lines and choices ----
+  // The pieces: title, subject, location, author and date, each with its text and the line it is
+  // on (t, u or v holds the order it was added in; 0 is not on that line). All of it is remembered
+  // with the watermark. `raw` is the location as Immich gave it; the text leaves off the home
+  // country until someone edits it.
   const tick = v => (typeof v === "number" ? Math.max(0, v | 0) : v ? 1 : 0);
-  const items = (w.pieces || []).map(x => ({ key: x.key || "", label: x.label, text: x.text || "", t: tick(x.t), u: tick(x.u), v: tick(x.v),
+  let items = (w.pieces || []).map(x => ({ key: x.key || "", label: x.label, text: x.text || "", t: tick(x.t), u: tick(x.u), v: tick(x.v),
     raw: x.key === "location" && x.auto ? x.text : undefined }));
-  for (const [key, label] of [["title", "Title"], ["location", "Location"], ["author", "Author"], ["date", "Date"]])
-    if (!items.some(x => x.key === key)) items.push({ key, label, text: "", t: 0, u: 0, v: 0 });
+  for (const x of items) { let seen = false; for (const k of WM_LINES) { if (x[k] > 0 && seen) x[k] = 0; else if (x[k] > 0) seen = true; } }
+  for (const [key, label] of WM_FIXED) if (!items.some(x => x.key === key)) items.push({ key, label, text: "", t: 0, u: 0, v: 0 });
   const fixed = key => items.find(x => x.key === key);
-  const FIELDS = { title: "wmTitle", location: "wmLoc", author: "wmAuthor", date: "wmDate" };
-  const SEP = { t: " – ", u: " · ", v: " · " };
-  const onLine = k => items.map((x, i) => [x, i]).filter(([x]) => x[k] > 0).sort((a, b) => a[0][k] - b[0][k] || a[1] - b[1]);
-  const lineText = k => onLine(k).filter(([x]) => x.text.trim()).map(([x]) => x.text.trim()).join(SEP[k]);
-  // The preview is drawn larger than the watermark will be on the photo, so it can be read.
+  // What earlier versions added as rows of their own (a Subject, Title ideas, a looked-up Location)
+  // become choices under the matching field. One that was on a line takes that line, and the
+  // field's text, if the field itself was not on a line.
+  const extras = { title: [], location: [] };
+  for (const x of items.filter(x => !x.key)) {
+    const into = /location/i.test(x.label) ? "location" : "title";
+    const target = fixed(into);
+    const line = WM_LINES.find(k => x[k] > 0);
+    if (line && !WM_LINES.some(k => target[k] > 0)) { target.text = x.text; target[line] = x[line]; }
+    if (x.text && !extras[into].includes(x.text)) extras[into].push(x.text);
+  }
+  items = items.filter(x => x.key);
+  items.sort((a, b) => WM_FIXED.findIndex(f => f[0] === a.key) - WM_FIXED.findIndex(f => f[0] === b.key));
+  // The style of each line.
+  const lines = {};
+  WM_LINES.forEach((k, i) => { const s = (w.lines || [])[i] || {}; lines[k] = { font: s.font || "Liberation Sans", color: s.color || "auto", bold: !!s.bold, italic: !!s.italic }; });
+  // The choices under the fields, filled in from the server when the section opens.
+  const options = { title: extras.title, location: extras.location, people: [], users: [], dates: [], fonts: ["Liberation Sans", "Liberation Serif", "Liberation Mono"], suggested_fonts: [], suggested_colors: [] };
+  let home = "";
+  const FIELDS = { title: "wmTitle", subject: "wmSubject", location: "wmLoc", author: "wmAuthor", date: "wmDate" };
+  const onLine = k => items.filter(x => x[k] > 0).sort((a, b) => a[k] - b[k]);
+  const lineText = k => onLine(k).map(x => x.text.trim()).filter(Boolean).join(WM_SEP[k]);
+  const status = text => { $("wmStatus").textContent = text || ""; };
+
+  // ---- the preview: drawn by the server, a moment after the last change ----
+  let previewTimer = null, previewUrl = null, previewSeq = 0, lastColors = [];
   const drawPreview = () => {
-    const [a, b, c] = ["t", "u", "v"].map(lineText);
-    $("wmPreview").innerHTML = a || b || c
-      ? (a ? `<div class="l1">${esc(a)}</div>` : "") + (b ? `<div class="l2">${esc(b)}</div>` : "") + (c ? `<div class="l3">${esc(c)}</div>` : "") +
-        `<div class="cap">Preview, shown larger than on the photo</div>`
-      : `<div class="none">Nothing to write yet. Fill in a field and tick where it goes.</div>`;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+      const seq = ++previewSeq;
+      const [title, subtitle, third] = WM_LINES.map(lineText);
+      try {
+        const r = await fetch("/api/photos/" + id + "/watermark/preview", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, subtitle, third, lines: WM_LINES.map(k => lines[k]) }) });
+        if (seq !== previewSeq) return;
+        if (!r.ok) { const out = await r.json().catch(() => ({})); status(out.error || "The preview couldn't be drawn."); return; }
+        const blob = await r.blob();
+        if (seq !== previewSeq) return;
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = URL.createObjectURL(blob);
+        const img = $("wmPreviewImg"); if (img) img.src = previewUrl;
+        const corner = r.headers.get("X-Watermark-Corner") || "lower right";
+        if ($("wmCorner")) $("wmCorner").textContent = (title || subtitle || third ? "Preview · " : "Nothing to write yet · ") + corner + " corner";
+        lastColors = (r.headers.get("X-Watermark-Colors") || "").split(",").filter(Boolean);
+        drawSwatches();
+      } catch (e) { if (seq === previewSeq) status("The preview couldn't be drawn."); }
+    }, 300);
   };
+  // The colour each line was drawn in (the server skips empty lines, so count the ones with text).
+  const drawnColor = k => { let n = 0; for (const j of WM_LINES) { if (!lineText(j)) continue; if (j === k) return lastColors[n] || ""; n++; } return ""; };
+  const drawSwatches = () => { for (const sw of $("wmRows").querySelectorAll("[data-sw]")) { const c = drawnColor(sw.dataset.sw) || (lines[sw.dataset.sw].color === "auto" ? "" : lines[sw.dataset.sw].color); sw.style.background = c || "transparent"; sw.title = c ? "Drawn in " + c : ""; } };
+
+  // ---- the rows ----
+  let openStrip = null, fontHint = null;
+  const fontSaw = {};
+  const colorLabel = v => { const known = WM_COLORS.find(([k]) => k === v); if (known) return known[1]; const s = options.suggested_colors.find(x => x.split(" ")[0] === v); return s ? (s.split(" ").slice(1).join(" ") || v) : v; };
+  const drawRows = () => {
+    const free = items.filter(x => !WM_LINES.some(k => x[k] > 0));
+    $("wmRows").innerHTML = WM_LINES.map(k => {
+      const on = onLine(k);
+      const chips = on.length ? on.map(x => `<span class="chip" data-chip="${esc(x.key)}">${esc(x.label)}<button type="button" data-off="${esc(x.key)}" aria-label="Take ${esc(x.label)} off this line">×</button></span>`).join("")
+        : `<span class="blank">blank</span>`;
+      const add = `<select class="pd add" data-add="${k}" aria-label="Add a piece to this line"><option value="">+ Add…</option>${free.map(x => `<option value="${esc(x.key)}">${esc(x.label)}</option>`).join("")}</select>`;
+      const aa = `<button type="button" class="aa${openStrip === k ? " on" : ""}" data-aa="${k}" aria-label="Style of this line" aria-expanded="${openStrip === k}">Aa</button>`;
+      let strip = "";
+      if (openStrip === k) {
+        const st = lines[k];
+        const fonts = [...options.fonts, ...options.suggested_fonts.filter(f => !options.fonts.includes(f))];
+        if (!fonts.includes(st.font)) fonts.unshift(st.font);
+        const colors = [...WM_COLORS, ...options.suggested_colors.map(s => [s.split(" ")[0], s.split(" ").slice(1).join(" ") || s.split(" ")[0]])];
+        if (!colors.some(([v]) => v === st.color)) colors.push([st.color, st.color]);
+        strip = `<div class="strip">` +
+          `<select class="pd" data-font="${k}" aria-label="Font">${fonts.map(f => `<option value="${esc(f)}"${f === st.font ? " selected" : ""}>${esc(f)}</option>`).join("")}<option value="__suggest">Suggest font…</option></select>` +
+          `<select class="pd" data-color="${k}" aria-label="Colour">${colors.map(([v, l]) => `<option value="${esc(v)}"${v === st.color ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>` +
+          `<span class="sw" data-sw="${k}"></span>` +
+          `<button type="button" class="tog${st.bold ? " on" : ""}" data-bold="${k}" aria-pressed="${st.bold}" aria-label="Bold">B</button>` +
+          `<button type="button" class="tog it${st.italic ? " on" : ""}" data-italic="${k}" aria-pressed="${st.italic}" aria-label="Italic">I</button></div>` +
+          (fontHint === k ? `<div class="hint"><input class="field" data-fonthint="${k}" maxlength="80" placeholder="Hint (optional), e.g. something spooky"><button type="button" class="send" data-fontsend="${k}" aria-label="Ask">&rarr;</button></div>` : "") +
+          (fontSaw[k] ? `<div class="res">${fontSaw[k]}</div>` : "");
+      }
+      return `<div class="wmrow" data-line="${k}"><span class="chips">${chips}</span>${add}${aa}</div>${strip}`;
+    }).join("");
+    const rows = $("wmRows");
+    for (const b of rows.querySelectorAll("[data-off]")) b.onclick = () => { const it = fixed(b.dataset.off); for (const k of WM_LINES) it[k] = 0; drawRows(); drawPreview(); };
+    for (const s of rows.querySelectorAll("[data-add]")) s.onchange = () => {
+      const it = fixed(s.value), k = s.dataset.add; if (!it) return;
+      for (const j of WM_LINES) it[j] = 0;                                 // a piece goes on one line only
+      it[k] = Math.max(0, ...items.map(o => o[k])) + 1;                   // added later = written later
+      drawRows(); drawPreview();
+    };
+    for (const b of rows.querySelectorAll("[data-aa]")) b.onclick = () => { openStrip = openStrip === b.dataset.aa ? null : b.dataset.aa; fontHint = null; drawRows(); drawSwatches(); };
+    for (const s of rows.querySelectorAll("[data-font]")) s.onchange = () => {
+      const k = s.dataset.font;
+      if (s.value === "__suggest") { fontHint = k; drawRows(); const h = rows.querySelector(`[data-fonthint="${k}"]`); if (h) h.focus(); return; }
+      lines[k].font = s.value; drawPreview();
+    };
+    for (const s of rows.querySelectorAll("[data-color]")) s.onchange = () => { lines[s.dataset.color].color = s.value; drawSwatches(); drawPreview(); };
+    for (const b of rows.querySelectorAll("[data-bold]")) b.onclick = () => { lines[b.dataset.bold].bold = !lines[b.dataset.bold].bold; drawRows(); drawPreview(); };
+    for (const b of rows.querySelectorAll("[data-italic]")) b.onclick = () => { lines[b.dataset.italic].italic = !lines[b.dataset.italic].italic; drawRows(); drawPreview(); };
+    for (const h of rows.querySelectorAll("[data-fonthint]")) h.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); askFont(h.dataset.fonthint); } };
+    for (const b of rows.querySelectorAll("[data-fontsend]")) b.onclick = () => askFont(b.dataset.fontsend);
+    drawSwatches();
+  };
+  // Asks Claude for a font and colour for one line, in the context of the photo and all the text.
+  const askFont = async k => {
+    const hint = ($("wmRows").querySelector(`[data-fonthint="${k}"]`) || {}).value || "";
+    const send = $("wmRows").querySelector(`[data-fontsend="${k}"]`); if (send) send.disabled = true;
+    fontSaw[k] = "Asking Claude…"; drawRows();
+    try {
+      const r = await fetch("/api/photos/" + id + "/font", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texts: WM_LINES.map(lineText), hint }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) { fontSaw[k] = esc(out.error || "That didn't work."); drawRows(); return; }
+      if (!options.fonts.includes(out.font) && !options.suggested_fonts.includes(out.font)) options.suggested_fonts.unshift(out.font);
+      lines[k].font = out.font;
+      if (out.color && out.color !== "auto") {
+        const sw = (out.color + " " + (out.color_name || "")).trim();
+        if (!options.suggested_colors.some(s => s.split(" ")[0] === out.color)) options.suggested_colors.unshift(sw);
+        lines[k].color = out.color;
+      }
+      fontSaw[k] = `Claude suggests: <b>${esc(out.font)}</b>` + (out.color && out.color !== "auto" ? ` in <b>${esc(out.color_name || out.color)}</b>` : "") + (out.why ? ` — ${esc(out.why)}` : "");
+      fontHint = null; drawRows(); drawPreview();
+    } catch (e) { fontSaw[k] = "That didn't work."; drawRows(); }
+  };
+
+  // ---- the fields and their choices ----
   const setText = (it, text) => {
     it.text = text; it.raw = undefined;
-    const box = FIELDS[it.key] && $(FIELDS[it.key]); if (box && box.value !== text) box.value = text;
-    const mirror = $("wmGrid").querySelector(`[data-mirror="${items.indexOf(it)}"]`); if (mirror) mirror.textContent = text;
+    const box = $(FIELDS[it.key]); if (box && box.value !== text) box.value = text;
     drawPreview();
   };
-  for (const [key, boxId] of Object.entries(FIELDS)) {
-    const it = fixed(key);
-    $(boxId).value = it.text;
-    $(boxId).oninput = () => setText(it, $(boxId).value);       // a field can always be edited by hand
-  }
-  const drawGrid = () => {
-    const rank = {};
-    for (const k of ["t", "u", "v"]) { const on = onLine(k); rank[k] = on.length > 1 ? new Map(on.map(([x], n) => [x, n + 1])) : new Map(); }
-    $("wmGrid").innerHTML = `<tr><th>Piece</th><th>1st</th><th>2nd</th><th>3rd</th><th></th></tr>` + items.map((x, i) =>
-      `<tr><td><b>${esc(x.label)}</b> ` + (x.key ? `<span data-mirror="${i}">${esc(x.text)}</span>` :
-        `<input class="field" data-text="${i}" maxlength="120" aria-label="${esc(x.label)}" value="${esc(x.text)}">`) + `</td>` +
-      ["t", "u", "v"].map((k, n) => `<td><input type="checkbox" data-i="${i}" data-k="${k}" aria-label="${esc(x.label)} on line ${n + 1}"${x[k] > 0 ? " checked" : ""}>${rank[k].has(x) ? `<sup title="Written ${rank[k].get(x)} on this line">${rank[k].get(x)}</sup>` : ""}</td>`).join("") +
-      `<td>${x.key ? "" : `<button class="btn sec sm" data-rm="${i}" aria-label="Remove ${esc(x.label)}">×</button>`}</td></tr>`).join("");
-    for (const c of $("wmGrid").querySelectorAll("input[type=checkbox]")) c.onchange = () => {
-      const it = items[+c.dataset.i], k = c.dataset.k;
-      it[k] = c.checked ? Math.max(0, ...items.map(o => o[k])) + 1 : 0;      // ticked later = written later
-      drawGrid(); drawPreview();
-    };
-    for (const t of $("wmGrid").querySelectorAll("input[data-text]")) t.oninput = () => { items[+t.dataset.text].text = t.value; items[+t.dataset.text].raw = undefined; drawPreview(); };
-    for (const b of $("wmGrid").querySelectorAll("[data-rm]")) b.onclick = () => { items.splice(+b.dataset.rm, 1); drawGrid(); drawPreview(); };
+  const choices = key => {
+    const it = fixed(key), cur = it.text;
+    if (key === "title") return [["__suggest", "Suggest title…"], ["__identify", "Identify…"], ...options.title.map(t => [t, t])];
+    if (key === "location") {
+      const out = [];
+      if (w.parts && w.parts.place) out.push(["__immich", "Immich: " + trimHome(w.parts.place, home)]);
+      if (w.parts && w.parts.coordinates) out.push(["__osm", "Look up (OSM)…"], ["__claude", "Ask Claude…"]);
+      return [...out, ...options.location.map(t => [t, t])];
+    }
+    if (key === "subject") { const all = options.people.length > 1 ? [[options.people.slice(0, -1).join(", ") + " & " + options.people[options.people.length - 1], options.people.slice(0, -1).join(", ") + " & " + options.people[options.people.length - 1]]] : []; return [...options.people.map(t => [t, t]), ...all]; }
+    if (key === "author") return options.users.map(t => [t, t]);
+    if (key === "date") return options.dates.map(t => [t, t]);
+    return [];
   };
-  drawGrid(); drawPreview();
+  const drawFields = () => {
+    $("wmFields").innerHTML = WM_FIXED.map(([key, label]) =>
+      `<div class="wmel"><label for="${FIELDS[key]}">${label}</label><input class="field" id="${FIELDS[key]}" maxlength="120" value="${esc(fixed(key).text)}">` +
+      `<select class="pd" data-pick="${key}" aria-label="Choices for ${label}"><option value="">Current</option>${choices(key).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select>` +
+      `<div class="askbox" data-askbox="${key}" hidden></div><div class="res" data-saw="${key}"></div></div>`).join("");
+    for (const [key, boxId] of Object.entries(FIELDS)) {
+      const it = fixed(key);
+      $(boxId).oninput = () => setText(it, $(boxId).value);           // a field can always be edited by hand
+    }
+    for (const s of $("wmFields").querySelectorAll("[data-pick]")) s.onchange = () => pick(s.dataset.pick, s.value, s);
+  };
+  const saw = (key, html) => { const el = $("wmFields").querySelector(`[data-saw="${key}"]`); if (el) el.innerHTML = html || ""; };
+  const askBox = (key, placeholder, go) => {
+    const box = $("wmFields").querySelector(`[data-askbox="${key}"]`); if (!box) return;
+    box.hidden = false;
+    box.innerHTML = `<div class="hint"><input class="field" maxlength="80" placeholder="${esc(placeholder)}"><button type="button" class="send" aria-label="Ask">&rarr;</button></div>`;
+    const inp = box.querySelector("input"), btn = box.querySelector("button");
+    const run = async () => { btn.disabled = true; await go(inp.value); btn.disabled = false; box.hidden = true; box.innerHTML = ""; };
+    btn.onclick = run;
+    inp.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); run(); } else if (e.key === "Escape") { box.hidden = true; box.innerHTML = ""; } };
+    inp.focus();
+  };
+  // Picking a choice fills the field above it; the pulldown goes back to Current, so the same
+  // choice can be picked again, and Current itself puts the field back to what it held.
+  const pick = async (key, value, sel) => {
+    const it = fixed(key);
+    const back = () => { sel.value = ""; };
+    if (!value) { back(); return; }
+    if (key === "title" && (value === "__suggest" || value === "__identify")) {
+      const style = value === "__suggest" ? "title" : "subject";
+      back();
+      askBox(key, style === "title" ? "Hint (optional), e.g. the mood you want" : "Hint (optional), e.g. the bird on the left", hint => ask(style, hint));
+      return;
+    }
+    if (key === "location" && value === "__immich") { setText(it, trimHome(w.parts.place, home)); back(); return; }
+    if (key === "location" && (value === "__osm" || value === "__claude")) { back(); await locate(value === "__osm" ? "osm" : "claude"); return; }
+    setText(it, value); back();
+  };
+  // Asks Claude to look at the picture: for a subject (one name) or titles (three). What comes back
+  // is shown under the field and goes to the top of its choices; nothing is filled in by itself.
+  const ask = async (style, hint) => {
+    saw("title", "Asking Claude…");
+    try {
+      const r = await fetch("/api/photos/" + id + "/identify", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hint: hint || "", style, avoid: options.title }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) { saw("title", esc(out.error || "That didn't work.")); return; }
+      const names = out.names || [];
+      options.title = [...names, ...options.title.filter(t => !names.includes(t))];
+      refreshChoices("title");
+      saw("title", (style === "title" ? "Claude suggests: " : "Claude says: ") + names.map(n => `<b>${esc(n)}</b>`).join(" · "));
+    } catch (e) { saw("title", "That didn't work."); }
+  };
+  // Names the place at the photo's coordinates from one source; the answer fills the field and
+  // joins the choices, so Immich's, OpenStreetMap's and Claude's can be compared.
+  const locate = async source => {
+    saw("location", "Looking…");
+    try {
+      const r = await fetch("/api/photos/" + id + "/locate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) { saw("location", esc(out.error || "That didn't work.")); return; }
+      await getHomeCountry();
+      const place = trimHome(out.place, home);
+      if (!options.location.includes(place)) options.location.unshift(place);
+      refreshChoices("location");
+      setText(fixed("location"), place);
+      saw("location", (source === "osm" ? "OpenStreetMap says: " : "Claude says: ") + `<b>${esc(out.place)}</b>`);
+    } catch (e) { saw("location", "That didn't work."); }
+  };
+  const refreshChoices = key => {
+    const s = $("wmFields").querySelector(`[data-pick="${key}"]`); if (!s) return;
+    s.innerHTML = `<option value="">Current</option>` + choices(key).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+  };
+  const loadOptions = async () => {
+    try {
+      const o = await api("/api/photos/" + id + "/watermark/options");
+      options.title = [...o.title, ...options.title.filter(t => !o.title.includes(t))];
+      options.location = [...o.location, ...options.location.filter(t => !o.location.includes(t))];
+      options.people = o.people || []; options.users = o.users || []; options.dates = o.dates || [];
+      options.fonts = o.fonts || options.fonts; options.suggested_fonts = o.suggested_fonts || []; options.suggested_colors = o.suggested_colors || [];
+      for (const [key] of WM_FIXED) refreshChoices(key);
+      if (openStrip) drawRows();
+    } catch (e) { /* the choices are optional */ }
+  };
   // On opening: find the home country (to leave it off the location Immich gave).
   const loadHome = async () => {
     home = await getHomeCountry();
     const loc = fixed("location");
     if (loc.raw !== undefined) { const text = trimHome(loc.raw, home), raw = loc.raw; setText(loc, text); loc.raw = raw; }
+    refreshChoices("location");
   };
-  // Names the place at the photo's coordinates from one source, to compare
-  // with what Immich said. The answer is added as another location, unticked.
-  const locate = (source, label) => async () => {
-    const buttons = [$("wmOsm"), $("wmClaudeLoc")], saw = $("wmLocSaw");
-    for (const b of buttons) b.disabled = true;
-    saw.textContent = "Looking…";
-    try {
-      const r = await fetch("/api/photos/" + id + "/locate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) });
-      const out = await r.json().catch(() => ({}));
-      if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
-      if (items.some(x => x.label === label && (x.raw !== undefined ? x.raw : x.text) === out.place)) { saw.textContent = label + " says the same again: " + out.place; return; }
-      if (items.length >= 20) { saw.textContent = "The list is full; remove a row first."; return; }
-      await getHomeCountry();
-      items.push({ key: "", label, text: trimHome(out.place, home), raw: out.place, t: 0, u: 0, v: 0 });
-      drawGrid(); drawPreview();
-      saw.textContent = label + " says: " + out.place + " – tick where it goes, or copy it into the Location field.";
-    } catch (e) { saw.textContent = "That didn't work."; }
-    finally { for (const b of buttons) b.disabled = false; }
-  };
-  if ($("wmOsm")) { $("wmOsm").onclick = locate("osm", "Location (OSM)"); $("wmClaudeLoc").onclick = locate("claude", "Location (Claude)"); }
-  // Asks Claude to look at the picture. What it says is only ever added to the list as ideas,
-  // unticked: it never replaces a field or moves anything between lines. Every ask adds more,
-  // and tells Claude what it already said so a retry gives something different (the server
-  // also remembers the last 15 it gave for this photo).
-  const ask = (style, label) => async () => {
-    const buttons = [$("wmIdentify"), $("wmPoem")], saw = $("wmSaw");
-    for (const b of buttons) b.disabled = true;
-    saw.textContent = "Looking…";
-    try {
-      const earlier = items.filter(x => x.label === label || (style === "title" && x.key === "title")).map(x => x.text).filter(Boolean);
-      const r = await fetch("/api/photos/" + id + "/identify", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hint: $("wmHint").value, style, avoid: earlier }) });
-      const out = await r.json().catch(() => ({}));
-      if (!r.ok) { saw.textContent = out.error || "That didn't work."; return; }
-      const names = out.names || [];
-      // New suggestions are only ideas: they are added to the list, unticked, and never replace
-      // what is in a field or move anything between lines. Tick one (or copy it) to use it.
-      for (const text of names) {
-        if (items.some(x => !x.key && x.label === label && x.text === text)) continue;
-        while (items.length >= 20) {                                    // make room by dropping the oldest unused idea
-          const old = items.findIndex(x => !x.key && x.label === label && !x.t && !x.u && !x.v);
-          if (old < 0) break;
-          items.splice(old, 1);
-        }
-        if (items.length < 20) items.push({ key: "", label, text, t: 0, u: 0, v: 0 });
-      }
-      drawGrid(); drawPreview();
-      saw.textContent = "Claude " + (style === "title" ? "suggests: " : "says: ") + names.join(" / ") + " – tick where one goes, or copy it into a field.";
-    } catch (e) { saw.textContent = "That didn't work."; }
-    finally { for (const b of buttons) b.disabled = false; }
-  };
-  $("wmIdentify").onclick = ask("subject", "Subject");
-  $("wmPoem").onclick = ask("title", "Title idea");
+  drawFields(); drawRows();
   $("wmSend").onclick = async () => {
     $("wmSend").disabled = true;
-    const [title, subtitle, third] = ["t", "u", "v"].map(lineText);
+    const [title, subtitle, third] = WM_LINES.map(lineText);
     const r = await fetch("/api/photos/" + id + "/watermark", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, subtitle, third, pieces: items.map(({ key, label, text, t, u, v }) => ({ key, label, text, t, u, v })) }) });
+      body: JSON.stringify({ title, subtitle, third, pieces: items.map(({ key, label, text, t, u, v }) => ({ key, label, text, t, u, v })), lines: WM_LINES.map(k => lines[k]) }) });
     const out = await r.json().catch(() => ({}));
-    if (!r.ok) { say(out.error || "That didn't send.", true); $("wmSend").disabled = false; return; }
-    say("Watermark requested.");
-    closeWm(false); setFold("chat", true); $("wmSend").disabled = false;
-    const p = await api("/api/photos/" + id), log = $("chatlog");
-    if (log) { log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight; }
-    watchChat(id);
+    $("wmSend").disabled = false;
+    if (!r.ok) { status(out.error || "That didn't work."); return; }
+    say("Watermark added as step " + out.step + ".");
+    closeWm(false); setFold("hist", true);
+    await select(view, true, true);
+    const i = list.findIndex(p => p.id === id);
+    if (i >= 0) openViewer(i);
   };
-  if (folds.wm) startHome();
+  if (folds.wm) { start(); drawPreview(); }
 }
 // The original, full size, over the photo view. Click it, or press Esc, to close.
 function showOriginal(id, index, type) {
