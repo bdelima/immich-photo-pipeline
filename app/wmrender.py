@@ -19,7 +19,7 @@ import os
 import re
 
 import requests
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 INSTALLED = ("Liberation Sans", "Liberation Serif", "Liberation Mono")
 DEFAULT_FONT = INSTALLED[0]
@@ -37,6 +37,11 @@ CORNERS = ("lower right", "lower left", "upper right", "upper left")
 GOOGLE_CSS = "https://fonts.googleapis.com/css2"
 MAX_FONT_NAME = 60
 FONT_TIMEOUT = 15
+FONT_HOST = "https://fonts.gstatic.com/"          # where Google Fonts serves its files from
+# The preview is drawn on a copy of the photo no larger than this on its longer side: the text is sized
+# from the photo's shorter side, so it lays out the same, and a preview (redrawn as the form is edited)
+# stays quick and light on memory even for a 40-megapixel frame.
+PREVIEW_MAX = 1600
 
 
 class FontError(Exception):
@@ -101,8 +106,10 @@ def _google_file(family: str, bold: bool, italic: bool, cache_dir: str) -> str:
     urls = re.findall(r"src:\s*url\(([^)]+)\)", r.text)
     if not urls:
         raise FontError(f"Google Fonts doesn't have '{family}'")
+    if not urls[0].strip("'\" ").startswith(FONT_HOST):
+        raise FontError(f"Google Fonts pointed '{family}' somewhere unexpected")
     try:
-        f = requests.get(urls[0], timeout=FONT_TIMEOUT)
+        f = requests.get(urls[0].strip("'\" "), timeout=FONT_TIMEOUT)
         f.raise_for_status()
     except requests.RequestException as exc:
         raise FontError(f"the font file couldn't be fetched: {exc}") from exc
@@ -282,7 +289,9 @@ def render(src_path: str, dest_path: str, lines: list[dict], cache_dir: str | No
     """Writes the photo at `src_path` with the watermark to `dest_path` (JPEG, high quality).
     `lines` is up to three {text, font, color, bold, italic}. Returns {"corner", "colors"}."""
     with Image.open(src_path) as im:
-        img = im.convert("RGB")
+        # Upright first: the saved JPEG carries no orientation tag, so a photo that only
+        # looked upright because of its tag (an imported phone picture) would come out sideways.
+        img = ImageOps.exif_transpose(im).convert("RGB")
     lay = _layout(img, lines, cache_dir, corner)
     if not lay["lines"]:
         raise ValueError("there is nothing to write")
@@ -297,7 +306,9 @@ def preview(src_path: str, lines: list[dict], cache_dir: str | None, width: int 
     `width` x `height`. Returns (png bytes, {"corner", "colors"}). With nothing to write it shows
     the corner plain."""
     with Image.open(src_path) as im:
-        img = im.convert("RGB")
+        im.draft("RGB", (PREVIEW_MAX, PREVIEW_MAX))       # a JPEG is decoded at a reduced size
+        img = ImageOps.exif_transpose(im).convert("RGB")
+    img.thumbnail((PREVIEW_MAX, PREVIEW_MAX))
     lay = _layout(img, lines, cache_dir, corner)
     colors = _draw_block(img, lay) if lay["lines"] else []
     # The window: the block plus room around it, in the preview's shape, scaled so the text is

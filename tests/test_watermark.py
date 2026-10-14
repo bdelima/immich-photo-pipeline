@@ -702,3 +702,34 @@ def test_a_chat_edit_replays_the_watermark_in_full_and_keeps_what_claude_reports
     note = recipe.runs[-1][1]
     assert "Placed in lower left" in note and "Its look beyond that: glowing" in note
     assert store.load().photos["a"].current_revision().watermark is None       # Claude reported nothing this time
+
+
+def test_a_font_file_from_anywhere_but_google_fonts_is_refused(tmp_path, monkeypatch):
+    from app import wmrender
+    calls = []
+
+    class R:
+        status_code, text = 200, "@font-face { src: url(https://evil.example/x.ttf) format('truetype'); }"
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, params=None, **k):
+        calls.append(url)
+        return R()
+
+    monkeypatch.setattr(wmrender.requests, "get", fake_get)
+    with pytest.raises(wmrender.FontError):
+        wmrender.font_file("Creepster", False, False, str(tmp_path / "fonts"))
+    assert calls == [wmrender.GOOGLE_CSS]                       # the file itself was never fetched
+    assert not os.path.exists(tmp_path / "fonts" / "creepster-0-400.ttf")
+
+
+def test_the_photo_is_turned_upright_before_it_is_drawn_on_and_the_preview_uses_a_reduced_copy():
+    import inspect
+    from app import wmrender
+    for fn in (wmrender.render, wmrender.preview):
+        assert "ImageOps.exif_transpose(im)" in inspect.getsource(fn)
+    preview = inspect.getsource(wmrender.preview)
+    assert "im.draft(" in preview and "img.thumbnail((PREVIEW_MAX, PREVIEW_MAX))" in preview
+    assert wmrender.PREVIEW_MAX >= 1000
