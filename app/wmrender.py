@@ -136,6 +136,25 @@ def font_file(family: str, bold: bool, italic: bool, cache_dir: str | None) -> t
         raise
 
 
+def keep_font_file(family: str, src: str, cache_dir: str) -> str | None:
+    """Copies a font file Claude fetched (at `src`) into the cache under `family`'s plain name,
+    so the family can be drawn from now on. Returns the kept path, or None if `src` isn't a
+    usable font file (nothing is kept then)."""
+    if not family or len(family) > MAX_FONT_NAME or not os.path.isfile(src):
+        return None
+    try:
+        ImageFont.truetype(src, 20)
+    except OSError:
+        return None
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, f"{_slug(family)}-0-400.ttf")
+    if os.path.abspath(src) != os.path.abspath(path):
+        with open(src, "rb") as fin, open(path + ".part", "wb") as fout:
+            fout.write(fin.read())
+        os.replace(path + ".part", path)
+    return path
+
+
 def check_font(family: str, cache_dir: str | None) -> None:
     """Raises FontError if `family` can't be drawn (fetching it if needed)."""
     font_file(family, False, False, cache_dir)
@@ -170,9 +189,10 @@ def _busyness(img: Image.Image, box: tuple[int, int, int, int]) -> float:
     return var ** 0.5
 
 
-def _layout(img: Image.Image, lines: list[dict], cache_dir: str | None) -> dict:
+def _layout(img: Image.Image, lines: list[dict], cache_dir: str | None, corner: str = "auto") -> dict:
     """Where everything goes: the font and size of each line, the block they make, and the
-    corner it sits in. Lines with no text are skipped."""
+    corner it sits in (`corner` names one, or "auto" picks the plainest with the lower right
+    preferred). Lines with no text are skipped."""
     short = min(img.width, img.height)
     margin = max(6, round(short * MARGIN))
     drawn = []
@@ -193,7 +213,7 @@ def _layout(img: Image.Image, lines: list[dict], cache_dir: str | None) -> dict:
         drawn.append({"text": text, "font": font, "size": size, "w": w, "h": h, "offset": (l, t), "stroke": stroke,
                       "fake_italic": fake_italic, "color": parse_color(ln.get("color")), "index": i})
     if not drawn:
-        return {"lines": [], "corner": CORNERS[0], "box": (0, 0, 0, 0)}
+        return {"lines": [], "corner": corner if corner in CORNERS else CORNERS[0], "box": (0, 0, 0, 0)}
     block_w = max(d["w"] for d in drawn)
     block_h = sum(d["h"] for d in drawn) + sum(round(d["size"] * GAP) for d in drawn[:-1])
     pad = margin // 2
@@ -204,13 +224,14 @@ def _layout(img: Image.Image, lines: list[dict], cache_dir: str | None) -> dict:
         "upper left": (margin - pad, margin - pad, margin + block_w + pad, margin + block_h + pad),
     }
     clamp = lambda b: (max(0, b[0]), max(0, b[1]), min(img.width, b[2]), min(img.height, b[3]))
-    scores = {c: _busyness(img, clamp(b)) for c, b in boxes.items()}
-    # The lower right wins unless another corner is clearly plainer (a third less going on).
-    corner = CORNERS[0]
-    best = scores[corner]
-    for c in CORNERS[1:]:
-        if scores[c] < best * 0.66:
-            corner, best = c, scores[c]
+    if corner not in CORNERS:
+        scores = {c: _busyness(img, clamp(b)) for c, b in boxes.items()}
+        # The lower right wins unless another corner is clearly plainer (a third less going on).
+        corner = CORNERS[0]
+        best = scores[corner]
+        for c in CORNERS[1:]:
+            if scores[c] < best * 0.66:
+                corner, best = c, scores[c]
     return {"lines": drawn, "corner": corner, "box": clamp(boxes[corner]), "block": (block_w, block_h), "margin": margin}
 
 
@@ -257,12 +278,12 @@ def _draw_block(img: Image.Image, lay: dict) -> list[tuple[int, int, int]]:
     return used
 
 
-def render(src_path: str, dest_path: str, lines: list[dict], cache_dir: str | None) -> dict:
+def render(src_path: str, dest_path: str, lines: list[dict], cache_dir: str | None, corner: str = "auto") -> dict:
     """Writes the photo at `src_path` with the watermark to `dest_path` (JPEG, high quality).
     `lines` is up to three {text, font, color, bold, italic}. Returns {"corner", "colors"}."""
     with Image.open(src_path) as im:
         img = im.convert("RGB")
-    lay = _layout(img, lines, cache_dir)
+    lay = _layout(img, lines, cache_dir, corner)
     if not lay["lines"]:
         raise ValueError("there is nothing to write")
     colors = _draw_block(img, lay)
@@ -270,13 +291,14 @@ def render(src_path: str, dest_path: str, lines: list[dict], cache_dir: str | No
     return {"corner": lay["corner"], "colors": ["#%02x%02x%02x" % c for c in colors]}
 
 
-def preview(src_path: str, lines: list[dict], cache_dir: str | None, width: int = 560, height: int = 180) -> tuple[bytes, dict]:
+def preview(src_path: str, lines: list[dict], cache_dir: str | None, width: int = 560, height: int = 180,
+            corner: str = "auto") -> tuple[bytes, dict]:
     """A PNG of the corner the text will sit on, with the text drawn by the same code, scaled to
     `width` x `height`. Returns (png bytes, {"corner", "colors"}). With nothing to write it shows
-    the lower-right corner plain."""
+    the corner plain."""
     with Image.open(src_path) as im:
         img = im.convert("RGB")
-    lay = _layout(img, lines, cache_dir)
+    lay = _layout(img, lines, cache_dir, corner)
     colors = _draw_block(img, lay) if lay["lines"] else []
     # The window: the block plus room around it, in the preview's shape, scaled so the text is
     # readable; it never goes outside the photo.
