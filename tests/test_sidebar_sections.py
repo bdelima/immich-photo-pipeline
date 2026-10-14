@@ -23,26 +23,26 @@ def test_the_sidebar_has_history_chat_and_watermark_in_that_order():
     assert order == sorted(order)
 
 
-def test_working_on_the_watermark_folds_the_others_and_adding_it_opens_the_chat():
+def test_working_on_the_watermark_folds_the_others_and_adding_it_opens_the_history():
     page = read("templates", "index.html")
     opening = page[page.index("const openWm = () => {"):page.index("const closeWm")]
     assert 'setFold("hist", false)' in opening and 'setFold("chat", false)' in opening and 'setFold("wm", true)' in opening
     sending = page[page.index('$("wmSend").onclick'):]
-    assert 'closeWm(false); setFold("chat", true);' in sending
+    assert 'closeWm(false); setFold("hist", true);' in sending           # the new step is in view
     assert "wmOpen" not in page            # the header opens the section now
 
 
-def test_the_form_has_four_fields_a_live_preview_and_remembers_the_ticks():
+def test_the_form_has_a_field_per_piece_a_server_drawn_preview_and_remembers_the_rows_and_styles():
     page = read("templates", "index.html")
-    for box in ('id="wmTitle"', 'id="wmLoc"', 'id="wmAuthor"', 'id="wmDate"', 'id="wmPreview"'):
+    assert 'FIELDS = { title: "wmTitle", subject: "wmSubject", location: "wmLoc", author: "wmAuthor", date: "wmDate" }' in page
+    for box in ('id="wmPreviewImg"', 'id="wmRows"', 'id="wmFields"'):
         assert box in page
-    assert "Second line" not in page and "Third line" not in page          # the lines come from the ticks
-    # every field can be edited by hand, and the preview follows what is typed or ticked
-    assert "oninput = () => setText(it, $(boxId).value)" in page
-    assert page.count("drawGrid(); drawPreview();") >= 3
+    assert "Second line" not in page and "Third line" not in page and "1st" not in page   # the rows carry no labels
+    assert "oninput = () => setText(it, $(boxId).value)" in page        # a field can always be edited by hand
+    assert '"/api/photos/" + id + "/watermark/preview"' in page           # the preview is drawn by the server
     sending = page[page.index('$("wmSend").onclick'):]
-    assert "pieces: items.map(" in sending
-    assert "x.t = x.u = x.v = false" not in page                           # the ticks are kept after sending
+    assert "pieces: items.map(" in sending and "lines: WM_LINES.map(k => lines[k])" in sending
+    assert "x.t = x.u = x.v = false" not in page                           # the rows are kept after sending
 
 
 def test_the_sections_have_styles():
@@ -50,23 +50,40 @@ def test_the_sections_have_styles():
     assert "#viewer .foldhead" in css and '#viewer .foldbody[hidden] { display: none; }' in css
 
 
-def test_suggestions_are_added_as_ideas_and_never_replace_the_title_or_move_the_lines():
+def test_suggestions_become_choices_under_the_title_and_never_fill_it_in_by_themselves():
     page = read("templates", "index.html")
-    ask = page[page.index("const ask = "):page.index('$("wmIdentify").onclick')]
-    assert "setText(" not in ask and "fixed(" not in ask and ".t = false" not in ask and ".u = true" not in ask
-    assert "items.push({ key: \"\", label, text" in ask
+    ask = page[page.index("const ask = async (style, hint)"):page.index("const locate = async source")]
+    assert "setText(" not in ask and "options.title = [...names" in ask        # newest first, nothing filled in
+    assert "tick where" not in page                                              # no verbiage
 
 
-def test_the_order_of_the_ticks_on_a_line_is_the_order_it_is_written_in():
+def test_a_piece_is_on_one_line_only_and_a_later_add_is_written_later():
     page = read("templates", "index.html")
-    assert "c.checked ? Math.max(0, ...items.map(o => o[k])) + 1 : 0" in page      # a later tick comes later
-    assert "sort((a, b) => a[0][k] - b[0][k] || a[1] - b[1])" in page              # lineText orders by it
-    assert "titleLike" not in page                                                   # nothing is released behind your back
+    adding = page[page.index('[data-add]")) s.onchange'):page.index('[data-aa]")) b.onclick')]
+    assert "for (const j of WM_LINES) it[j] = 0;" in adding and "Math.max(0, ...items.map(o => o[k])) + 1" in adding
+    assert "sort((a, b) => a[k] - b[k])" in page                                 # the line is written in that order
+    assert "if (x[k] > 0 && seen) x[k] = 0;" in page                             # an older save is tidied on opening
 
 
-def test_the_preview_is_big_enough_to_read():
+def test_each_line_has_its_own_font_colour_bold_and_italic_and_a_font_can_be_asked_for():
+    page = read("templates", "index.html")
+    for bit in ('data-font="${k}"', 'data-color="${k}"', 'data-bold="${k}"', 'data-italic="${k}"', '<option value="__suggest">Suggest font…</option>',
+                '"/api/photos/" + id + "/font"', 'data-fonthint="${k}"'):
+        assert bit in page
+    assert 'lines[k] = { font: s.font || "Liberation Sans", color: s.color || "auto"' in page
+
+
+def test_old_rows_of_ideas_fold_into_the_title_and_location_choices():
+    page = read("templates", "index.html")
+    fold = page[page.index("const extras = { title: [], location: [] };"):page.index("items = items.filter(x => x.key);")]
+    assert 'const into = /location/i.test(x.label) ? "location" : "title";' in fold
+    assert "target.text = x.text; target[line] = x[line];" in fold
+
+
+def test_the_preview_is_the_photo_corner_and_not_huge_text():
     css = read("static", "pipeline.css")
-    assert "#viewer .wm .wmpreview .l1 { font-size: 1.6rem;" in css
+    assert "#viewer .wm .wmpreview img { display: block; width: 100%;" in css
+    assert "font-size: 1.6rem" not in css
 
 
 def test_a_photo_opens_with_every_section_of_the_sidebar_folded():
