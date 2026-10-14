@@ -600,3 +600,105 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     assert w.status_code == 200 and w.get_json() == {"step": 1} and changed == [1]
     assert store.load().photos["p"].current == 1
     assert client.post("/api/photos/p/watermark", json={"title": ""}).status_code == 400
+
+
+# ---- the chat path and the builder speak the same language -------------------------------
+
+
+def test_the_corner_can_be_chosen_and_is_kept_with_the_step(tmp_path):
+    from PIL import Image
+    from app import wmrender
+    store, revisions = _with_image(tmp_path, size=(400, 300))
+    assert watermark.clean_corner(" Upper-Left ") == "upper left" and watermark.clean_corner("middle") == "auto" and watermark.clean_corner(None) == "auto"
+    assert watermark.clean_note(" a red <glow> ") == "a red glow" and watermark.clean_note(5) == ""
+    png, info = watermark.preview(store, revisions, "p", {"title": "Hi", "corner": "upper left"})
+    assert info["corner"] == "upper left"
+    watermark.apply(store, revisions, "p", {"title": "Hi", "corner": "lower left", "style_note": "a glow"})
+    rev = store.load().photos["p"].current_revision()
+    assert rev.watermark["corner"] == "lower left" and rev.watermark["style_note"] == "a glow"
+    got = watermark.starting_point(store.load().photos["p"])
+    assert got["corner"] == "lower left" and got["style_note"] == "a glow"
+    assert watermark.starting_point(photo())["corner"] == "auto"
+    src = tmp_path / "s.jpg"
+    Image.new("RGB", (300, 200), (20, 20, 20)).save(src)
+    assert wmrender.render(str(src), str(tmp_path / "o.jpg"), [{"text": "Hi"}], None, corner="upper right")["corner"] == "upper right"
+
+
+def test_a_watermark_step_is_described_to_claude_in_full(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    state = {"title": "Scarlet macaw", "subtitle": "Bob", "third": "", "lines": [
+        {"font": "Liberation Serif", "color": "#ff8c1a", "bold": True, "italic": False}, {"font": "Liberation Sans", "color": "auto"}],
+        "corner": "upper left", "style_note": "a faint glow"}
+    text = watermark.describe(state, revisions)
+    assert text.startswith('Watermark drawn by the pipeline: line 1 "Scarlet macaw" in Liberation Serif bold (file /usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf), colour #ff8c1a; line 2 "Bob" in Liberation Sans (file ')
+    assert "white on a dark patch" in text and "Placed in upper left" in text and "3.2%" in text and "a faint glow" in text
+    assert "Reproduce it exactly unless the new request is about the watermark" in text
+    assert "lower right corner, or another" in watermark.describe({"title": "x", "lines": []}, revisions)
+    assert watermark.describe({"title": "", "subtitle": ""}, revisions) == "" and watermark.describe("junk", revisions) == ""
+
+
+def test_what_claude_reports_drawing_becomes_the_builders_state(tmp_path):
+    from app import wmrender
+    store, revisions = _with_image(tmp_path)
+    previous = {"title": "Scarlet macaw", "subtitle": "Bob · May 2026", "third": "", "lines": [{"font": "Liberation Serif"}], "pieces": [
+        {"key": "title", "label": "Title", "text": "Scarlet macaw", "t": 1, "u": 0, "v": 0},
+        {"key": "subject", "label": "Subject", "text": "", "t": 0, "u": 0, "v": 0},
+        {"key": "location", "label": "Location", "text": "Saratoga", "t": 0, "u": 0, "v": 0},
+        {"key": "author", "label": "Author", "text": "Bob", "t": 0, "u": 1, "v": 0},
+        {"key": "date", "label": "Date", "text": "May 2026", "t": 0, "u": 2, "v": 0}]}
+    # the same text, moved and recoloured: the pieces are kept, the style follows the report
+    report = {"lines": [{"text": "Scarlet macaw", "font": "Liberation Mono", "color": "#FF0000", "bold": True}, {"text": "Bob · May 2026"}],
+              "corner": "Upper Left", "style_note": "a red glow"}
+    got = watermark.from_report(report, previous, revisions)
+    assert (got["title"], got["subtitle"], got["third"]) == ("Scarlet macaw", "Bob · May 2026", "")
+    assert got["lines"][0] == {"font": "Liberation Mono", "color": "#ff0000", "bold": True, "italic": False}
+    assert got["corner"] == "upper left" and got["style_note"] == "a red glow"
+    assert [(x["key"], x["t"], x["u"]) for x in got["pieces"]][:5] == [("title", 1, 0), ("subject", 0, 0), ("location", 0, 0), ("author", 0, 1), ("date", 0, 2)]
+    # a rewritten line: its old pieces come off it and the new text goes to the first piece then free
+    got = watermark.from_report({"lines": [{"text": "Wings at Dusk"}, {"text": "Bob · May 2026"}]}, previous, revisions)
+    assert got["title"] == "Wings at Dusk"
+    title = got["pieces"][0]
+    assert (title["key"], title["text"], title["t"]) == ("title", "Wings at Dusk", 1)
+    assert [x["u"] for x in got["pieces"]] == [0, 0, 0, 1, 2]                    # the unchanged line keeps its pieces
+    # with nothing before it, and a font file Claude fetched, which is kept so the family draws from now on
+    src = tmp_path / "fetched.ttf"
+    src.write_bytes(open("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", "rb").read())
+    got = watermark.from_report({"lines": [{"text": "Boo", "font": "Creepster"}], "font_files": {"Creepster": str(src)}}, None, revisions)
+    assert got["lines"][0]["font"] == "Creepster" and os.path.isfile(os.path.join(watermark.font_dir(revisions), "creepster-0-400.ttf"))
+    assert got["pieces"][0] == {"key": "title", "label": "Title", "text": "Boo", "t": 1, "u": 0, "v": 0}
+    assert wmrender.font_file("Creepster", False, False, watermark.font_dir(revisions))[0].endswith("creepster-0-400.ttf")
+    # a font named but not had falls back to the default; junk reports are None
+    import requests
+    from unittest.mock import patch
+    with patch.object(wmrender.requests, "get", side_effect=requests.ConnectionError("down")):
+        assert watermark.from_report({"lines": [{"text": "x", "font": "Nope Font"}]}, None, revisions)["lines"][0]["font"] == "Liberation Sans"
+    assert watermark.from_report({"lines": []}, None, revisions) is None and watermark.from_report("x", None, revisions) is None
+    assert watermark.from_report({"lines": [{"text": "  "}]}, None, revisions) is None
+
+
+def test_a_chat_edit_replays_the_watermark_in_full_and_keeps_what_claude_reports(tmp_path):
+    from PIL import Image
+    from test_chat import texts as chat_texts
+    store, revisions, recipe, rules = build(tmp_path)
+    add_photo(tmp_path, store, revisions, steps=("first",))
+    Image.new("RGB", (300, 200), (30, 30, 30)).save(revisions.path(store.load().photos["a"].current_revision().file))
+    watermark.apply(store, revisions, "a", {"title": "Scarlet macaw", "lines": [{"font": "Liberation Serif", "color": "#ff8c1a"}], "corner": "upper left"})
+    recipe.results = [RecipeResult(status="done", watermark={"lines": [{"text": "Scarlet macaw", "font": "Liberation Serif", "color": "#00ff00"}], "corner": "lower left", "style_note": "glowing"})]
+    chat.enqueue(store, "a", "make the watermark glow green")
+    assert run(store, revisions, recipe, rules) is True
+    note = recipe.runs[-1][1]
+    assert 'Watermark drawn by the pipeline: line 1 "Scarlet macaw" in Liberation Serif (file' in note and "Placed in upper left" in note
+    assert f"keep any font file you fetch under {watermark.font_dir(revisions)}" in note
+    p = store.load().photos["a"]
+    rev = p.current_revision()
+    assert rev.instruction == "make the watermark glow green"
+    assert rev.watermark["lines"][0]["color"] == "#00ff00" and rev.watermark["corner"] == "lower left" and rev.watermark["style_note"] == "glowing"
+    got = watermark.starting_point(p)
+    assert got["title"] == "Scarlet macaw" and got["corner"] == "lower left" and got["style_note"] == "glowing"
+    # a later plain edit is told about the step Claude made too, with the note
+    recipe.results = [RecipeResult(status="done")]
+    chat.enqueue(store, "a", "warmer")
+    run(store, revisions, recipe, rules)
+    note = recipe.runs[-1][1]
+    assert "Placed in lower left" in note and "Its look beyond that: glowing" in note
+    assert store.load().photos["a"].current_revision().watermark is None       # Claude reported nothing this time
