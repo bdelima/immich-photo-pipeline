@@ -14,7 +14,7 @@ from ..library import LibraryStore
 
 def register_chat_routes(
     app: Flask, store: LibraryStore, on_job: Callable[[], None] | None = None,
-    recipe=None, revisions=None, on_change: Callable[[], None] | None = None, immich=None,
+    recipe=None, revisions=None, on_change: Callable[[], None] | None = None, immich=None, extra_immich=(),
 ) -> None:
     @app.post("/api/photos/<photo_id>/chat")
     def api_chat(photo_id: str):
@@ -83,22 +83,35 @@ def register_chat_routes(
 
     @app.post("/api/photos/<photo_id>/watermark/preview")
     def api_watermark_preview(photo_id: str):
-        """A PNG of the corner the watermark will sit on, with the text drawn as it will
-        be. The corner and the colours used are in the X-Watermark-Corner and
-        X-Watermark-Colors headers. Changes nothing."""
+        """A PNG of the corner the watermark will sit on, drawn on the original (or a plain
+        panel when there is none), with the text drawn as it will be. The corner, the colours
+        used and what it was drawn on ("original" or "none") are in the X-Watermark-Corner,
+        X-Watermark-Colors and X-Watermark-Source headers. Changes nothing."""
         data = request.get_json(silent=True)
         try:
             png, info = watermark.preview(store, revisions, photo_id, data if isinstance(data, dict) else {})
         except chat.ChatError as exc:
             return jsonify({"error": str(exc)}), exc.status
         return Response(png, mimetype="image/png", headers={
-            "Cache-Control": "no-store", "X-Watermark-Corner": info["corner"], "X-Watermark-Colors": ",".join(info["colors"])})
+            "Cache-Control": "no-store", "X-Watermark-Corner": info["corner"], "X-Watermark-Colors": ",".join(info["colors"]),
+            "X-Watermark-Source": info["source"]})
+
+    @app.post("/api/photos/<photo_id>/watermark/whole")
+    def api_watermark_whole(photo_id: str):
+        """The whole original with the watermark drawn on it as the form stands (a JPEG for the
+        screen), for a click on the preview. 404 when there is no original on file. Changes nothing."""
+        data = request.get_json(silent=True)
+        try:
+            jpeg, info = watermark.whole(store, revisions, photo_id, data if isinstance(data, dict) else {})
+        except chat.ChatError as exc:
+            return jsonify({"error": str(exc)}), exc.status
+        return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store", "X-Watermark-Corner": info["corner"]})
 
     @app.get("/api/photos/<photo_id>/watermark/options")
     def api_watermark_options(photo_id: str):
         """What the pulldowns under the watermark's fields offer (see watermark.options)."""
         try:
-            return jsonify(watermark.options(store, immich, photo_id))
+            return jsonify(watermark.options(store, immich, photo_id, extra_immich))
         except chat.ChatError as exc:
             return jsonify({"error": str(exc)}), exc.status
 
