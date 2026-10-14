@@ -311,31 +311,58 @@ def _first_image_path(photo: Photo, revisions: RevisionStore) -> str:
     return revisions.path(first.file)
 
 
-def _history(photo: Photo, revisions: RevisionStore) -> list[str]:
-    """The earlier steps as Claude is told them: a step that drew a watermark here is described
-    in full (fonts, colours, corner), the others by the instruction that made them."""
+SUPERSEDED = " (superseded by the watermark below; do not draw it)"
+
+
+def _history(photo: Photo, revisions: RevisionStore, replacing_watermark: bool = False) -> list[str]:
+    """The earlier steps as Claude is told them: the latest step that carries a watermark is
+    described in full (fonts, colours, corner), the others by the instruction that made them.
+    Only one watermark is ever on the photo, so the watermark steps before the latest one are
+    left out (each replaced the one before it), and a plain instruction that mentions a watermark
+    from before it (typed in chat before steps were marked) is kept for its other content but
+    flagged as superseded. When a new watermark is being added (`replacing_watermark`) the
+    same goes for every earlier watermark step: the re-run reproduces every other step and the
+    new watermark takes the old one's place."""
     from . import watermark                         # (imported here: watermark imports this module)
+    steps = photo.lineage()
+    marked = [i for i, r in enumerate(steps) if r.watermark]
+    latest = len(steps) if replacing_watermark else (marked[-1] if marked else -1)
     out = []
-    for r in photo.lineage():
-        if r.watermark and r.watermark.get("lines") is not None:
-            text = watermark.describe(r.watermark, revisions)
-            if text:
-                out.append(text)
+    for i, r in enumerate(steps):
+        if r.watermark:
+            if i < latest:
                 continue
+            if r.watermark.get("lines") is not None:
+                text = watermark.describe(r.watermark, revisions)
+                if text:
+                    out.append(text)
+                    continue
         if r.instruction:
-            out.append(r.instruction)
+            flag = SUPERSEDED if i < latest and "watermark" in r.instruction.lower() else ""
+            out.append(r.instruction + flag)
     return out
+
+
+def _is_watermark_request(message: ChatMessage) -> bool:
+    """A request from the watermark builder: it carries the form's state with its lines."""
+    return isinstance(message.watermark, dict) and isinstance(message.watermark.get("lines"), list)
 
 
 def _revise(
     store: LibraryStore, revisions: RevisionStore, recipe: RecipeRunner, rules: RulesStore | None,
     photo: Photo, message: ChatMessage,
 ) -> bool:
+    from . import watermark                         # (imported here: watermark imports this module)
     paths = [_first_image_path(photo, revisions)] if photo.imported else _source_paths(photo, revisions)
     active = _rules_for(rules, photo)
-    note = note_with_history(bounded_history(_history(photo, revisions)), message.text)
-    if any(r.watermark for r in photo.lineage()):
-        from . import watermark                     # (imported here: watermark imports this module)
+    adding = _is_watermark_request(message)
+    # From the builder: the request is the exact watermark the preview showed, and earlier
+    # watermark steps are left out of the replay so this one takes their place.
+    text = watermark.request(message.watermark, revisions) if adding else message.text
+    if adding and not text:
+        raise RuntimeError("the watermark request has nothing to write")
+    note = note_with_history(bounded_history(_history(photo, revisions, replacing_watermark=adding)), text)
+    if adding or any(r.watermark for r in photo.lineage()):
         note += f" Fonts: keep any font file you fetch under {watermark.font_dir(revisions)} so it is kept."
     tmp = tempfile.mkdtemp(prefix="pipeline-chat-")
     try:
@@ -400,6 +427,8 @@ def _save_result(
             watermark=None if first else (watermark or reported),
         ))
         p.current = n
+        if not first and watermark:
+            p.last_watermark = watermark
         p.question = None
         p.pending_instruction = None
         p.pending_watermark = None

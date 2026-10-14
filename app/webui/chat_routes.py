@@ -67,19 +67,20 @@ def register_chat_routes(
 
     @app.post("/api/photos/<photo_id>/watermark")
     def api_watermark(photo_id: str):
-        """Draws the watermark on the photo as a new step (here, not by Claude)
-        and answers {"step": n}."""
+        """Sends the watermark to Claude as a chat request (the photo is re-run with
+        its history replayed and this watermark drawn in place of any earlier one)
+        and answers {"id": message id}, like a chat message."""
         data = request.get_json(silent=True)
         try:
-            step = watermark.apply(store, revisions, photo_id, data if isinstance(data, dict) else {})
+            message_id = watermark.submit(store, revisions, photo_id, data if isinstance(data, dict) else {})
         except chat.ChatError as exc:
             return jsonify({"error": str(exc)}), exc.status
-        if on_change is not None:
+        if on_job is not None:
             try:
-                on_change()
-            except Exception:
-                app.logger.exception("on_change failed")
-        return jsonify({"step": step})
+                on_job()
+            except Exception:  # the worker also looks on its own every few seconds
+                app.logger.exception("on_job failed")
+        return jsonify({"id": message_id})
 
     @app.post("/api/photos/<photo_id>/watermark/preview")
     def api_watermark_preview(photo_id: str):
