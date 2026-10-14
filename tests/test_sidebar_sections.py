@@ -67,3 +67,12 @@ def test_the_order_of_the_ticks_on_a_line_is_the_order_it_is_written_in():
 def test_the_preview_is_big_enough_to_read():
     css = read("static", "pipeline.css")
     assert "#viewer .wm .wmpreview .l1 { font-size: 1.6rem;" in css
+
+
+def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it():
+    page = read("templates", "index.html")
+    brand = page[page.index('<div class="brand">'):page.index("</nav>")]
+    assert "icon-small.svg" in brand and brand.index("<img") < brand.index("<h1>")      # the icon is to the left
+    assert "<h1>Immich Photo Pipeline</h1>" in brand
+    assert "nav .brand { display: flex;" in read("static", "pipeline.css")
+    assert '(h.closest(".brand") || h).after(el)' in read("static", "app.js")           # the version goes under the row
