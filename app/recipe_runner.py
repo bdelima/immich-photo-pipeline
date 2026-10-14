@@ -416,6 +416,28 @@ class RecipeRunner:
             raise RuntimeError("Claude did not name anything")
         return names
 
+    def suggest_font(self, image_path: str, texts: list[str], hint: str | None = None) -> dict:
+        """Asks Claude to look at the picture and the watermark's text and name a font
+        for it (one Google Fonts has, so it can be fetched and drawn here) and a colour
+        that reads well on the corner it will sit in. `hint` says what the reviewer is
+        after ("something spooky"). Returns {"font", "color", "color_name", "why"}.
+        Raises RuntimeError if the call fails. Read-only."""
+        what = "; ".join(f'"{t}"' for t in texts) if texts else "a short caption"
+        want = f" The reviewer asks for: {hint}." if hint else ""
+        ask = (
+            f"Look at the image at {image_path}. A small watermark reading {what} will be drawn in its "
+            "lower right corner (or another corner if that one is busy). Suggest one font for it that suits "
+            "the picture's mood and subject, choosing from the families Google Fonts offers (give the family "
+            "name exactly as Google Fonts lists it, for example \"Creepster\" or \"Playfair Display\"), and one "
+            "colour that will read well on that part of the picture, as a hex value plus a short name."
+            f"{want} Say in at most fifteen words why. "
+        )
+        shape = '{"font": "<family>", "color": "#rrggbb", "color_name": "<short name>", "why": "<reason>"}'
+        payload = self._ask_json(ask + "Reply with ONLY this JSON and no other text: " + shape)
+        if not isinstance(payload.get("font"), str) or not payload["font"].strip():
+            raise RuntimeError("Claude did not name a font")
+        return payload
+
     def locate(self, latitude: float, longitude: float) -> str:
         """Asks Claude which place is at these coordinates, from what it knows
         (no map service, no picture). Returns "City, Region, Country" as well
