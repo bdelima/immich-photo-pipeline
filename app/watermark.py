@@ -1,9 +1,10 @@
 """The watermark builder: up to three lines made of pieces (title, subject, location,
 author, date), seeded from what Immich knew about the original (see metadata.py),
-each line in its own font, colour and weight. Adding it draws the text here (see
-wmrender.py) as a new step in the photo's history, so it can be reverted like any
-other; Claude is only asked when the reviewer wants a title, a subject, a place or
-a font suggested."""
+each line in its own font, colour and weight. The preview is drawn here (see
+wmrender.py); adding it sends Claude an exact description of what the preview showed
+(text, font files, colours, sizes, corner) as a chat request, so Claude re-runs the
+photo with the earlier steps replayed, draws the watermark in place of any earlier
+one, and the result is a new step in the history that can be reverted like any other."""
 from __future__ import annotations
 
 import calendar
@@ -12,7 +13,7 @@ import os
 import re
 
 from . import chat, geocode, wmrender
-from .library import LibraryStore, Photo, Revision
+from .library import LibraryStore, Photo
 
 MAX_LINE = 120
 
@@ -207,28 +208,6 @@ def _line(value, what: str) -> str:
     return line
 
 
-def instruction(title, subtitle, third=None) -> str:
-    """The request to Claude. Up to three lines, none of them required (but
-    at least one is): the title on top, a second line underneath it and an
-    optional third below that."""
-    title, subtitle, third = _line(title, "title"), _line(subtitle, "second line"), _line(third, "third line")
-    if not title and not subtitle and not third:
-        raise chat.ChatError("there is nothing to write in the watermark")
-    lines = [
-        f'the title "{title}" on top' if title else "",
-        f'"{subtitle}" ' + ("underneath it" if title else "") if subtitle else "",
-        f'"{third}" ' + ("below that" if title or subtitle else "") if third else "",
-    ]
-    return (
-        "Add a small, tasteful watermark to this photo only (this is not a standing rule): "
-        + " and ".join(x.strip() for x in lines if x)
-        + ". Put it in the lower right corner, unless that would cover the subject; then use the nearest "
-        "corner that does not. Set it in Arial, with a soft shadow and a slight highlight so the text looks "
-        "a little 3D, and keep it readable against the photo. "
-        "Do not change anything else about the photo."
-    )
-
-
 MAX_HINT = 80
 MAX_AVOID = 15
 STYLES = ("subject", "title")
@@ -370,6 +349,14 @@ def _request(data: dict) -> tuple[list[str], dict]:
     cleaned = clean_pieces(data.get("pieces"))
     if cleaned is not None:
         last["pieces"] = cleaned
+    # What the preview showed: the corner the renderer picked and the colour each line came out
+    # in, so Claude is told exactly those rather than "auto".
+    drawn = data.get("drawn") if isinstance(data.get("drawn"), dict) else {}
+    corner = clean_corner(drawn.get("corner"))
+    colors = drawn.get("colors") if isinstance(drawn.get("colors"), list) else []
+    colors = [c.strip().lower() for c in colors if isinstance(c, str) and wmrender.parse_color(c)][:MAX_LINES]
+    if corner != "auto" or colors:
+        last["drawn"] = {"corner": corner, "colors": colors}
     return texts, last
 
 
@@ -437,57 +424,21 @@ def whole(store: LibraryStore, revisions, photo_id: str, data: dict) -> tuple[by
         raise chat.ChatError(str(exc), 502)
 
 
-class _Conflict(Exception):
-    pass
-
-
-def apply(store: LibraryStore, revisions, photo_id: str, data: dict) -> int:
-    """Draws the watermark on the photo's current image as a new step in its history and
-    returns that step's number. Drawn here, not by Claude. The lines, pieces and styles are
-    remembered with the step (and as the photo's last watermark), so the form starts from them
-    next time."""
-    photo, path = _workable(store, revisions, photo_id)
-    if photo.status != "ready":
-        raise chat.ChatError("It isn't finished yet.")
-    if photo.busy:
-        raise chat.ChatError("It is being revised; wait for that to finish.")
+def submit(store: LibraryStore, revisions, photo_id: str, data: dict) -> int:
+    """Sends the watermark to Claude as a chat request: the photo is re-run with its earlier steps
+    replayed and this watermark drawn in place of any earlier one (see chat._revise), the result
+    a new step in the history. Returns the queued message's id. The lines, pieces, styles and
+    what the preview showed are kept with the request, so the step remembers them and the form
+    starts from them next time. Fonts are fetched first, so Claude is given files that exist."""
+    photo, _ = _workable(store, revisions, photo_id)
     texts, last = _request(data if isinstance(data, dict) else {})
-    expected_current = photo.current
-    n = photo.next_revision_number()
-    os.makedirs(revisions.root, exist_ok=True)
-    out = os.path.join(revisions.root, f".wm-{photo_id}-{n}.jpg")
-    try:
-        wmrender.render(path, out, _styled(texts, last["lines"]), font_dir(revisions), corner=last["corner"])
-    except wmrender.FontError as exc:
-        raise chat.ChatError(str(exc), 502)
-    except ValueError as exc:
-        raise chat.ChatError(str(exc))
-    rel, digest = revisions.save_revision(photo_id, n, out)
-    try:
-        os.unlink(out)
-    except OSError:
-        pass
-    note = summary(texts[0], texts[1], texts[2])
-
-    def record(p: Photo) -> None:
-        if p.trashed or p.current != expected_current or p.next_revision_number() != n:
-            raise _Conflict()
-        p.revisions.append(Revision(n=n, parent=p.current, file=rel, instruction=note, sha256=digest,
-                                    origin="processed", watermark=last))
-        p.current = n
-        p.last_watermark = last
-
-    try:
-        store.update_photo(photo_id, record)
-    except BaseException as exc:
-        try:
-            os.unlink(revisions.path(rel))
-        except OSError:
-            pass
-        if isinstance(exc, _Conflict):
-            raise chat.ChatError("the photo changed while the watermark was being drawn; try again", 409)
-        raise
-    return store.load().photos[photo_id].step_of(n)
+    for text, st in zip(texts, last["lines"]):
+        if text:
+            try:
+                wmrender.font_file(st["font"], st["bold"], st["italic"], font_dir(revisions))
+            except wmrender.FontError as exc:
+                raise chat.ChatError(str(exc), 502)
+    return chat.enqueue(store, photo_id, summary(texts[0], texts[1], texts[2]), watermark=last)
 
 
 # ---- suggesting a font ----
@@ -547,15 +498,19 @@ def suggest_font(store: LibraryStore, revisions, recipe, photo_id: str, texts, h
 # start from when the request is about the watermark itself.
 
 
-def describe(state: dict, revisions) -> str:
-    """The replay text for a watermark step: each line's text, font (and file), colour and weight,
-    the corner, and the sizing rule the renderer uses. Fonts are fetched if need be; one that can't
-    be is named without a file."""
+def _spec(state: dict, revisions) -> str:
+    """The watermark spelled out for Claude: each line's text, font (and file), colour and weight,
+    the corner, and the sizing rule the renderer uses. "" when there is nothing to write. Fonts
+    are fetched if need be; one that can't be is named without a file. The corner and colours
+    the preview showed (`drawn`) stand in for "auto"."""
     if not isinstance(state, dict):
         return ""
     texts = [state.get("title", ""), state.get("subtitle", ""), state.get("third", "")]
     lines = clean_lines(state.get("lines"))
+    drawn = state.get("drawn") if isinstance(state.get("drawn"), dict) else {}
+    drawn_colors = [c for c in (drawn.get("colors") or []) if isinstance(c, str)]
     parts = []
+    n = 0
     for i, (text, st) in enumerate(zip(texts, lines), 1):
         if not isinstance(text, str) or not text.strip():
             continue
@@ -564,18 +519,42 @@ def describe(state: dict, revisions) -> str:
         except wmrender.FontError:
             path = None
         weight = " ".join(w for w, on in (("bold", st["bold"]), ("italic", st["italic"])) if on)
-        color = st["color"] if st["color"] != "auto" else "white on a dark patch or near-black on a light one"
+        color = st["color"]
+        if color == "auto":
+            color = drawn_colors[n] if n < len(drawn_colors) else "white on a dark patch or near-black on a light one"
+        n += 1
         parts.append(f'line {i} "{text.strip()}" in {st["font"]}' + (f" {weight}" if weight else "") + (f" (file {path})" if path else "")
                      + f", colour {color}")
     if not parts:
         return ""
     corner = clean_corner(state.get("corner"))
+    if corner == "auto":
+        corner = clean_corner(drawn.get("corner"))
     where = corner if corner != "auto" else "the lower right corner, or another if that one is busy"
     note = clean_note(state.get("style_note"))
-    return ("Watermark drawn by the pipeline: " + "; ".join(parts) + f". Placed in {where} with a margin of 2.5% of the shorter "
-            "side; the first line's text height is 3.2% of the shorter side and the others' 2.4%; a soft drop shadow and a faint "
-            "highlight; right-aligned in a right-hand corner. Reproduce it exactly unless the new request is about the watermark."
-            + (f" Its look beyond that: {note}." if note else ""))
+    return ("; ".join(parts) + f". Placed in {where} with a margin of 2.5% of the shorter side; the first line's text "
+            "height is 3.2% of the shorter side and the others' 2.4%; a soft drop shadow and a faint highlight; "
+            "right-aligned in a right-hand corner, left-aligned in a left-hand one"
+            + (f". Its look beyond that: {note}" if note else "") + ".")
+
+
+def describe(state: dict, revisions) -> str:
+    """The replay text for an earlier watermark step, so a later chat edit reproduces it."""
+    spec = _spec(state, revisions)
+    if not spec:
+        return ""
+    return "Watermark drawn by the pipeline: " + spec + " Reproduce it exactly unless the new request is about the watermark."
+
+
+def request(state: dict, revisions) -> str:
+    """The chat request that adds the watermark from the builder: draw exactly this, in place of
+    any earlier watermark, and change nothing else."""
+    spec = _spec(state, revisions)
+    if not spec:
+        return ""
+    return ("Draw this watermark on the photo, exactly as specified, using the font files named (fetch a missing one from "
+            "Google Fonts and keep it beside the others): " + spec + " This watermark replaces any earlier one: do not draw "
+            "any watermark described or asked for in an earlier step. Change nothing else about the photo.")
 
 
 _REPORT_KEYS = ("title", "subtitle", "third")
