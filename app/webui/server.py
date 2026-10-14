@@ -63,7 +63,7 @@ def create_app(
     if store is not None and revisions is not None and thumbs is not None:
         register_browse_routes(app, store, revisions, thumbs, rules)
         register_action_routes(app, store, revisions, cfg, on_change)
-        register_chat_routes(app, store, on_job, recipe, revisions)
+        register_chat_routes(app, store, on_job, recipe, revisions, on_change, immich)
     if rules is not None:
         _register_rules_routes(app, rules)
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 from .. import chat, locale, watermark
 from ..library import LibraryStore
@@ -14,7 +14,7 @@ from ..library import LibraryStore
 
 def register_chat_routes(
     app: Flask, store: LibraryStore, on_job: Callable[[], None] | None = None,
-    recipe=None, revisions=None,
+    recipe=None, revisions=None, on_change: Callable[[], None] | None = None, immich=None,
 ) -> None:
     @app.post("/api/photos/<photo_id>/chat")
     def api_chat(photo_id: str):
@@ -67,15 +67,49 @@ def register_chat_routes(
 
     @app.post("/api/photos/<photo_id>/watermark")
     def api_watermark(photo_id: str):
+        """Draws the watermark on the photo as a new step (here, not by Claude)
+        and answers {"step": n}."""
+        data = request.get_json(silent=True)
+        try:
+            step = watermark.apply(store, revisions, photo_id, data if isinstance(data, dict) else {})
+        except chat.ChatError as exc:
+            return jsonify({"error": str(exc)}), exc.status
+        if on_change is not None:
+            try:
+                on_change()
+            except Exception:
+                app.logger.exception("on_change failed")
+        return jsonify({"step": step})
+
+    @app.post("/api/photos/<photo_id>/watermark/preview")
+    def api_watermark_preview(photo_id: str):
+        """A PNG of the corner the watermark will sit on, with the text drawn as it will
+        be. The corner and the colours used are in the X-Watermark-Corner and
+        X-Watermark-Colors headers. Changes nothing."""
+        data = request.get_json(silent=True)
+        try:
+            png, info = watermark.preview(store, revisions, photo_id, data if isinstance(data, dict) else {})
+        except chat.ChatError as exc:
+            return jsonify({"error": str(exc)}), exc.status
+        return Response(png, mimetype="image/png", headers={
+            "Cache-Control": "no-store", "X-Watermark-Corner": info["corner"], "X-Watermark-Colors": ",".join(info["colors"])})
+
+    @app.get("/api/photos/<photo_id>/watermark/options")
+    def api_watermark_options(photo_id: str):
+        """What the pulldowns under the watermark's fields offer (see watermark.options)."""
+        try:
+            return jsonify(watermark.options(store, immich, photo_id))
+        except chat.ChatError as exc:
+            return jsonify({"error": str(exc)}), exc.status
+
+    @app.post("/api/photos/<photo_id>/font")
+    def api_font(photo_id: str):
+        """Asks Claude for a font and colour that suit the photo and its watermark text
+        ({"texts": [...], "hint": "..."}); a Claude run. Changes nothing but the list of
+        fonts the form offers."""
         data = request.get_json(silent=True)
         data = data if isinstance(data, dict) else {}
         try:
-            message_id = watermark.add(store, photo_id, data.get("title"), data.get("subtitle"), data.get("third"), data.get("pieces"))
+            return jsonify(watermark.suggest_font(store, revisions, recipe, photo_id, data.get("texts"), data.get("hint")))
         except chat.ChatError as exc:
             return jsonify({"error": str(exc)}), exc.status
-        if on_job is not None:
-            try:
-                on_job()
-            except Exception:
-                app.logger.exception("on_job failed")
-        return jsonify({"id": message_id})
