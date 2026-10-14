@@ -62,22 +62,35 @@ def test_an_empty_or_overlong_watermark_is_refused():
         watermark.instruction(5, "")
 
 
-def test_adding_queues_a_message_for_the_worker(tmp_path):
-    store = LibraryStore(str(tmp_path / "lib.json"))
-    store.update(lambda lib: lib.photos.update(p=photo()))
-    watermark.add(store, "p", "Costa Rica", "Bob", "Wings at Dusk")
-    msg = store.load().photos["p"].chat[0]
-    assert msg.role == "user" and msg.state == "queued" and "Costa Rica" in msg.text and "Wings at Dusk" in msg.text
+def test_adding_draws_the_watermark_here_as_a_new_step_and_asks_claude_nothing(tmp_path):
+    from PIL import Image
+    store, revisions = _with_image(tmp_path, size=(400, 300))
+    before = store.load().photos["p"]
+    step = watermark.apply(store, revisions, "p", {"title": "Costa Rica", "subtitle": "Bob", "third": "Wings at Dusk",
+                                                   "lines": [{"font": "Liberation Serif", "bold": True}, {"color": "#ff8c1a"}, {}]})
+    p = store.load().photos["p"]
+    assert step == 1 and p.current == 1 and len(p.revisions) == 2 and p.chat == []
+    rev = p.revisions[1]
+    assert rev.instruction == 'Watermark: "Costa Rica" / "Bob" / "Wings at Dusk"' and rev.origin == "processed"
+    assert rev.watermark["title"] == "Costa Rica" and rev.watermark["lines"][0] == {"font": "Liberation Serif", "color": "auto", "bold": True, "italic": False}
+    assert rev.watermark["lines"][1]["color"] == "#ff8c1a" and p.last_watermark == rev.watermark
+    with Image.open(revisions.path(rev.file)) as im:
+        assert im.size == (400, 300)
+    assert rev.sha256 != before.revisions[0].sha256                       # the image changed
+    assert not any(f.startswith(".wm-") for f in os.listdir(revisions.root))    # no scratch left behind
 
 
 def test_a_photo_that_cannot_be_changed_is_refused(tmp_path):
-    store = LibraryStore(str(tmp_path / "lib.json"))
-    store.update(lambda lib: lib.photos.update(p=photo(media_type="video")))
+    store, revisions = _with_image(tmp_path, media_type="video")
     with pytest.raises(chat.ChatError):
-        watermark.add(store, "p", "Costa Rica", "Bob")
+        watermark.apply(store, revisions, "p", {"title": "Costa Rica"})
     with pytest.raises(chat.ChatError) as e:
-        watermark.add(store, "nope", "x", "y")
+        watermark.apply(store, revisions, "nope", {"title": "x"})
     assert e.value.status == 404
+    store, revisions = _with_image(tmp_path / "busy")
+    store.update_photo("p", lambda p: setattr(p, "status", "processing"))
+    with pytest.raises(chat.ChatError):
+        watermark.apply(store, revisions, "p", {"title": "x"})
 
 
 # ---- identifying what is in the picture ---------------------------------------------------
@@ -96,14 +109,15 @@ class FakeIdentifier:
         return self.answer if isinstance(self.answer, list) else [self.answer]
 
 
-def _with_image(tmp_path, **kw):
+def _with_image(tmp_path, size=(8, 8), **kw):
     from PIL import Image
     from app.library import Revision
     from app.revisions import RevisionStore
+    tmp_path.mkdir(parents=True, exist_ok=True)
     store = LibraryStore(str(tmp_path / "lib.json"))
     revisions = RevisionStore(str(tmp_path / "rev"))
     img = tmp_path / "i.jpg"
-    Image.new("RGB", (8, 8)).save(img)
+    Image.new("RGB", size, (30, 60, 30)).save(img)
     rel, sha = revisions.save_revision("p", 0, str(img))
     p = photo(**kw)
     p.revisions.append(Revision(n=0, parent=None, file=rel, sha256=sha))
@@ -214,15 +228,15 @@ def lines_of(pieces):
 def test_the_form_starts_from_the_template_until_a_watermark_has_been_asked_for():
     got = watermark.starting_point(photo())
     assert (got["title"], got["subtitle"], got["third"], got["remembered"]) == ("Playa Hermosa, Costa Rica", "Bob · March 2024", "", False)
-    # four fields: title, location, author and date; the title is empty, the rest come from Immich
+    # five fields: title, subject, location, author and date; the first two are empty, the rest come from Immich
     assert [(x["key"], x["text"]) for x in got["pieces"]] == [
-        ("title", ""), ("location", "Playa Hermosa, Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
+        ("title", ""), ("subject", ""), ("location", "Playa Hermosa, Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
     assert lines_of(got["pieces"]) == ["Playa Hermosa, Costa Rica", "Bob · March 2024", ""]
+    assert got["lines"] == [{"font": "Liberation Sans", "color": "auto", "bold": False, "italic": False}] * 3
 
 
 def test_asking_for_a_watermark_remembers_its_lines_pieces_and_ticks_for_next_time(tmp_path):
-    store = LibraryStore(str(tmp_path / "lib.json"))
-    store.update(lambda lib: lib.photos.update(p=photo()))
+    store, revisions = _with_image(tmp_path, size=(200, 150))
     pieces = [
         {"key": "title", "label": "Title", "text": ' Wings "at" Dusk ', "t": True, "u": False, "v": False},
         {"key": "location", "label": "Location", "text": "Playa Hermosa", "t": False, "u": True, "v": False},
@@ -230,19 +244,22 @@ def test_asking_for_a_watermark_remembers_its_lines_pieces_and_ticks_for_next_ti
         {"key": "date", "label": "Date", "text": "March 2024", "t": False, "u": False, "v": True},
         {"key": "", "label": "Title idea", "text": "The Quiet Harbor", "t": False, "u": False, "v": False},
     ]
-    watermark.add(store, "p", "Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024", pieces)
+    watermark.apply(store, revisions, "p", {"title": "Wings 'at' Dusk", "subtitle": "Playa Hermosa", "third": "Bob · March 2024", "pieces": pieces,
+                                             "lines": [{"font": "Liberation Mono", "italic": True}]})
     last = store.load().photos["p"].last_watermark
     assert (last["title"], last["subtitle"], last["third"]) == ("Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024")
     got = watermark.starting_point(store.load().photos["p"])
     assert got["remembered"] is True
     assert [(x["key"], x["label"], x["text"], x["t"], x["u"], x["v"]) for x in got["pieces"]] == [
         ("title", "Title", "Wings 'at' Dusk", True, False, False),
+        ("subject", "Subject", "", False, False, False),
         ("location", "Location", "Playa Hermosa", False, True, False),
         ("author", "Author", "Bob", False, False, True),
         ("date", "Date", "March 2024", False, False, True),
         ("", "Title idea", "The Quiet Harbor", False, False, False)]
     assert lines_of(got["pieces"]) == ["Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024"]
-    watermark.add(store, "p", "Second try", "x")
+    assert got["lines"][0] == {"font": "Liberation Mono", "color": "auto", "bold": False, "italic": True}
+    watermark.apply(store, revisions, "p", {"title": "Second try", "subtitle": "x"})
     assert store.load().photos["p"].last_watermark["title"] == "Second try"
 
 
@@ -250,8 +267,8 @@ def test_a_watermark_remembered_by_an_older_version_keeps_its_lines_as_pieces():
     p = photo(last_watermark={"title": "Wings at Dusk", "subtitle": "Bob", "third": ""})
     got = watermark.starting_point(p)
     assert got["remembered"] is True and lines_of(got["pieces"]) == ["Wings at Dusk", "Bob", ""]
-    assert [x["key"] for x in got["pieces"]][:4] == ["title", "location", "author", "date"]
-    assert not any(x["t"] or x["u"] or x["v"] for x in got["pieces"] if x["key"])      # the four start unticked
+    assert [x["key"] for x in got["pieces"]][:5] == ["title", "subject", "location", "author", "date"]
+    assert not any(x["t"] or x["u"] or x["v"] for x in got["pieces"] if x["key"])      # the five start unticked
 
 
 def test_pieces_from_the_page_are_cleaned_and_bounded():
@@ -272,13 +289,13 @@ def test_pieces_from_the_page_are_cleaned_and_bounded():
 
 
 def test_a_refused_watermark_is_not_remembered(tmp_path):
-    store = LibraryStore(str(tmp_path / "lib.json"))
-    store.update(lambda lib: lib.photos.update(p=photo()))
+    store, revisions = _with_image(tmp_path)
     with pytest.raises(chat.ChatError):
-        watermark.add(store, "p", "", "", "")
+        watermark.apply(store, revisions, "p", {"title": "", "subtitle": "", "third": ""})
     with pytest.raises(chat.ChatError):
-        watermark.add(store, "p", "A", "", "", "not a list")
-    assert store.load().photos["p"].last_watermark is None
+        watermark.apply(store, revisions, "p", {"title": "A", "pieces": "not a list"})
+    p = store.load().photos["p"]
+    assert p.last_watermark is None and len(p.revisions) == 1
 
 
 def test_an_older_library_without_the_field_still_loads():
@@ -400,3 +417,319 @@ def test_ticks_keep_the_order_they_were_made_in():
         {"key": "date", "label": "Date", "text": "March 2024", "t": 0, "u": 1, "v": 0}]})
     assert lines_of(watermark.starting_point(p)["pieces"]) == ["", "March 2024 · Bob", ""]
     assert lines_of(watermark.starting_point(photo())["pieces"])[1] == "Bob · March 2024"
+
+
+# ---- the style of the lines, the preview and the choices under the fields ----------------
+
+
+def test_line_styles_are_cleaned_and_defaulted():
+    got = watermark.clean_lines([{"font": " Creepster ", "color": "#FF8C1A", "bold": 1}, "junk"])
+    assert got[0] == {"font": "Creepster", "color": "#ff8c1a", "bold": True, "italic": False}
+    assert got[1] == got[2] == {"font": "Liberation Sans", "color": "auto", "bold": False, "italic": False}
+    assert watermark.clean_lines([{"color": "purple"}])[0]["color"] == "auto"       # only hex, white, black or auto
+    assert watermark.clean_lines([{"color": "White"}])[0]["color"] == "white"
+    assert len(watermark.clean_lines(None)) == 3
+
+
+def test_the_preview_is_a_png_of_the_corner_and_says_which_corner_and_colours(tmp_path):
+    store, revisions = _with_image(tmp_path, size=(600, 400))
+    png, info = watermark.preview(store, revisions, "p", {"title": "Hello", "lines": [{"color": "#ff0000"}]})
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and info == {"corner": "lower right", "colors": ["#ff0000"]}
+    png, info = watermark.preview(store, revisions, "p", {})                       # nothing to write: the plain corner
+    assert png[:4] == b"\x89PNG" and info["colors"] == []
+    with pytest.raises(chat.ChatError):
+        watermark.preview(store, revisions, "p", {"title": "Hi", "lines": [{"font": "No Such Font"}]})
+
+
+def test_a_font_that_is_not_installed_is_refused_with_no_network(tmp_path, monkeypatch):
+    import requests
+    from app import wmrender
+    store, revisions = _with_image(tmp_path, size=(100, 100))
+
+    def down(*a, **k):
+        raise requests.ConnectionError("no network")
+    monkeypatch.setattr(wmrender.requests, "get", down)
+    with pytest.raises(chat.ChatError) as e:
+        watermark.apply(store, revisions, "p", {"title": "Hi", "lines": [{"font": "Creepster"}]})
+    assert "Google Fonts" in str(e.value) and len(store.load().photos["p"].revisions) == 1
+
+
+def test_a_google_font_is_fetched_once_and_kept(tmp_path, monkeypatch):
+    from app import wmrender
+    real = open("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", "rb").read()
+    calls = []
+
+    class R:
+        def __init__(self, status, text="", content=b""):
+            self.status_code, self.text, self.content = status, text, content
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, params=None, **k):
+        calls.append(url)
+        if url == wmrender.GOOGLE_CSS:
+            if "Nope" in params["family"]:
+                return R(400)
+            return R(200, "@font-face { src: url(https://fonts.gstatic.com/s/x.ttf) format('truetype'); }")
+        return R(200, content=real)
+    monkeypatch.setattr(wmrender.requests, "get", fake_get)
+    cache = str(tmp_path / "fonts")
+    path, real_style = wmrender.font_file("Creepster", False, False, cache)
+    assert os.path.isfile(path) and real_style and len(calls) == 2
+    wmrender.font_file("Creepster", False, False, cache)
+    assert len(calls) == 2                                                          # kept, not fetched again
+    with pytest.raises(wmrender.FontError):
+        wmrender.font_file("Nope Font", False, False, cache)
+
+
+def test_the_auto_colour_is_white_on_dark_and_dark_on_light(tmp_path):
+    from PIL import Image
+    from app import wmrender
+    dark, light = tmp_path / "d.jpg", tmp_path / "l.jpg"
+    Image.new("RGB", (300, 200), (20, 30, 40)).save(dark)
+    Image.new("RGB", (300, 200), (235, 235, 230)).save(light)
+    out = tmp_path / "o.jpg"
+    assert wmrender.render(str(dark), str(out), [{"text": "Hi"}], None)["colors"] == ["#ffffff"]
+    assert wmrender.render(str(light), str(out), [{"text": "Hi"}], None)["colors"] == ["#1a1a1a"]
+    assert wmrender.render(str(light), str(out), [{"text": "Hi", "color": "white"}], None)["colors"] == ["#ffffff"]
+
+
+def test_the_text_moves_to_a_plainer_corner_when_the_lower_right_is_busy(tmp_path):
+    from PIL import Image, ImageDraw
+    import random
+    from app import wmrender
+    img = Image.new("RGB", (800, 600), (40, 60, 40))
+    d = ImageDraw.Draw(img)
+    random.seed(1)
+    for _ in range(4000):                                   # noise in the lower right only
+        x, y = random.randint(520, 799), random.randint(420, 599)
+        d.point((x, y), fill=(random.randint(0, 255),) * 3)
+    src = tmp_path / "busy.jpg"
+    img.save(src, quality=95)
+    assert wmrender.render(str(src), str(tmp_path / "o.jpg"), [{"text": "Hello there"}], None)["corner"] != "lower right"
+
+
+def test_date_choices_are_written_the_way_people_write_them():
+    assert watermark.date_choices("2026-05-12 12:32") == [
+        "May 12, 2026", "12 May 2026", "Tuesday, May 12, 2026", "May 2026", "2026"]
+    assert watermark.date_choices("") == [] and watermark.date_choices("soon") == []
+
+
+class FakeImmich:
+    def list_user_names(self):
+        return ["Bob", "Karen", ""]
+
+    def asset_people(self, asset_id):
+        return ["Bob", "Sam"] if asset_id == "a" else []
+
+
+def test_the_options_gather_suggestions_people_users_dates_and_fonts(tmp_path):
+    store, revisions = _with_image(tmp_path, suggestions={"title": ["One", "Two"], "subject": ["Macaw", "Two"],
+                                                          "location": ["Saratoga Gap"], "font": ["Creepster"], "color": ["#ff8c1a pumpkin"]})
+    got = watermark.options(store, FakeImmich(), "p")
+    assert got["title"] == ["Two", "One", "Macaw"]                 # newest first; a subject already a title is not repeated
+    assert got["location"] == ["Saratoga Gap"] and got["people"] == ["Bob", "Sam"] and got["users"] == ["Bob", "Karen"]
+    assert got["dates"][0] == "March 2, 2024" and got["fonts"] == ["Liberation Sans", "Liberation Serif", "Liberation Mono"]
+    assert got["suggested_fonts"] == ["Creepster"] and got["suggested_colors"] == ["#ff8c1a pumpkin"]
+    none = watermark.options(store, None, "p")
+    assert none["people"] == [] and none["users"] == []
+    with pytest.raises(chat.ChatError):
+        watermark.options(store, None, "nope")
+
+
+class FakeFontPicker:
+    def __init__(self, answer=None, error=None):
+        self.answer = answer or {"font": "Liberation Serif", "color": "#FF8C1A", "color_name": "pumpkin orange", "why": "Suits the mood."}
+        self.error, self.calls = error, []
+
+    def suggest_font(self, image_path, texts, hint=None):
+        self.calls.append((image_path, texts, hint))
+        if self.error:
+            raise RuntimeError(self.error)
+        return self.answer
+
+
+def test_suggesting_a_font_asks_claude_with_the_text_and_remembers_the_answer(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    recipe = FakeFontPicker()
+    got = watermark.suggest_font(store, revisions, recipe, "p", ["Scarlet macaw", "", " Bob "], " spooky ")
+    assert got == {"font": "Liberation Serif", "color": "#ff8c1a", "color_name": "pumpkin orange", "why": "Suits the mood."}
+    assert recipe.calls[0][1:] == (["Scarlet macaw", "Bob"], "spooky")
+    assert store.load().photos["p"].suggestions == {"font": ["Liberation Serif"], "color": ["#ff8c1a pumpkin orange"]}
+    recipe.answer = {"font": "Liberation Mono", "color": "nonsense"}
+    assert watermark.suggest_font(store, revisions, recipe, "p", [], None)["color"] == "auto"
+    assert store.load().photos["p"].suggestions["font"] == ["Liberation Serif", "Liberation Mono"]
+    assert store.load().photos["p"].chat == []
+
+
+def test_a_font_claude_names_that_cannot_be_had_is_an_error_and_not_remembered(tmp_path, monkeypatch):
+    import requests
+    from app import wmrender
+    store, revisions = _with_image(tmp_path)
+    monkeypatch.setattr(wmrender.requests, "get", lambda *a, **k: (_ for _ in ()).throw(requests.ConnectionError("down")))
+    with pytest.raises(chat.ChatError) as e:
+        watermark.suggest_font(store, revisions, FakeFontPicker({"font": "Creepster"}), "p", ["Hi"])
+    assert e.value.status == 502 and "Creepster" in str(e.value)
+    assert store.load().photos["p"].suggestions == {}
+    with pytest.raises(chat.ChatError):
+        watermark.suggest_font(store, revisions, FakeFontPicker(error="boom"), "p", ["Hi"])
+    with pytest.raises(chat.ChatError):
+        watermark.suggest_font(store, revisions, None, "p", ["Hi"])
+    with pytest.raises(chat.ChatError):
+        watermark.suggest_font(store, revisions, FakeFontPicker(), "p", "not a list")
+
+
+def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
+    from app.webui.server import create_app
+    from app.thumbs import ThumbCache
+    store, revisions = _with_image(tmp_path, size=(300, 200))
+    changed = []
+    app = create_app(None, FakeImmich(), store, None, revisions=revisions, thumbs=ThumbCache(str(tmp_path / "t")),
+                     on_change=lambda: changed.append(1), recipe=FakeFontPicker())
+    client = app.test_client()
+    r = client.post("/api/photos/p/watermark/preview", json={"title": "Hi", "lines": [{"color": "black"}]})
+    assert r.status_code == 200 and r.mimetype == "image/png"
+    assert r.headers["X-Watermark-Corner"] == "lower right" and r.headers["X-Watermark-Colors"] == "#1a1a1a"
+    assert client.post("/api/photos/p/watermark/preview", json={"title": "Hi", "lines": [{"font": "Nope"}]}).status_code == 502
+    o = client.get("/api/photos/p/watermark/options").get_json()
+    assert o["users"] == ["Bob", "Karen"] and o["people"] == ["Bob", "Sam"] and o["dates"][0] == "March 2, 2024"
+    assert client.get("/api/photos/nope/watermark/options").status_code == 404
+    f = client.post("/api/photos/p/font", json={"texts": ["Hi"], "hint": "spooky"}).get_json()
+    assert f["font"] == "Liberation Serif" and f["color"] == "#ff8c1a"
+    w = client.post("/api/photos/p/watermark", json={"title": "Hi", "lines": [{"font": "Liberation Serif"}]})
+    assert w.status_code == 200 and w.get_json() == {"step": 1} and changed == [1]
+    assert store.load().photos["p"].current == 1
+    assert client.post("/api/photos/p/watermark", json={"title": ""}).status_code == 400
+
+
+# ---- the chat path and the builder speak the same language -------------------------------
+
+
+def test_the_corner_can_be_chosen_and_is_kept_with_the_step(tmp_path):
+    from PIL import Image
+    from app import wmrender
+    store, revisions = _with_image(tmp_path, size=(400, 300))
+    assert watermark.clean_corner(" Upper-Left ") == "upper left" and watermark.clean_corner("middle") == "auto" and watermark.clean_corner(None) == "auto"
+    assert watermark.clean_note(" a red <glow> ") == "a red glow" and watermark.clean_note(5) == ""
+    png, info = watermark.preview(store, revisions, "p", {"title": "Hi", "corner": "upper left"})
+    assert info["corner"] == "upper left"
+    watermark.apply(store, revisions, "p", {"title": "Hi", "corner": "lower left", "style_note": "a glow"})
+    rev = store.load().photos["p"].current_revision()
+    assert rev.watermark["corner"] == "lower left" and rev.watermark["style_note"] == "a glow"
+    got = watermark.starting_point(store.load().photos["p"])
+    assert got["corner"] == "lower left" and got["style_note"] == "a glow"
+    assert watermark.starting_point(photo())["corner"] == "auto"
+    src = tmp_path / "s.jpg"
+    Image.new("RGB", (300, 200), (20, 20, 20)).save(src)
+    assert wmrender.render(str(src), str(tmp_path / "o.jpg"), [{"text": "Hi"}], None, corner="upper right")["corner"] == "upper right"
+
+
+def test_a_watermark_step_is_described_to_claude_in_full(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    state = {"title": "Scarlet macaw", "subtitle": "Bob", "third": "", "lines": [
+        {"font": "Liberation Serif", "color": "#ff8c1a", "bold": True, "italic": False}, {"font": "Liberation Sans", "color": "auto"}],
+        "corner": "upper left", "style_note": "a faint glow"}
+    text = watermark.describe(state, revisions)
+    assert text.startswith('Watermark drawn by the pipeline: line 1 "Scarlet macaw" in Liberation Serif bold (file /usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf), colour #ff8c1a; line 2 "Bob" in Liberation Sans (file ')
+    assert "white on a dark patch" in text and "Placed in upper left" in text and "3.2%" in text and "a faint glow" in text
+    assert "Reproduce it exactly unless the new request is about the watermark" in text
+    assert "lower right corner, or another" in watermark.describe({"title": "x", "lines": []}, revisions)
+    assert watermark.describe({"title": "", "subtitle": ""}, revisions) == "" and watermark.describe("junk", revisions) == ""
+
+
+def test_what_claude_reports_drawing_becomes_the_builders_state(tmp_path):
+    from app import wmrender
+    store, revisions = _with_image(tmp_path)
+    previous = {"title": "Scarlet macaw", "subtitle": "Bob · May 2026", "third": "", "lines": [{"font": "Liberation Serif"}], "pieces": [
+        {"key": "title", "label": "Title", "text": "Scarlet macaw", "t": 1, "u": 0, "v": 0},
+        {"key": "subject", "label": "Subject", "text": "", "t": 0, "u": 0, "v": 0},
+        {"key": "location", "label": "Location", "text": "Saratoga", "t": 0, "u": 0, "v": 0},
+        {"key": "author", "label": "Author", "text": "Bob", "t": 0, "u": 1, "v": 0},
+        {"key": "date", "label": "Date", "text": "May 2026", "t": 0, "u": 2, "v": 0}]}
+    # the same text, moved and recoloured: the pieces are kept, the style follows the report
+    report = {"lines": [{"text": "Scarlet macaw", "font": "Liberation Mono", "color": "#FF0000", "bold": True}, {"text": "Bob · May 2026"}],
+              "corner": "Upper Left", "style_note": "a red glow"}
+    got = watermark.from_report(report, previous, revisions)
+    assert (got["title"], got["subtitle"], got["third"]) == ("Scarlet macaw", "Bob · May 2026", "")
+    assert got["lines"][0] == {"font": "Liberation Mono", "color": "#ff0000", "bold": True, "italic": False}
+    assert got["corner"] == "upper left" and got["style_note"] == "a red glow"
+    assert [(x["key"], x["t"], x["u"]) for x in got["pieces"]][:5] == [("title", 1, 0), ("subject", 0, 0), ("location", 0, 0), ("author", 0, 1), ("date", 0, 2)]
+    # a rewritten line: its old pieces come off it and the new text goes to the first piece then free
+    got = watermark.from_report({"lines": [{"text": "Wings at Dusk"}, {"text": "Bob · May 2026"}]}, previous, revisions)
+    assert got["title"] == "Wings at Dusk"
+    title = got["pieces"][0]
+    assert (title["key"], title["text"], title["t"]) == ("title", "Wings at Dusk", 1)
+    assert [x["u"] for x in got["pieces"]] == [0, 0, 0, 1, 2]                    # the unchanged line keeps its pieces
+    # with nothing before it, and a font file Claude fetched, which is kept so the family draws from now on
+    src = tmp_path / "fetched.ttf"
+    src.write_bytes(open("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", "rb").read())
+    got = watermark.from_report({"lines": [{"text": "Boo", "font": "Creepster"}], "font_files": {"Creepster": str(src)}}, None, revisions)
+    assert got["lines"][0]["font"] == "Creepster" and os.path.isfile(os.path.join(watermark.font_dir(revisions), "creepster-0-400.ttf"))
+    assert got["pieces"][0] == {"key": "title", "label": "Title", "text": "Boo", "t": 1, "u": 0, "v": 0}
+    assert wmrender.font_file("Creepster", False, False, watermark.font_dir(revisions))[0].endswith("creepster-0-400.ttf")
+    # a font named but not had falls back to the default; junk reports are None
+    import requests
+    from unittest.mock import patch
+    with patch.object(wmrender.requests, "get", side_effect=requests.ConnectionError("down")):
+        assert watermark.from_report({"lines": [{"text": "x", "font": "Nope Font"}]}, None, revisions)["lines"][0]["font"] == "Liberation Sans"
+    assert watermark.from_report({"lines": []}, None, revisions) is None and watermark.from_report("x", None, revisions) is None
+    assert watermark.from_report({"lines": [{"text": "  "}]}, None, revisions) is None
+
+
+def test_a_chat_edit_replays_the_watermark_in_full_and_keeps_what_claude_reports(tmp_path):
+    from PIL import Image
+    from test_chat import texts as chat_texts
+    store, revisions, recipe, rules = build(tmp_path)
+    add_photo(tmp_path, store, revisions, steps=("first",))
+    Image.new("RGB", (300, 200), (30, 30, 30)).save(revisions.path(store.load().photos["a"].current_revision().file))
+    watermark.apply(store, revisions, "a", {"title": "Scarlet macaw", "lines": [{"font": "Liberation Serif", "color": "#ff8c1a"}], "corner": "upper left"})
+    recipe.results = [RecipeResult(status="done", watermark={"lines": [{"text": "Scarlet macaw", "font": "Liberation Serif", "color": "#00ff00"}], "corner": "lower left", "style_note": "glowing"})]
+    chat.enqueue(store, "a", "make the watermark glow green")
+    assert run(store, revisions, recipe, rules) is True
+    note = recipe.runs[-1][1]
+    assert 'Watermark drawn by the pipeline: line 1 "Scarlet macaw" in Liberation Serif (file' in note and "Placed in upper left" in note
+    assert f"keep any font file you fetch under {watermark.font_dir(revisions)}" in note
+    p = store.load().photos["a"]
+    rev = p.current_revision()
+    assert rev.instruction == "make the watermark glow green"
+    assert rev.watermark["lines"][0]["color"] == "#00ff00" and rev.watermark["corner"] == "lower left" and rev.watermark["style_note"] == "glowing"
+    got = watermark.starting_point(p)
+    assert got["title"] == "Scarlet macaw" and got["corner"] == "lower left" and got["style_note"] == "glowing"
+    # a later plain edit is told about the step Claude made too, with the note
+    recipe.results = [RecipeResult(status="done")]
+    chat.enqueue(store, "a", "warmer")
+    run(store, revisions, recipe, rules)
+    note = recipe.runs[-1][1]
+    assert "Placed in lower left" in note and "Its look beyond that: glowing" in note
+    assert store.load().photos["a"].current_revision().watermark is None       # Claude reported nothing this time
+
+
+def test_a_font_file_from_anywhere_but_google_fonts_is_refused(tmp_path, monkeypatch):
+    from app import wmrender
+    calls = []
+
+    class R:
+        status_code, text = 200, "@font-face { src: url(https://evil.example/x.ttf) format('truetype'); }"
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, params=None, **k):
+        calls.append(url)
+        return R()
+
+    monkeypatch.setattr(wmrender.requests, "get", fake_get)
+    with pytest.raises(wmrender.FontError):
+        wmrender.font_file("Creepster", False, False, str(tmp_path / "fonts"))
+    assert calls == [wmrender.GOOGLE_CSS]                       # the file itself was never fetched
+    assert not os.path.exists(tmp_path / "fonts" / "creepster-0-400.ttf")
+
+
+def test_the_photo_is_turned_upright_before_it_is_drawn_on_and_the_preview_uses_a_reduced_copy():
+    import inspect
+    from app import wmrender
+    for fn in (wmrender.render, wmrender.preview):
+        assert "ImageOps.exif_transpose(im)" in inspect.getsource(fn)
+    preview = inspect.getsource(wmrender.preview)
+    assert "im.draft(" in preview and "img.thumbnail((PREVIEW_MAX, PREVIEW_MAX))" in preview
+    assert wmrender.PREVIEW_MAX >= 1000

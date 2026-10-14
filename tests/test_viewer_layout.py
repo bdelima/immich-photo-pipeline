@@ -28,9 +28,11 @@ def test_the_sidebar_scrolls_so_a_tall_watermark_form_is_never_cut_off():
     assert "max-height" in next(line for line in css.splitlines() if line.startswith("#chatlog {"))
 
 
-def test_each_tool_sits_with_the_field_it_fills_in():
+def test_the_preview_comes_first_then_the_rows_then_a_field_per_piece_with_its_choices_under_it():
     page = read("templates", "index.html")
     form = page[page.index("function watermarkForm"):page.index("// The country this container")]
-    order = [form.index(k) for k in ('id="wmPreview"', 'id="wmTitle"', 'id="wmHint"', 'id="wmIdentify"', 'id="wmPoem"', 'id="wmLoc"',
-                                       'id="wmOsm"', 'id="wmClaudeLoc"', 'id="wmAuthor"', 'id="wmDate"', 'id="wmGrid"', 'id="wmSend"')]
+    order = [form.index(k) for k in ('id="wmPreview"', 'id="wmRows"', 'id="wmFields"', 'id="wmSend"')]
     assert order == sorted(order)
+    fields = page[page.index("const drawFields = () => {"):page.index("const saw = (key, html)")]
+    assert fields.index('<input class="field" id="${FIELDS[key]}"') < fields.index('<select class="pd" data-pick="${key}"')
+    assert 'WM_FIXED = [["title", "Title"], ["subject", "Subject"], ["location", "Location"], ["author", "Author"], ["date", "Date"]]' in page

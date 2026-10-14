@@ -145,6 +145,18 @@ class ImmichClient:
                 return ""
         return self._user_names[user_id]
 
+    def list_user_names(self) -> list[str]:
+        """The display names of every account (GET /users; the pipeline's key is an
+        admin's, which is what that needs), for the watermark's author choices."""
+        return [u.get("name", "") for u in (self._request("GET", "/users") or []) if isinstance(u, dict)]
+
+    def asset_people(self, asset_id: str) -> list[str]:
+        """The people Immich has named in an asset (its `people`, faces with a name),
+        for the watermark's subject choices. [] if the asset can't be read."""
+        item = self.get_asset(asset_id)
+        people = (item or {}).get("people") or []
+        return [p.get("name", "") for p in people if isinstance(p, dict) and p.get("name")]
+
     def get_album(self, album_id: str) -> dict:
         return self._request("GET", f"/albums/{album_id}") or {}
 

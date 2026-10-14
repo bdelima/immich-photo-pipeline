@@ -505,3 +505,27 @@ def test_identify_title_style_returns_up_to_three_titles_and_retries_avoid_earli
     names, cmd = _identify(tmp_path, avoid=["Scarlet macaw", "Parrot"])
     assert names == ["Scarlet macaw"] and "Do not repeat any of these earlier answers: Scarlet macaw; Parrot." in cmd[2]
     assert _identify(tmp_path, style="title", reply={"name": "Lone Gull"})[0] == ["Lone Gull"]
+
+
+def test_the_watermark_contract_is_offered_only_when_the_history_mentions_one_and_the_report_is_parsed(tmp_path):
+    runner = _runner(tmp_path)
+    plain = _run_prompt(runner, "run_single", "/tmp/in.jpg", "/tmp/out.jpg", note="darker")
+    marked = _run_prompt(runner, "run_single", "/tmp/in.jpg", "/tmp/out.jpg", note="1) Watermark drawn by the pipeline: ... make it warmer")
+    assert '"watermark"' not in plain and '"watermark"' in marked and '"font_files"' in marked
+
+    class FakeProc:
+        returncode = 0
+        stdout = _wrapped({"output_path": "/tmp/out.jpg", "watermark": {"lines": [{"text": "Hi", "font": "Creepster"}], "corner": "upper left"}})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=FakeProc()):
+        result = runner.run_single("/tmp/in.jpg", "/tmp/out.jpg", note="watermark it")
+    assert result.watermark == {"lines": [{"text": "Hi", "font": "Creepster"}], "corner": "upper left"}
+
+    class NoneProc:
+        returncode = 0
+        stdout = _wrapped({"output_path": "/tmp/out.jpg", "watermark": "nope"})
+        stderr = ""
+
+    with patch("app.recipe_runner.subprocess.run", return_value=NoneProc()):
+        assert runner.run_single("/tmp/in.jpg", "/tmp/out.jpg", note="x").watermark is None
