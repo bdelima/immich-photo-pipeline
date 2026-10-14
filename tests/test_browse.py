@@ -213,28 +213,29 @@ def test_the_icons_and_the_pages_that_link_them_are_served(tmp_path):
     assert '{% include "_icons.html" %}' in open(rules_template).read()
 
 
-def test_the_detail_offers_a_watermark_template_and_the_route_queues_it(tmp_path):
+def test_the_detail_offers_a_watermark_template_and_the_route_draws_it(tmp_path):
     from app.library import Source
     client, store, _ = build(tmp_path)
     meta = {"taken": "2024-03-02 14:05", "place": "Costa Rica", "owner_name": "Bob"}
     store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", meta=meta)))
     first = client.get("/api/photos/r1").get_json()["watermark"]
     assert (first["title"], first["subtitle"], first["third"], first["remembered"]) == ("Costa Rica", "Bob · March 2024", "", False)
-    assert [(x["key"], x["text"]) for x in first["pieces"]] == [("title", ""), ("location", "Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
+    assert [(x["key"], x["text"]) for x in first["pieces"]] == [("title", ""), ("subject", ""), ("location", "Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
     assert first["parts"] == {"place": "Costa Rica", "owner": "Bob", "date": "March 2024", "coordinates": None}
     pieces = [{"key": "title", "label": "Title", "text": "Wings at Dusk", "t": True},
               {"key": "location", "label": "Location", "text": "Costa Rica", "u": True},
               {"key": "author", "label": "Author", "text": "Bob", "v": True},
               {"key": "date", "label": "Date", "text": "March 2024", "v": True}]
     ok = client.post("/api/photos/r1/watermark", json={"title": "Wings at Dusk", "subtitle": "Costa Rica", "third": "Bob · March 2024", "pieces": pieces})
-    assert ok.status_code == 200
-    assert "Costa Rica" in store.load().photos["r1"].chat[0].text and "Wings at Dusk" in store.load().photos["r1"].chat[0].text
+    assert ok.status_code == 200 and ok.get_json() == {"step": 3}
+    p = store.load().photos["r1"]
+    assert p.chat == [] and p.current == 3 and "Wings at Dusk" in p.revisions[3].instruction      # drawn here, no Claude
     assert client.post("/api/photos/r1/watermark", json={"title": "", "subtitle": ""}).status_code == 400
     assert client.post("/api/photos/r1/watermark", json={"title": "x", "pieces": "bad"}).status_code == 400
     # The next time the form opens it starts from what was asked for, with the same ticks.
     again = client.get("/api/photos/r1").get_json()["watermark"]
     assert (again["title"], again["subtitle"], again["third"], again["remembered"]) == ("Wings at Dusk", "Costa Rica", "Bob · March 2024", True)
     assert [(x["key"], x["t"], x["u"], x["v"]) for x in again["pieces"]] == [
-        ("title", True, False, False), ("location", False, True, False), ("author", False, False, True), ("date", False, False, True)]
+        ("title", True, False, False), ("subject", False, False, False), ("location", False, True, False), ("author", False, False, True), ("date", False, False, True)]
     assert again["parts"]["place"] == "Costa Rica"
     assert client.post("/api/photos/nope/watermark", json={"title": "x"}).status_code == 404
