@@ -67,3 +67,10 @@ def test_the_order_of_the_ticks_on_a_line_is_the_order_it_is_written_in():
 def test_the_preview_is_big_enough_to_read():
     css = read("static", "pipeline.css")
     assert "#viewer .wm .wmpreview .l1 { font-size: 1.6rem;" in css
+
+
+def test_a_photo_opens_with_every_section_of_the_sidebar_folded():
+    page = read("templates", "index.html")
+    assert "const folds = { hist: false, chat: false, wm: false };" in page
+    opening = page[page.index("async function openViewer"):page.index('$("viewer").classList.add("open")')]
+    assert 'if (!$("viewer").classList.contains("open")) for (const k of Object.keys(folds)) folds[k] = false;' in opening

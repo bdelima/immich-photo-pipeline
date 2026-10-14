@@ -293,9 +293,9 @@ async function decide(ruleId, id, accept) {
 }
 
 // ---- the sidebar's collapsible sections ----
-// History, Chat and Watermark can each be folded away. What is open is kept
-// while moving between photos and when a photo is redrawn.
-const folds = { hist: true, chat: true, wm: false };
+// History, Chat and Watermark can each be folded away. A photo opens with all of them
+// folded; what is then opened is kept while moving between photos and when a photo is redrawn.
+const folds = { hist: false, chat: false, wm: false };
 function foldSection(key, title, body) {
   const open = folds[key];
   return `<section class="fold" data-fold="${key}"><button type="button" class="foldhead" data-key="${key}" aria-expanded="${open}" aria-controls="fold-${key}">` +
@@ -321,6 +321,7 @@ async function openViewer(i) {
   open = i;
   const p = await api("/api/photos/" + list[i].id);
   if (open !== i) return;
+  if (!$("viewer").classList.contains("open")) for (const k of Object.keys(folds)) folds[k] = false;   // a photo opens with every section folded
   $("viewer").classList.add("open");
   $("vhead").innerHTML =
     `<h3>${esc(p.id.slice(0, 8))}</h3><span class="chip">${esc(p.home)}</span>` +
