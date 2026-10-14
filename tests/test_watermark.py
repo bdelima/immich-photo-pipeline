@@ -434,7 +434,7 @@ def test_line_styles_are_cleaned_and_defaulted():
 def test_the_preview_is_a_png_of_the_corner_and_says_which_corner_and_colours(tmp_path):
     store, revisions = _with_image(tmp_path, size=(600, 400))
     png, info = watermark.preview(store, revisions, "p", {"title": "Hello", "lines": [{"color": "#ff0000"}]})
-    assert png[:8] == b"\x89PNG\r\n\x1a\n" and info == {"corner": "lower right", "colors": ["#ff0000"]}
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and info == {"corner": "lower right", "colors": ["#ff0000"], "source": "none"}
     png, info = watermark.preview(store, revisions, "p", {})                       # nothing to write: the plain corner
     assert png[:4] == b"\x89PNG" and info["colors"] == []
     with pytest.raises(chat.ChatError):
@@ -516,11 +516,17 @@ def test_date_choices_are_written_the_way_people_write_them():
 
 
 class FakeImmich:
+    def __init__(self, people=None, users=("Bob", "Karen", "")):
+        self.people, self.users, self.asked = people if people is not None else {"a": ["Bob", "Sam"]}, list(users), []
+
     def list_user_names(self):
-        return ["Bob", "Karen", ""]
+        return self.users
 
     def asset_people(self, asset_id):
-        return ["Bob", "Sam"] if asset_id == "a" else []
+        self.asked.append(asset_id)
+        if self.people == "down":
+            raise RuntimeError("down")
+        return self.people.get(asset_id, [])
 
 
 def test_the_options_gather_suggestions_people_users_dates_and_fonts(tmp_path):
@@ -529,12 +535,26 @@ def test_the_options_gather_suggestions_people_users_dates_and_fonts(tmp_path):
     got = watermark.options(store, FakeImmich(), "p")
     assert got["title"] == ["Two", "One", "Macaw"]                 # newest first; a subject already a title is not repeated
     assert got["location"] == ["Saratoga Gap"] and got["people"] == ["Bob", "Sam"] and got["users"] == ["Bob", "Karen"]
+    assert got["subject"] == "Bob, Sam"
     assert got["dates"][0] == "March 2, 2024" and got["fonts"] == ["Liberation Sans", "Liberation Serif", "Liberation Mono"]
     assert got["suggested_fonts"] == ["Creepster"] and got["suggested_colors"] == ["#ff8c1a pumpkin"]
     none = watermark.options(store, None, "p")
-    assert none["people"] == [] and none["users"] == []
+    assert none["people"] == [] and none["users"] == [] and none["subject"] == ""
     with pytest.raises(chat.ChatError):
         watermark.options(store, None, "nope")
+
+
+def test_the_people_are_asked_for_with_every_accounts_key_since_names_are_per_account(tmp_path):
+    store, _ = _with_image(tmp_path)
+    p = Photo(id="c", sources=[Source(asset_id="a"), Source(asset_id="b"), Source(asset_id="")])
+    # the pipeline's key sees no names on either original; the first extra key names a's, the second b's
+    mine, karen, sam = FakeImmich({}), FakeImmich({"a": ["Karen", "Bob"]}), FakeImmich({"b": ["Sam", "Bob"]})
+    assert watermark.people_in(p, (mine, karen, sam)) == ["Karen", "Bob", "Sam"]
+    assert mine.asked == ["a", "b"] and karen.asked == ["a", "b"] and sam.asked == ["b"]   # the first that names anyone is taken
+    assert watermark.people_in(p, (FakeImmich("down"), karen)) == ["Karen", "Bob"]        # a failing account is skipped
+    assert watermark.people_in(p, ()) == []
+    got = watermark.options(store, FakeImmich({}), "p", extra=(FakeImmich({"a": ["Sam"]}),))
+    assert got["subject"] == "Sam" and got["people"] == ["Sam"]
 
 
 class FakeFontPicker:
@@ -590,6 +610,8 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     r = client.post("/api/photos/p/watermark/preview", json={"title": "Hi", "lines": [{"color": "black"}]})
     assert r.status_code == 200 and r.mimetype == "image/png"
     assert r.headers["X-Watermark-Corner"] == "lower right" and r.headers["X-Watermark-Colors"] == "#1a1a1a"
+    assert r.headers["X-Watermark-Source"] == "none"                                 # no original on file: a plain panel
+    assert client.post("/api/photos/p/watermark/whole", json={"title": "Hi"}).status_code == 404
     assert client.post("/api/photos/p/watermark/preview", json={"title": "Hi", "lines": [{"font": "Nope"}]}).status_code == 502
     o = client.get("/api/photos/p/watermark/options").get_json()
     assert o["users"] == ["Bob", "Karen"] and o["people"] == ["Bob", "Sam"] and o["dates"][0] == "March 2, 2024"
@@ -600,6 +622,16 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     assert w.status_code == 200 and w.get_json() == {"step": 1} and changed == [1]
     assert store.load().photos["p"].current == 1
     assert client.post("/api/photos/p/watermark", json={"title": ""}).status_code == 400
+    # with the original on file: the preview says so, and the whole original can be had
+    store2, revisions2 = _with_original(tmp_path / "o", size=(300, 200))
+    app2 = create_app(None, FakeImmich({}), store2, None, revisions=revisions2, thumbs=ThumbCache(str(tmp_path / "t2")),
+                      extra_immich=(FakeImmich({"a": ["Sam"]}),))
+    c2 = app2.test_client()
+    r = c2.post("/api/photos/p/watermark/preview", json={"title": "Hi"})
+    assert r.status_code == 200 and r.headers["X-Watermark-Source"] == "original"
+    r = c2.post("/api/photos/p/watermark/whole", json={"title": "Hi", "corner": "upper left"})
+    assert r.status_code == 200 and r.mimetype == "image/jpeg" and r.headers["X-Watermark-Corner"] == "upper left"
+    assert c2.get("/api/photos/p/watermark/options").get_json()["subject"] == "Sam"      # found with the extra key
 
 
 # ---- the chat path and the builder speak the same language -------------------------------
@@ -728,8 +760,65 @@ def test_a_font_file_from_anywhere_but_google_fonts_is_refused(tmp_path, monkeyp
 def test_the_photo_is_turned_upright_before_it_is_drawn_on_and_the_preview_uses_a_reduced_copy():
     import inspect
     from app import wmrender
-    for fn in (wmrender.render, wmrender.preview):
+    for fn in (wmrender.render, wmrender._reduced):
         assert "ImageOps.exif_transpose(im)" in inspect.getsource(fn)
-    preview = inspect.getsource(wmrender.preview)
-    assert "im.draft(" in preview and "img.thumbnail((PREVIEW_MAX, PREVIEW_MAX))" in preview
-    assert wmrender.PREVIEW_MAX >= 1000
+    reduced = inspect.getsource(wmrender._reduced)
+    assert "im.draft(" in reduced and "img.thumbnail((longest, longest))" in reduced
+    assert "_reduced(src_path, PREVIEW_MAX)" in inspect.getsource(wmrender.preview)
+    assert "_reduced(src_path, WHOLE_MAX)" in inspect.getsource(wmrender.whole)
+    assert wmrender.PREVIEW_MAX >= 1000 and wmrender.WHOLE_MAX >= wmrender.PREVIEW_MAX
+
+
+# ---- the preview is drawn on the original -------------------------------------------------
+
+
+def _with_original(tmp_path, size=(600, 400), colour=(20, 20, 20), **kw):
+    """A photo whose current step is a pale matted image and whose first original is on file, dark."""
+    from PIL import Image
+    store, revisions = _with_image(tmp_path, size=size, **kw)
+    orig = tmp_path / "orig.jpg"
+    Image.new("RGB", size, colour).save(orig)
+    rel = revisions.save_source("p", 0, str(orig))
+    Image.new("RGB", size, (235, 230, 220)).save(revisions.path(store.load().photos["p"].revisions[0].file))
+
+    def keep(photo):
+        photo.sources[0].file = rel
+    store.update_photo("p", keep)
+    return store, revisions
+
+
+def test_the_preview_is_drawn_on_the_original_when_there_is_one_and_on_a_plain_panel_when_not(tmp_path):
+    from PIL import Image
+    import io
+    store, revisions = _with_original(tmp_path)
+    assert watermark.original_path(store.load().photos["p"], revisions)
+    png, info = watermark.preview(store, revisions, "p", {"title": "Hello"})
+    assert info["source"] == "original" and info["colors"] == ["#ffffff"]        # white: the original is dark, the step is pale
+    with Image.open(io.BytesIO(png)) as im:
+        assert im.size == (560, 180) and max(im.getpixel((5, 5))) < 60             # the original's dark pixels, not the pale step
+    none, revisions2 = _with_image(tmp_path / "none", size=(600, 400))
+    assert watermark.original_path(none.load().photos["p"], revisions2) is None
+    png, info = watermark.preview(none, revisions2, "p", {"title": "Hello", "lines": [{"color": "#ff0000"}]})
+    assert info["source"] == "none" and info["colors"] == ["#ff0000"]
+    with Image.open(io.BytesIO(png)) as im:
+        assert im.size == (560, 180) and im.getpixel((5, 5)) == wmrender_panel()
+
+
+def wmrender_panel():
+    from app import wmrender
+    return wmrender.PLAIN_PANEL
+
+
+def test_a_click_on_the_preview_gets_the_whole_original_with_the_watermark_on_it(tmp_path):
+    from PIL import Image
+    import io
+    store, revisions = _with_original(tmp_path, size=(3000, 2000))
+    jpeg, info = watermark.whole(store, revisions, "p", {"title": "Hello", "corner": "upper left"})
+    assert jpeg[:3] == b"\xff\xd8\xff" and info["corner"] == "upper left"
+    with Image.open(io.BytesIO(jpeg)) as im:
+        assert im.size == (2000, 1333)                                           # sized for a screen, not the full original
+    assert len(store.load().photos["p"].revisions) == 1                          # nothing written
+    none, revisions2 = _with_image(tmp_path / "none")
+    with pytest.raises(chat.ChatError) as e:
+        watermark.whole(none, revisions2, "p", {"title": "Hello"})
+    assert e.value.status == 404
