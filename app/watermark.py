@@ -145,8 +145,10 @@ def starting_point(photo: Photo) -> dict:
         order = {key: i for i, (key, _) in enumerate(FIXED)}          # the five first, in order; the rest after
         pieces = sorted(fixed + saved, key=lambda x: order.get(x["key"], len(FIXED)))
         return {"title": last.get("title", ""), "subtitle": last.get("subtitle", ""), "third": last.get("third", ""),
-                "pieces": pieces, "lines": clean_lines(last.get("lines")), "remembered": True}
-    return {**template(photo), "third": "", "pieces": base_pieces(photo, placed=True), "lines": clean_lines(None), "remembered": False}
+                "pieces": pieces, "lines": clean_lines(last.get("lines")), "corner": clean_corner(last.get("corner")),
+                "style_note": clean_note(last.get("style_note")), "remembered": True}
+    return {**template(photo), "third": "", "pieces": base_pieces(photo, placed=True), "lines": clean_lines(None),
+            "corner": "auto", "style_note": "", "remembered": False}
 
 
 # ---- the style of each line ----
@@ -166,6 +168,22 @@ def clean_lines(lines) -> list[dict]:
             color = "auto"
         out.append({"font": font, "color": color, "bold": bool(x.get("bold")), "italic": bool(x.get("italic"))})
     return out
+
+
+CORNERS = ("auto",) + wmrender.CORNERS
+MAX_NOTE = 160
+
+
+def clean_corner(value) -> str:
+    """"lower right" etc., or "auto" (the renderer picks)."""
+    v = " ".join(value.lower().split()).replace("-", " ") if isinstance(value, str) else "auto"
+    return v if v in CORNERS else "auto"
+
+
+def clean_note(value) -> str:
+    """A short free-text note about the watermark's look that the fields can't say (a glow, a tilt),
+    kept so a chat edit can reproduce it."""
+    return _clean(value)[:MAX_NOTE] if isinstance(value, str) else ""
 
 
 def _styled(texts: list[str], lines) -> list[dict]:
@@ -347,7 +365,8 @@ def _request(data: dict) -> tuple[list[str], dict]:
     texts = [_line(title, "title"), _line(subtitle, "second line"), _line(third, "third line")]
     if not any(texts):
         raise chat.ChatError("there is nothing to write in the watermark")
-    last = {"title": texts[0], "subtitle": texts[1], "third": texts[2], "lines": clean_lines(data.get("lines"))}
+    last = {"title": texts[0], "subtitle": texts[1], "third": texts[2], "lines": clean_lines(data.get("lines")),
+            "corner": clean_corner(data.get("corner")), "style_note": clean_note(data.get("style_note"))}
     cleaned = clean_pieces(data.get("pieces"))
     if cleaned is not None:
         last["pieces"] = cleaned
@@ -361,7 +380,7 @@ def preview(store: LibraryStore, revisions, photo_id: str, data: dict) -> tuple[
     data = data if isinstance(data, dict) else {}
     texts = [_line(data.get("title"), "title"), _line(data.get("subtitle"), "second line"), _line(data.get("third"), "third line")]
     try:
-        return wmrender.preview(path, _styled(texts, data.get("lines")), font_dir(revisions))
+        return wmrender.preview(path, _styled(texts, data.get("lines")), font_dir(revisions), corner=clean_corner(data.get("corner")))
     except wmrender.FontError as exc:
         raise chat.ChatError(str(exc), 502)
 
@@ -386,7 +405,7 @@ def apply(store: LibraryStore, revisions, photo_id: str, data: dict) -> int:
     os.makedirs(revisions.root, exist_ok=True)
     out = os.path.join(revisions.root, f".wm-{photo_id}-{n}.jpg")
     try:
-        wmrender.render(path, out, _styled(texts, last["lines"]), font_dir(revisions))
+        wmrender.render(path, out, _styled(texts, last["lines"]), font_dir(revisions), corner=last["corner"])
     except wmrender.FontError as exc:
         raise chat.ChatError(str(exc), 502)
     except ValueError as exc:
@@ -467,6 +486,91 @@ def suggest_font(store: LibraryStore, revisions, recipe, photo_id: str, texts, h
     except KeyError:
         pass
     return {"font": font, "color": color, "color_name": color_name, "why": why}
+
+
+# ---- the watermark as the chat path sees it ----
+# A chat edit re-runs Claude from the original with every earlier step described to it (see
+# replay.py). A watermark drawn here is described in full, with the font files on disk, so Claude
+# can reproduce it faithfully when the request is about something else, and has every detail to
+# start from when the request is about the watermark itself.
+
+
+def describe(state: dict, revisions) -> str:
+    """The replay text for a watermark step: each line's text, font (and file), colour and weight,
+    the corner, and the sizing rule the renderer uses. Fonts are fetched if need be; one that can't
+    be is named without a file."""
+    if not isinstance(state, dict):
+        return ""
+    texts = [state.get("title", ""), state.get("subtitle", ""), state.get("third", "")]
+    lines = clean_lines(state.get("lines"))
+    parts = []
+    for i, (text, st) in enumerate(zip(texts, lines), 1):
+        if not isinstance(text, str) or not text.strip():
+            continue
+        try:
+            path, _ = wmrender.font_file(st["font"], st["bold"], st["italic"], font_dir(revisions))
+        except wmrender.FontError:
+            path = None
+        weight = " ".join(w for w, on in (("bold", st["bold"]), ("italic", st["italic"])) if on)
+        color = st["color"] if st["color"] != "auto" else "white on a dark patch or near-black on a light one"
+        parts.append(f'line {i} "{text.strip()}" in {st["font"]}' + (f" {weight}" if weight else "") + (f" (file {path})" if path else "")
+                     + f", colour {color}")
+    if not parts:
+        return ""
+    corner = clean_corner(state.get("corner"))
+    where = corner if corner != "auto" else "the lower right corner, or another if that one is busy"
+    note = clean_note(state.get("style_note"))
+    return ("Watermark drawn by the pipeline: " + "; ".join(parts) + f". Placed in {where} with a margin of 2.5% of the shorter "
+            "side; the first line's text height is 3.2% of the shorter side and the others' 2.4%; a soft drop shadow and a faint "
+            "highlight; right-aligned in a right-hand corner. Reproduce it exactly unless the new request is about the watermark."
+            + (f" Its look beyond that: {note}." if note else ""))
+
+
+_REPORT_KEYS = ("title", "subtitle", "third")
+
+
+def from_report(report, previous: dict | None, revisions) -> dict | None:
+    """The watermark state for a step Claude made, from what it reported drawing ({"lines":
+    [{"text","font","color","bold","italic"}...], "corner", "style_note", "font_files": {family:
+    path}}). Lines whose text is unchanged keep their pieces from `previous`; a changed line's
+    text goes to the first piece not on any line. A font file Claude fetched is kept in the font
+    folder. None when the report is empty or unusable."""
+    if not isinstance(report, dict) or not isinstance(report.get("lines"), list):
+        return None
+    raw = [x for x in report["lines"] if isinstance(x, dict)][:MAX_LINES]
+    texts = [_clean(x.get("text") if isinstance(x.get("text"), str) else "")[:MAX_LINE] for x in raw] + [""] * (MAX_LINES - len(raw))
+    if not any(texts):
+        return None
+    files = report.get("font_files") if isinstance(report.get("font_files"), dict) else {}
+    for family, src in files.items():
+        if isinstance(family, str) and isinstance(src, str) and revisions is not None:
+            wmrender.keep_font_file(_clean(family)[:wmrender.MAX_FONT_NAME], src, font_dir(revisions))
+    lines = clean_lines(raw)
+    for st in lines:
+        if st["font"] not in wmrender.INSTALLED:
+            try:
+                wmrender.check_font(st["font"], font_dir(revisions))
+            except wmrender.FontError:
+                st["font"] = wmrender.DEFAULT_FONT          # named but not drawable here: the builder falls back
+    prev = previous if isinstance(previous, dict) else {}
+    pieces = clean_pieces(prev.get("pieces")) if isinstance(prev.get("pieces"), list) else None
+    if pieces is None:
+        pieces = [{"key": k, "label": lbl, "text": "", "t": 0, "u": 0, "v": 0} for k, lbl in FIXED]
+    keys = ("t", "u", "v")
+    for i, key in enumerate(_REPORT_KEYS):
+        if texts[i] == (prev.get(key) or ""):
+            continue
+        for x in pieces:
+            x[keys[i]] = 0
+        if not texts[i]:
+            continue
+        free = next((x for x in pieces if x["key"] and not any(x[k] for k in keys)), None)
+        if free is None:
+            free = {"key": "", "label": f"Line {i + 1}", "text": "", "t": 0, "u": 0, "v": 0}
+            pieces.append(free)
+        free["text"], free[keys[i]] = texts[i], 1
+    return {"title": texts[0], "subtitle": texts[1], "third": texts[2], "pieces": pieces, "lines": lines,
+            "corner": clean_corner(report.get("corner")), "style_note": clean_note(report.get("style_note"))}
 
 
 # ---- the choices under each field ----
