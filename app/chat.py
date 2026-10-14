@@ -311,13 +311,32 @@ def _first_image_path(photo: Photo, revisions: RevisionStore) -> str:
     return revisions.path(first.file)
 
 
+def _history(photo: Photo, revisions: RevisionStore) -> list[str]:
+    """The earlier steps as Claude is told them: a step that drew a watermark here is described
+    in full (fonts, colours, corner), the others by the instruction that made them."""
+    from . import watermark                         # (imported here: watermark imports this module)
+    out = []
+    for r in photo.lineage():
+        if r.watermark and r.watermark.get("lines") is not None:
+            text = watermark.describe(r.watermark, revisions)
+            if text:
+                out.append(text)
+                continue
+        if r.instruction:
+            out.append(r.instruction)
+    return out
+
+
 def _revise(
     store: LibraryStore, revisions: RevisionStore, recipe: RecipeRunner, rules: RulesStore | None,
     photo: Photo, message: ChatMessage,
 ) -> bool:
     paths = [_first_image_path(photo, revisions)] if photo.imported else _source_paths(photo, revisions)
     active = _rules_for(rules, photo)
-    note = note_with_history(bounded_history(photo.instructions()), message.text)
+    note = note_with_history(bounded_history(_history(photo, revisions)), message.text)
+    if any(r.watermark for r in photo.lineage()):
+        from . import watermark                     # (imported here: watermark imports this module)
+        note += f" Fonts: keep any font file you fetch under {watermark.font_dir(revisions)} so it is kept."
     tmp = tempfile.mkdtemp(prefix="pipeline-chat-")
     try:
         out = os.path.join(tmp, "output.jpg")
@@ -343,6 +362,13 @@ def _revise(
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _last_watermark(photo: Photo) -> dict | None:
+    for r in reversed(photo.lineage()):
+        if r.watermark:
+            return r.watermark
+    return photo.last_watermark
+
+
 def _save_result(
     store: LibraryStore, revisions: RevisionStore, rules: RulesStore | None, photo: Photo,
     result: RecipeResult, instruction: str | None, active: list[str], watermark: dict | None = None,
@@ -355,6 +381,15 @@ def _save_result(
     first = photo.current_revision() is None
     n = photo.next_revision_number()
     rel, digest = revisions.save_revision(photo.id, n, result.output_path)
+    # What Claude says is written on the image now, kept with the step so the watermark builder
+    # shows it and draws it the same way next time (None when it reported nothing usable).
+    reported = None
+    if result.watermark is not None and not first:
+        from . import watermark as wm               # (imported here: watermark imports this module)
+        try:
+            reported = wm.from_report(result.watermark, _last_watermark(photo), revisions)
+        except Exception:
+            log.exception("could not keep the watermark Claude reported")
 
     def record(p: Photo) -> None:
         if p.trashed or p.current != expected_current or p.next_revision_number() != n:
@@ -362,7 +397,7 @@ def _save_result(
         p.revisions.append(Revision(
             n=n, parent=p.current, file=rel, instruction=None if first else instruction,
             rules=list(active), session_id=result.session_id, sha256=digest, origin="processed",
-            watermark=None if first else watermark,
+            watermark=None if first else (watermark or reported),
         ))
         p.current = n
         p.question = None

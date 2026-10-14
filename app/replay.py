@@ -10,7 +10,7 @@ from __future__ import annotations
 # How many earlier instructions are replayed (the most recent ones), and how
 # much of each is kept. Bounds the prompt for a photo adjusted many times.
 MAX_REVISION_NOTES = 15
-MAX_REVISION_NOTE_CHARS = 400
+MAX_REVISION_NOTE_CHARS = 900
 
 
 def note_with_history(history: list[str], instruction: str) -> str:
