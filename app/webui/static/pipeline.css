@@ -221,6 +221,9 @@ button.orig .ph { color: var(--muted); font-size: .8rem; }
 #viewer .wm .tog { width: 1.7rem; font-weight: 700; }
 #viewer .wm .tog.it { font-style: italic; font-weight: 400; }
 #viewer .wm .aa.on, #viewer .wm .tog.on { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-text); }
+#viewer .wm .wmrow.corner { justify-content: flex-end; gap: .5rem; padding-top: .35rem; }
+#viewer .wm .wmrow.corner .fl { font-size: .78rem; font-weight: 600; color: var(--muted); }
+#viewer .wm .wmrow.corner .pd { width: 8rem; }
 #viewer .wm .strip { display: flex; align-items: center; gap: .35rem; margin: .1rem 0 .3rem; padding: .4rem .5rem; background: var(--field); border: 1px dashed var(--line-2); border-radius: 9px; }
 #viewer .wm .strip .pd { flex: 1; min-width: 4rem; background: var(--panel); }
 #viewer .wm .strip .pd[data-color] { flex: 0 1 7rem; }
