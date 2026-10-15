@@ -14,7 +14,7 @@ from ..library import LibraryStore
 
 def register_chat_routes(
     app: Flask, store: LibraryStore, on_job: Callable[[], None] | None = None,
-    recipe=None, revisions=None, on_change: Callable[[], None] | None = None, immich=None, extra_immich=(),
+    recipe=None, revisions=None, on_change: Callable[[], None] | None = None, immich=None,
 ) -> None:
     @app.post("/api/photos/<photo_id>/chat")
     def api_chat(photo_id: str):
@@ -112,7 +112,7 @@ def register_chat_routes(
     def api_watermark_options(photo_id: str):
         """What the pulldowns under the watermark's fields offer (see watermark.options)."""
         try:
-            return jsonify(watermark.options(store, immich, photo_id, extra_immich))
+            return jsonify(watermark.options(store, immich, photo_id))
         except chat.ChatError as exc:
             return jsonify({"error": str(exc)}), exc.status
 
