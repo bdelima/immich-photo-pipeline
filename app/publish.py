@@ -14,6 +14,8 @@ fix it, so a failure is simply tried again next cycle:
                     asset, or whose asset shows an older revision
   tidy_stale        moves assets nobody uses any more to Immich's trash
                     (force=False, so they can still be recovered there)
+  purge_assets      deletes the assets of photos deleted for good from Immich
+                    for good (force=True, Immich's trash included)
 
 Immich de-duplicates uploads by checksum, so uploading bytes it has seen
 before (a revert stacks a copy of an earlier revision) hands back the
@@ -153,3 +155,35 @@ def tidy_stale(immich: ImmichClient, store: LibraryStore) -> int:
             continue
         count += len(asset_ids)
     return count
+
+
+def purge_assets(immich: ImmichClient, store: LibraryStore) -> int:
+    """Deletes from Immich, for good, the assets of photos that were deleted
+    from the pipeline. Returns how many were deleted.
+
+    An asset that a remaining photo still shows is left alone (photos with
+    identical bytes share one asset) and just dropped from the list. A
+    failure keeps the list for the next cycle."""
+    library = store.load()
+    pending = list(dict.fromkeys(library.purge_asset_ids))
+    if not pending:
+        return 0
+    in_use = {p.immich_asset_id for p in library.photos.values() if p.immich_asset_id}
+    doomed = [a for a in pending if a not in in_use]
+    if doomed:
+        try:
+            immich.delete_assets(doomed, force=True)
+        except ImmichError:
+            log.warning("could not delete %d asset(s) from Immich; will retry", len(doomed), exc_info=True)
+            return 0
+    done = frozenset(pending)
+
+    def forget(lib: Library) -> None:
+        lib.purge_asset_ids = [a for a in lib.purge_asset_ids if a not in done]
+        # An older copy of another photo queued for the trash is gone now too.
+        for p in lib.photos.values():
+            if p.stale_asset_ids:
+                p.stale_asset_ids = [a for a in p.stale_asset_ids if a not in doomed]
+
+    store.update(forget)
+    return len(doomed)

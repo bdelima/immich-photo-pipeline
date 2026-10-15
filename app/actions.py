@@ -1,12 +1,12 @@
 """What a person can do to photos from the web UI: promote to Live or take
-out of it, move to another place, trash, restore, and revert to an earlier
-step.
+out of it, move to another place, trash, restore, delete for good, and
+revert to an earlier step.
 
 Every action takes a list of photo ids (the UI's multi-select) and returns a
 Result saying which were done and which were skipped, with the reason, so one
 photo that can't be acted on never blocks the rest.
 
-Actions change the library and nothing else. Immich is brought into line
+Actions change the library and the revision store, and nothing else. Immich is brought into line
 afterwards by the poll cycle (see projection.py and publish.py), so an action
 is quick, can't fail half-way on a network error, and a failure to reach
 Immich is simply retried.
@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from .library import (
-    INBOX, REVIEW, STATUS_PROCESSING, STATUS_READY, Library, LibraryStore, Photo, now_iso,
+    INBOX, MAX_TRASH_DAYS, REVIEW, STATUS_PROCESSING, STATUS_READY, Library, LibraryStore, Photo, now_iso,
 )
 from .revert import RevertConflict, RevertError, revert_to
 from .revisions import RevisionStore
@@ -184,6 +185,75 @@ def restore(store: LibraryStore, ids) -> Result:
         result.done.append(photo.id)
 
     return _each(store, ids, one)
+
+
+def delete(store: LibraryStore, revisions: RevisionStore, ids) -> Result:
+    """Deletes trashed photos for good: the photo, its history and chat, and
+    the files in the revision store. The Immich copy (and any older copy still
+    waiting for the trash) is queued in the library and deleted from Immich,
+    its trash included, by the next poll cycle. The contributor's own
+    original is never touched. Only photos in the trash can be deleted."""
+    ids = clean_ids(ids)
+    removed: list[str] = []
+
+    def one(library, photo, result):
+        if not photo.trashed:
+            return result.skip(photo.id, "it isn't in the trash")
+        assets = [*photo.stale_asset_ids, *([photo.immich_asset_id] if photo.immich_asset_id else [])]
+        for asset_id in assets:
+            if asset_id not in library.purge_asset_ids:
+                library.purge_asset_ids.append(asset_id)
+        del library.photos[photo.id]
+        removed.append(photo.id)
+        result.done.append(photo.id)
+
+    result = _each(store, ids, one)
+    for photo_id in removed:
+        revisions.purge(photo_id)
+    return result
+
+
+def _age_days(photo: Photo, now: datetime) -> float | None:
+    try:
+        trashed = datetime.fromisoformat(photo.trashed_at or "")
+    except ValueError:
+        return None
+    if trashed.tzinfo is None:
+        trashed = trashed.replace(tzinfo=timezone.utc)
+    return (now - trashed) / timedelta(days=1)
+
+
+def expired_ids(library: Library, now: datetime | None = None) -> list[str]:
+    """Trashed photos that have been in the trash for the retention period."""
+    if not library.trash_days:
+        return []
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for photo in library.trashed_photos():
+        age = _age_days(photo, now)
+        if age is not None and age >= library.trash_days:
+            out.append(photo.id)
+    return sorted(out)
+
+
+def delete_expired(store: LibraryStore, revisions: RevisionStore, now: datetime | None = None) -> list[str]:
+    """Deletes what has outstayed the retention period. Returns the ids."""
+    ids = expired_ids(store.load(), now)
+    for start in range(0, len(ids), MAX_BATCH):
+        delete(store, revisions, ids[start:start + MAX_BATCH])
+    return ids
+
+
+def set_trash_days(store: LibraryStore, days) -> int:
+    """Sets how long photos stay in the trash (0 = never delete them)."""
+    if isinstance(days, bool) or not isinstance(days, int) or not 0 <= days <= MAX_TRASH_DAYS:
+        raise ActionError(f"days must be a whole number from 0 (never) to {MAX_TRASH_DAYS}")
+
+    def apply(library: Library) -> None:
+        library.trash_days = days
+
+    store.update(apply)
+    return days
 
 
 def revert(store: LibraryStore, revisions: RevisionStore, photo_id: str, step) -> dict:

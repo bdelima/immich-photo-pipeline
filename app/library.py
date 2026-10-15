@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
 
 SCHEMA_VERSION = 1
+DEFAULT_TRASH_DAYS = 30
+MAX_TRASH_DAYS = 365
 
 # Where a photo can live besides a managed album (named by the user).
 INBOX = "inbox"      # picked up from an entry queue, no result yet
@@ -291,6 +293,12 @@ class Library:
     photos: dict[str, Photo] = field(default_factory=dict)
     # Managed album name -> Immich album id.
     albums: dict[str, str] = field(default_factory=dict)
+    # Photos stay in the web trash this many days and are then deleted for
+    # good (0 = never). 30 for a library that has never set it.
+    trash_days: int = DEFAULT_TRASH_DAYS
+    # Immich assets of photos deleted for good, waiting for the poll cycle to
+    # delete them from Immich too (see publish.purge_assets).
+    purge_asset_ids: list[str] = field(default_factory=list)
 
     def in_home(self, home: str, *, include_trashed: bool = False) -> list[Photo]:
         return [
@@ -327,10 +335,18 @@ def _photo_from_dict(data: dict[str, Any]) -> Photo:
     return photo
 
 
+def _trash_days(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TRASH_DAYS:
+        return DEFAULT_TRASH_DAYS
+    return value
+
+
 def library_from_dict(raw: dict[str, Any]) -> Library:
     return Library(
         photos={pid: _photo_from_dict(p) for pid, p in raw.get("photos", {}).items()},
         albums=dict(raw.get("albums", {})),
+        trash_days=_trash_days(raw.get("trash_days")),
+        purge_asset_ids=[a for a in raw.get("purge_asset_ids", []) if isinstance(a, str)],
     )
 
 
@@ -339,6 +355,8 @@ def library_to_dict(library: Library) -> dict[str, Any]:
         "version": SCHEMA_VERSION,
         "photos": {pid: asdict(p) for pid, p in library.photos.items()},
         "albums": library.albums,
+        "trash_days": library.trash_days,
+        "purge_asset_ids": library.purge_asset_ids,
     }
 
 
