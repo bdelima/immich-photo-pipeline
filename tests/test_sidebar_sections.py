@@ -35,7 +35,7 @@ def test_working_on_the_watermark_folds_the_others_and_adding_it_sends_it_to_cla
 
 def test_the_form_has_a_field_per_piece_a_server_drawn_preview_and_remembers_the_rows_and_styles():
     page = read("templates", "index.html")
-    assert 'FIELDS = { title: "wmTitle", subject: "wmSubject", location: "wmLoc", author: "wmAuthor", date: "wmDate" }' in page
+    assert 'FIELDS = { title: "wmTitle", location: "wmLoc", author: "wmAuthor", date: "wmDate" }' in page
     for box in ('id="wmPreviewImg"', 'id="wmRows"', 'id="wmFields"'):
         assert box in page
     assert "Second line" not in page and "Third line" not in page and "1st" not in page   # the rows carry no labels
@@ -122,10 +122,9 @@ def test_the_preview_says_when_it_was_drawn_on_the_current_image_because_the_ori
     assert 'onOriginal = src === "original";' in page
 
 
-def test_the_subject_pulldown_is_current_and_one_combined_entry():
+def test_there_is_no_subject_field_and_nothing_asks_immich_for_people():
     page = read("templates", "index.html")
-    assert 'if (key === "subject") return options.subject ? [[options.subject, options.subject]] : [];' in page
-    assert "options.people" not in page
+    assert "wmSubject" not in page and "options.subject" not in page and "options.people" not in page
 
 
 def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it():

@@ -220,7 +220,7 @@ def test_the_detail_offers_a_watermark_template_and_the_route_queues_it_for_clau
     store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", meta=meta)))
     first = client.get("/api/photos/r1").get_json()["watermark"]
     assert (first["title"], first["subtitle"], first["third"], first["remembered"]) == ("Costa Rica", "Bob · March 2024", "", False)
-    assert [(x["key"], x["text"]) for x in first["pieces"]] == [("title", ""), ("subject", ""), ("location", "Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
+    assert [(x["key"], x["text"]) for x in first["pieces"]] == [("title", ""), ("location", "Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
     assert first["parts"] == {"place": "Costa Rica", "owner": "Bob", "date": "March 2024", "coordinates": None}
     pieces = [{"key": "title", "label": "Title", "text": "Wings at Dusk", "t": True},
               {"key": "location", "label": "Location", "text": "Costa Rica", "u": True},
@@ -245,6 +245,6 @@ def test_the_detail_offers_a_watermark_template_and_the_route_queues_it_for_clau
     again = client.get("/api/photos/r1").get_json()["watermark"]
     assert (again["title"], again["subtitle"], again["third"], again["remembered"]) == ("Wings at Dusk", "Costa Rica", "Bob · March 2024", True)
     assert [(x["key"], x["t"], x["u"], x["v"]) for x in again["pieces"]] == [
-        ("title", True, False, False), ("subject", False, False, False), ("location", False, True, False), ("author", False, False, True), ("date", False, False, True)]
+        ("title", True, False, False), ("location", False, True, False), ("author", False, False, True), ("date", False, False, True)]
     assert again["parts"]["place"] == "Costa Rica"
     assert client.post("/api/photos/nope/watermark", json={"title": "x"}).status_code == 404

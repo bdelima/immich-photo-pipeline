@@ -35,4 +35,4 @@ def test_the_preview_comes_first_then_the_rows_then_a_field_per_piece_with_its_c
     assert order == sorted(order)
     fields = page[page.index("const drawFields = () => {"):page.index("const saw = (key, html)")]
     assert fields.index('<input class="field" id="${FIELDS[key]}"') < fields.index('<select class="pd" data-pick="${key}"')
-    assert 'WM_FIXED = [["title", "Title"], ["subject", "Subject"], ["location", "Location"], ["author", "Author"], ["date", "Date"]]' in page
+    assert 'WM_FIXED = [["title", "Title"], ["location", "Location"], ["author", "Author"], ["date", "Date"]]' in page
