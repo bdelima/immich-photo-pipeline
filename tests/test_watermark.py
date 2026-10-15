@@ -562,11 +562,11 @@ def test_the_options_gather_suggestions_people_users_dates_and_fonts(tmp_path):
     got = watermark.options(store, FakeImmich(), "p")
     assert got["title"] == ["Two", "One", "Macaw"]                 # newest first; a subject already a title is not repeated
     assert got["location"] == ["Saratoga Gap"] and got["users"] == ["Bob", "Karen"]
-    assert got["people"] == [] and got["subject"] == ""             # Immich's people are not offered (USE_IMMICH_PEOPLE)
+    assert got["people"] == [] and "subject" not in got             # Immich's people are not offered (USE_IMMICH_PEOPLE)
     assert got["dates"][0] == "March 2, 2024" and got["fonts"] == ["Liberation Sans", "Liberation Serif", "Liberation Mono"]
     assert got["suggested_fonts"] == ["Creepster"] and got["suggested_colors"] == ["#ff8c1a pumpkin"]
     none = watermark.options(store, None, "p")
-    assert none["people"] == [] and none["users"] == [] and none["subject"] == ""
+    assert none["people"] == [] and none["users"] == []
     with pytest.raises(chat.ChatError):
         watermark.options(store, None, "nope")
 
@@ -583,7 +583,7 @@ def test_the_people_are_asked_for_with_every_accounts_key_since_names_are_per_ac
     # the lookup is kept but switched off: the options ask no account for people
     asked = FakeImmich({"a": ["Sam"]})
     got = watermark.options(store, FakeImmich({}), "p", extra=(asked,))
-    assert got["subject"] == "" and got["people"] == [] and asked.asked == []
+    assert got["people"] == [] and asked.asked == []
     assert watermark.USE_IMMICH_PEOPLE is False
 
 
@@ -661,7 +661,7 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     assert r.status_code == 200 and r.headers["X-Watermark-Source"] == "original"
     r = c2.post("/api/photos/p/watermark/whole", json={"title": "Hi", "corner": "upper left"})
     assert r.status_code == 200 and r.mimetype == "image/jpeg" and r.headers["X-Watermark-Corner"] == "upper left"
-    assert c2.get("/api/photos/p/watermark/options").get_json()["subject"] == ""         # Immich's people are not offered
+    assert c2.get("/api/photos/p/watermark/options").get_json()["people"] == []          # Immich's people are not offered
 
 
 # ---- the chat path and the builder speak the same language -------------------------------

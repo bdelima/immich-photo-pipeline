@@ -421,8 +421,8 @@ function originalDetails(sources) {
     ? `<p class="meta aside-note">No details of the original: Immich no longer has it.</p>` : "";
 }
 // The watermark builder. At the top, a preview drawn by the server on the corner of the photo the
-// text will sit on. Under it, the three lines, each built from chips (Title, Subject, Location,
-// Author, Date) in the order they were added, with its own font, colour and weight behind the "Aa"
+// text will sit on. Under it, the three lines, each built from chips (Title, Location, Author,
+// Date) in the order they were added, with its own font, colour and weight behind the "Aa"
 // button. Below that, a field for each piece with a pulldown of choices under it. "Current" in a
 // pulldown is what the field holds now: picking something else fills the field, and Current puts it
 // back. Adding sends Claude exactly what the preview showed, as a chat request; the result is a new
@@ -449,7 +449,7 @@ function trimHome(place, home) {
   const bits = place.split(", ");
   return home && bits.length > 1 && countryKey(bits[bits.length - 1]) === countryKey(home) ? bits.slice(0, -1).join(", ") : place;
 }
-const WM_FIXED = [["title", "Title"], ["subject", "Subject"], ["location", "Location"], ["author", "Author"], ["date", "Date"]];
+const WM_FIXED = [["title", "Title"], ["location", "Location"], ["author", "Author"], ["date", "Date"]];
 const WM_LINES = ["t", "u", "v"];
 const WM_SEP = { t: " – ", u: " · ", v: " · " };
 const WM_COLORS = [["auto", "Auto"], ["white", "White"], ["black", "Black"]];
@@ -470,12 +470,14 @@ function wireWatermark(id, w) {
   $("wmCancel").onclick = () => closeWm(true);
 
   // ---- the state: pieces, lines and choices ----
-  // The pieces: title, subject, location, author and date, each with its text and the line it is
+  // The pieces: title, location, author and date, each with its text and the line it is
   // on (t, u or v holds the order it was added in; 0 is not on that line). All of it is remembered
   // with the watermark. `raw` is the location as Immich gave it; the text leaves off the home
   // country until someone edits it.
   const tick = v => (typeof v === "number" ? Math.max(0, v | 0) : v ? 1 : 0);
-  let items = (w.pieces || []).map(x => ({ key: x.key || "", label: x.label, text: x.text || "", t: tick(x.t), u: tick(x.u), v: tick(x.v),
+  // The Subject field is not shown for now (the server still keeps a "subject" piece; it is
+  // treated like a row from an earlier version, so a saved Subject becomes a Title choice).
+  let items = (w.pieces || []).map(x => ({ key: x.key === "subject" ? "" : x.key || "", label: x.label, text: x.text || "", t: tick(x.t), u: tick(x.u), v: tick(x.v),
     raw: x.key === "location" && x.auto ? x.text : undefined }));
   for (const x of items) { let seen = false; for (const k of WM_LINES) { if (x[k] > 0 && seen) x[k] = 0; else if (x[k] > 0) seen = true; } }
   for (const [key, label] of WM_FIXED) if (!items.some(x => x.key === key)) items.push({ key, label, text: "", t: 0, u: 0, v: 0 });
@@ -500,9 +502,9 @@ function wireWatermark(id, w) {
   const lines = {};
   WM_LINES.forEach((k, i) => { const s = (w.lines || [])[i] || {}; lines[k] = { font: s.font || "Liberation Sans", color: s.color || "auto", bold: !!s.bold, italic: !!s.italic }; });
   // The choices under the fields, filled in from the server when the section opens.
-  const options = { title: extras.title, location: extras.location, subject: "", users: [], dates: [], fonts: ["Liberation Sans", "Liberation Serif", "Liberation Mono"], suggested_fonts: [], suggested_colors: [] };
+  const options = { title: extras.title, location: extras.location, users: [], dates: [], fonts: ["Liberation Sans", "Liberation Serif", "Liberation Mono"], suggested_fonts: [], suggested_colors: [] };
   let home = "";
-  const FIELDS = { title: "wmTitle", subject: "wmSubject", location: "wmLoc", author: "wmAuthor", date: "wmDate" };
+  const FIELDS = { title: "wmTitle", location: "wmLoc", author: "wmAuthor", date: "wmDate" };
   const onLine = k => items.filter(x => x[k] > 0).sort((a, b) => a[k] - b[k]);
   const lineText = k => onLine(k).map(x => x.text.trim()).filter(Boolean).join(WM_SEP[k]);
   const status = text => { $("wmStatus").textContent = text || ""; };
@@ -654,7 +656,6 @@ function wireWatermark(id, w) {
       if (w.parts && w.parts.coordinates) out.push(["__osm", "Look up (OSM)…"], ["__claude", "Ask Claude…"]);
       return [...out, ...options.location.map(t => [t, t])];
     }
-    if (key === "subject") return options.subject ? [[options.subject, options.subject]] : [];   // Current, and the people Immich named, as one entry
     if (key === "author") return options.users.map(t => [t, t]);
     if (key === "date") return options.dates.map(t => [t, t]);
     return [];
@@ -737,7 +738,7 @@ function wireWatermark(id, w) {
       const o = await api("/api/photos/" + id + "/watermark/options");
       options.title = [...o.title, ...options.title.filter(t => !o.title.includes(t))];
       options.location = [...o.location, ...options.location.filter(t => !o.location.includes(t))];
-      options.subject = o.subject || ""; options.users = o.users || []; options.dates = o.dates || [];
+      options.users = o.users || []; options.dates = o.dates || [];
       options.fonts = o.fonts || options.fonts; options.suggested_fonts = o.suggested_fonts || []; options.suggested_colors = o.suggested_colors || [];
       for (const [key] of WM_FIXED) refreshChoices(key);
       if (openStrip) drawRows();

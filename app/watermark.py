@@ -675,8 +675,8 @@ USE_IMMICH_PEOPLE = False
 def options(store: LibraryStore, immich, photo_id: str, extra=()) -> dict:
     """What the pulldowns under the fields offer: the titles and subjects Claude suggested
     (newest first), the places found, every Immich user (for the author), ways of writing the
-    date, and the fonts and colours suggested. The people Immich named in the photo (one entry,
-    the names joined with commas) only with USE_IMMICH_PEOPLE; otherwise none. Immich is asked
+    date, and the fonts and colours suggested. The people Immich named in the photo only with
+    USE_IMMICH_PEOPLE; otherwise none (the page has no Subject field for now). Immich is asked
     for the users (and the people, with the extra accounts' keys tried, see people_in); when it
     can't be, those are empty."""
     photo = store.load().photos.get(photo_id)
@@ -697,7 +697,6 @@ def options(store: LibraryStore, immich, photo_id: str, extra=()) -> dict:
         "title": recent("title") + [t for t in recent("subject") if t not in recent("title")],
         "location": recent("location"),
         "people": people,
-        "subject": ", ".join(people),
         "users": users,
         "dates": date_choices(_taken(photo)),
         "fonts": list(wmrender.INSTALLED),
