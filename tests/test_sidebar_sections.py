@@ -23,12 +23,13 @@ def test_the_sidebar_has_history_chat_and_watermark_in_that_order():
     assert order == sorted(order)
 
 
-def test_working_on_the_watermark_folds_the_others_and_adding_it_opens_the_history():
+def test_working_on_the_watermark_folds_the_others_and_adding_it_sends_it_to_claude():
     page = read("templates", "index.html")
     opening = page[page.index("const openWm = () => {"):page.index("const closeWm")]
     assert 'setFold("hist", false)' in opening and 'setFold("chat", false)' in opening and 'setFold("wm", true)' in opening
     sending = page[page.index('$("wmSend").onclick'):]
-    assert 'closeWm(false); setFold("hist", true);' in sending           # the new step is in view
+    assert 'closeWm(false); setFold("chat", true);' in sending and "watchChat(id);" in sending   # Claude at work, as for a message
+    assert "drawn: { corner: drawnCorner, colors: lastColors }" in sending                        # what the preview showed goes along
     assert "wmOpen" not in page            # the header opens the section now
 
 
@@ -115,6 +116,12 @@ def test_the_preview_is_drawn_on_the_original_and_a_click_shows_it_whole():
     assert "#viewer .wm .wmpreview.whole { cursor: zoom-in; }" in css
 
 
+def test_the_preview_says_when_it_was_drawn_on_the_current_image_because_the_original_cannot_be_opened():
+    page = read("templates", "index.html")
+    assert 'src === "current" ? " on the current image (the original can\'t be opened here) · "' in page
+    assert 'onOriginal = src === "original";' in page
+
+
 def test_the_subject_pulldown_is_current_and_one_combined_entry():
     page = read("templates", "index.html")
     assert 'if (key === "subject") return options.subject ? [[options.subject, options.subject]] : [];' in page
@@ -128,9 +135,3 @@ def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it
     assert "<h1>Immich Photo Pipeline</h1>" in brand
     assert "nav .brand { display: flex;" in read("static", "pipeline.css")
     assert '(h.closest(".brand") || h).after(el)' in read("static", "app.js")           # the version goes under the row
-
-
-def test_the_preview_says_when_it_was_drawn_on_the_current_image_because_the_original_cannot_be_opened():
-    page = read("templates", "index.html")
-    assert 'src === "current" ? " on the current image (the original can\'t be opened here) · "' in page
-    assert 'onOriginal = src === "original";' in page
