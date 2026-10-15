@@ -385,7 +385,7 @@ async function openViewer(i) {
   $("vClose").onclick = $("vClose2").onclick = closeViewer;
   wireFolds();
   wireWatermark(p.id, p.watermark);
-  for (const b of $("panel").querySelectorAll("[data-orig]")) b.onclick = () => showOriginal(p.id, +b.dataset.orig, b.dataset.type);
+  for (const b of $("panel").querySelectorAll("[data-orig]")) b.onclick = () => showOriginal(p.id, p.sources.find(x => x.index === +b.dataset.orig), b.dataset.type);
   for (const b of $("panel").querySelectorAll("[data-revert]")) b.onclick = () => revertTo(p.id, +b.dataset.revert);
   for (const b of $("panel").querySelectorAll("[data-decide]")) b.onclick = () => decide(p.proposal.id, p.id, b.dataset.decide === "1");
   const log = $("chatlog");
@@ -790,13 +790,55 @@ function wireWatermark(id, w) {
   };
   if (folds.wm) { start(); drawPreview(); }
 }
-// The original, full size, over the photo view. Click it, or press Esc, to close.
-function showOriginal(id, index, type) {
-  const o = $("overlay"), src = `/media/${id}/source/${index}`;
+// The original, full size, over the photo view. Click it, or press Esc, to close. The round "i"
+// beside Close opens what is known about this original (see originalInfo).
+function showOriginal(id, source, type) {
+  const o = $("overlay"), src = `/media/${id}/source/${source.index}`;
   o.innerHTML = (type === "video" ? `<video controls autoplay src="${src}"></video>` : `<img src="${src}" alt="Original">`) +
-    `<button class="btn sec sm close" aria-label="Close original">Close</button>`;
+    `<div class="tools"><button type="button" class="infobtn" id="infoBtn" aria-label="About this original" aria-expanded="false" aria-controls="infoPop">i</button>` +
+    `<button type="button" class="btn sec sm close" aria-label="Close original">Close</button></div>` +
+    `<div class="infopop" id="infoPop" role="dialog" aria-label="About this original" hidden>` +
+    `<h5>About this original <button type="button" class="x" id="infoX" aria-label="Close information">&times;</button></h5>${originalInfo(source)}</div>`;
   o.hidden = false;
   o.onclick = e => { if (e.target.tagName !== "VIDEO") closeOriginal(); };
+  const tools = o.querySelector(".tools");
+  tools.onclick = e => e.stopPropagation();                    // the buttons are not clicks on the photo
+  tools.querySelector(".close").onclick = closeOriginal;
+  $("infoPop").onclick = e => e.stopPropagation();
+  $("infoBtn").onclick = () => toggleInfo();
+  $("infoX").onclick = () => toggleInfo(false);
+}
+function toggleInfo(show) {
+  const pop = $("infoPop"), btn = $("infoBtn");
+  if (!pop) return false;
+  const on = show === undefined ? pop.hidden : show;
+  pop.hidden = !on; btn.setAttribute("aria-expanded", String(on));
+  return on;
+}
+// What is known about one original, in three groups: who/when/where, the picture, and the file.
+// A row with nothing recorded is left out, and so is a group with nothing in it.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function niceTaken(taken) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(taken || "");
+  if (!m) return taken || "";
+  const h = +m[4], h12 = h % 12 || 12;
+  return `${MONTHS[+m[2] - 1]} ${+m[3]}, ${m[1]}, ${h12}:${m[5]} ${h < 12 ? "AM" : "PM"}`;
+}
+function niceBytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
+function originalInfo(source) {
+  const m = (source && source.meta) || {};
+  // A place that is only the coordinates ("9.4300, -84.1600") says nothing more than the Coordinates row.
+  const coords = m.latitude != null && m.longitude != null ? m.latitude.toFixed(4) + ", " + m.longitude.toFixed(4) : "";
+  const place = m.place && !/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(m.place) ? m.place : "";
+  const size = [m.width && m.height ? `${m.width} × ${m.height}` : "", m.size_bytes ? niceBytes(m.size_bytes) : ""].filter(Boolean).join(" · ");
+  const exposure = [m.exposure_time ? m.exposure_time + " s" : "", m.f_number ? "f/" + m.f_number : "", m.iso ? "ISO " + m.iso : ""].filter(Boolean).join(" · ");
+  const groups = [
+    [["Owner", m.owner_name], [m.taken_kind === "file" ? "File date" : "Taken", niceTaken(m.taken)], ["Place", place], ["Coordinates", coords]],
+    [["Size", size], ["Camera", m.camera], ["Exposure", exposure]],
+    [["File name", source && source.file_name], ["Asset ID", source && source.asset_id, "mono"]],
+  ].map(g => g.filter(r => r[1])).filter(g => g.length);
+  if (!groups.length) return `<p class="none">Nothing is recorded about this original.</p>`;
+  return groups.map(g => `<dl>` + g.map(([k, v, cls]) => `<dt>${k}</dt><dd${cls ? ` class="${cls}"` : ""}>${esc(v)}</dd>`).join("") + `</dl>`).join("<hr>");
 }
 // The finished photo (the step now showing), full size, in the same overlay.
 function showCurrent(id, version) {
@@ -808,7 +850,7 @@ function showCurrent(id, version) {
 function closeOriginal() { const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
 function closeViewer() { closeOriginal(); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && !$("overlay").hidden) { closeOriginal(); return; }
+  if (e.key === "Escape" && !$("overlay").hidden) { if (!$("infoPop") || $("infoPop").hidden) closeOriginal(); else toggleInfo(false); return; }
   if (e.key === "Escape" && menuEl) { closeMenu(); return; }
   if (open < 0) return;
   const typing = ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName);
@@ -834,7 +876,7 @@ async function syncCounts() {
     return;
   }
   const counts = [t.queue, t.review, t.live, ...t.albums.map(a => a.count), t.trash];
-  links.forEach((a, i) => { const c = a.querySelector(".count"); if (c.textContent !== String(counts[i])) c.textContent = counts[i]; });
+  links.forEach((a, i) => paintCount(a, a.dataset.view, counts[i]));
 }
 async function syncGrid() {
   const token = loadToken, v = view;
