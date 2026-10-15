@@ -53,19 +53,46 @@ def test_the_request_to_claude_spells_the_watermark_out_and_replaces_any_earlier
     assert watermark.request({"title": "", "subtitle": ""}, revisions) == "" and watermark.request("junk", revisions) == ""
 
 
-def test_adding_queues_the_watermark_for_claude_with_the_form_and_what_the_preview_showed(tmp_path):
+def test_adding_queues_the_watermark_for_claude_with_the_form(tmp_path):
     store, revisions = _with_image(tmp_path, size=(400, 300))
     mid = watermark.submit(store, revisions, "p", {"title": "Costa Rica", "subtitle": "Bob", "third": "Wings at Dusk",
-                                                   "lines": [{"font": "Liberation Serif", "bold": True}, {"color": "#ff8c1a"}, {}],
-                                                   "drawn": {"corner": "Upper-Left", "colors": ["#FFFFFF", "#ff8c1a", "junk"]}})
+                                                   "lines": [{"font": "Liberation Serif", "bold": True}, {"color": "#ff8c1a"}, {}]})
     p = store.load().photos["p"]
     assert mid == 1 and len(p.revisions) == 1 and p.current == 0                    # nothing drawn here
     m = p.chat[0]
     assert (m.role, m.text, m.state) == ("user", 'Watermark: "Costa Rica" / "Bob" / "Wings at Dusk"', "queued")
     assert m.watermark["title"] == "Costa Rica" and m.watermark["lines"][0] == {"font": "Liberation Serif", "color": "auto", "bold": True, "italic": False}
+    assert "drawn" not in m.watermark
+
+
+def test_what_the_preview_showed_settles_auto_only_when_it_was_drawn_on_the_current_image(tmp_path):
+    """The preview's corner and colours were measured on whatever it was drawn on. Only when that
+    was the photo's current image (the original is on file but can't be opened here) is it the
+    picture Claude's result will look like; a preview on the original may have a pale mat under
+    the text by the time Claude draws, and a plain panel measured nothing, so "auto" is left to
+    Claude in those cases."""
+    drawn = {"corner": "Upper-Left", "colors": ["#FFFFFF", "#ff8c1a", "junk"]}
+    # no original on file: the preview was on a plain panel
+    store, revisions = _with_image(tmp_path / "none", size=(400, 300))
+    assert watermark.preview_source(store.load().photos["p"], revisions) == "none"
+    watermark.submit(store, revisions, "p", {"title": "x", "subtitle": "y", "drawn": drawn})
+    assert "drawn" not in store.load().photos["p"].chat[-1].watermark
+    # the original on file and openable: the preview was on it, not on the matted result
+    store, revisions = _with_original(tmp_path / "orig")
+    assert watermark.preview_source(store.load().photos["p"], revisions) == "original"
+    watermark.submit(store, revisions, "p", {"title": "x", "subtitle": "y", "drawn": drawn})
+    assert "drawn" not in store.load().photos["p"].chat[-1].watermark
+    assert "white on a dark patch or near-black on a light one" in watermark.request(store.load().photos["p"].chat[-1].watermark, revisions)
+    # the original on file but not openable here: the preview was on the current image
+    with open(revisions.path(store.load().photos["p"].sources[0].file), "wb") as fh:
+        fh.write(b"\x00\x00\x00\x18ftypheic not a picture Pillow can open")
+    assert watermark.preview_source(store.load().photos["p"], revisions) == "current"
+    watermark.submit(store, revisions, "p", {"title": "x", "subtitle": "y", "drawn": drawn})
+    m = store.load().photos["p"].chat[-1]
     assert m.watermark["drawn"] == {"corner": "upper left", "colors": ["#ffffff", "#ff8c1a"]}
+    assert "colour #ffffff" in watermark.request(m.watermark, revisions) and "Placed in upper left" in watermark.request(m.watermark, revisions)
     watermark.submit(store, revisions, "p", {"title": "x"})
-    assert "drawn" not in store.load().photos["p"].chat[1].watermark                # nothing from the preview: nothing kept
+    assert "drawn" not in store.load().photos["p"].chat[-1].watermark               # nothing from the preview: nothing kept
 
 
 def test_a_photo_that_cannot_be_changed_is_refused(tmp_path):
