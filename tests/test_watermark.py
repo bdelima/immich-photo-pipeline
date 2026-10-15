@@ -255,9 +255,9 @@ def lines_of(pieces):
 def test_the_form_starts_from_the_template_until_a_watermark_has_been_asked_for():
     got = watermark.starting_point(photo())
     assert (got["title"], got["subtitle"], got["third"], got["remembered"]) == ("Playa Hermosa, Costa Rica", "Bob · March 2024", "", False)
-    # five fields: title, subject, location, author and date; the first two are empty, the rest come from Immich
+    # four fields: title, location, author and date; the title is empty, the rest come from Immich
     assert [(x["key"], x["text"]) for x in got["pieces"]] == [
-        ("title", ""), ("subject", ""), ("location", "Playa Hermosa, Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
+        ("title", ""), ("location", "Playa Hermosa, Costa Rica"), ("author", "Bob"), ("date", "March 2024")]
     assert lines_of(got["pieces"]) == ["Playa Hermosa, Costa Rica", "Bob · March 2024", ""]
     assert got["lines"] == [{"font": "Liberation Sans", "color": "auto", "bold": False, "italic": False}] * 3
 
@@ -279,7 +279,6 @@ def test_asking_for_a_watermark_remembers_its_lines_pieces_and_ticks_for_next_ti
     assert got["remembered"] is True
     assert [(x["key"], x["label"], x["text"], x["t"], x["u"], x["v"]) for x in got["pieces"]] == [
         ("title", "Title", "Wings 'at' Dusk", True, False, False),
-        ("subject", "Subject", "", False, False, False),
         ("location", "Location", "Playa Hermosa", False, True, False),
         ("author", "Author", "Bob", False, False, True),
         ("date", "Date", "March 2024", False, False, True),
@@ -294,8 +293,21 @@ def test_a_watermark_remembered_by_an_older_version_keeps_its_lines_as_pieces():
     p = photo(last_watermark={"title": "Wings at Dusk", "subtitle": "Bob", "third": ""})
     got = watermark.starting_point(p)
     assert got["remembered"] is True and lines_of(got["pieces"]) == ["Wings at Dusk", "Bob", ""]
-    assert [x["key"] for x in got["pieces"]][:5] == ["title", "subject", "location", "author", "date"]
-    assert not any(x["t"] or x["u"] or x["v"] for x in got["pieces"] if x["key"])      # the five start unticked
+    assert [x["key"] for x in got["pieces"]][:4] == ["title", "location", "author", "date"]
+    assert not any(x["t"] or x["u"] or x["v"] for x in got["pieces"] if x["key"])      # the four start unticked
+
+
+def test_a_subject_piece_saved_by_an_older_version_comes_back_as_an_extra_choice():
+    """The Subject field is gone (Immich's named people never came through); a step that saved one
+    is still read, its piece kept as an extra rather than a field of its own."""
+    p = photo(last_watermark={"title": "Bob", "subtitle": "", "third": "", "pieces": [
+        {"key": "title", "label": "Title", "text": "", "t": 0, "u": 0, "v": 0},
+        {"key": "subject", "label": "Subject", "text": "Bob", "t": 1, "u": 0, "v": 0}]})
+    got = watermark.starting_point(p)
+    assert [(x["key"], x["label"], x["text"], x["t"]) for x in got["pieces"]] == [
+        ("title", "Title", "", 0), ("location", "Location", "Playa Hermosa, Costa Rica", 0), ("author", "Author", "Bob", 0),
+        ("date", "Date", "March 2024", 0), ("", "Subject", "Bob", 1)]
+    assert lines_of(got["pieces"]) == ["Bob", "", ""]
 
 
 def test_pieces_from_the_page_are_cleaned_and_bounded():
@@ -543,48 +555,26 @@ def test_date_choices_are_written_the_way_people_write_them():
 
 
 class FakeImmich:
-    def __init__(self, people=None, users=("Bob", "Karen", "")):
-        self.people, self.users, self.asked = people if people is not None else {"a": ["Bob", "Sam"]}, list(users), []
+    def __init__(self, users=("Bob", "Karen", "")):
+        self.users = list(users)
 
     def list_user_names(self):
         return self.users
 
-    def asset_people(self, asset_id):
-        self.asked.append(asset_id)
-        if self.people == "down":
-            raise RuntimeError("down")
-        return self.people.get(asset_id, [])
 
-
-def test_the_options_gather_suggestions_people_users_dates_and_fonts(tmp_path):
+def test_the_options_gather_suggestions_users_dates_and_fonts(tmp_path):
     store, revisions = _with_image(tmp_path, suggestions={"title": ["One", "Two"], "subject": ["Macaw", "Two"],
                                                           "location": ["Saratoga Gap"], "font": ["Creepster"], "color": ["#ff8c1a pumpkin"]})
     got = watermark.options(store, FakeImmich(), "p")
-    assert got["title"] == ["Two", "One", "Macaw"]                 # newest first; a subject already a title is not repeated
+    assert got["title"] == ["Two", "One", "Macaw"]                 # newest first; an identified subject already a title is not repeated
     assert got["location"] == ["Saratoga Gap"] and got["users"] == ["Bob", "Karen"]
-    assert got["people"] == [] and got["subject"] == ""             # Immich's people are not offered (USE_IMMICH_PEOPLE)
+    assert "people" not in got and "subject" not in got             # Immich's named people are not asked for
     assert got["dates"][0] == "March 2, 2024" and got["fonts"] == ["Liberation Sans", "Liberation Serif", "Liberation Mono"]
     assert got["suggested_fonts"] == ["Creepster"] and got["suggested_colors"] == ["#ff8c1a pumpkin"]
     none = watermark.options(store, None, "p")
-    assert none["people"] == [] and none["users"] == [] and none["subject"] == ""
+    assert none["users"] == []
     with pytest.raises(chat.ChatError):
         watermark.options(store, None, "nope")
-
-
-def test_the_people_are_asked_for_with_every_accounts_key_since_names_are_per_account(tmp_path):
-    store, _ = _with_image(tmp_path)
-    p = Photo(id="c", sources=[Source(asset_id="a"), Source(asset_id="b"), Source(asset_id="")])
-    # the pipeline's key sees no names on either original; the first extra key names a's, the second b's
-    mine, karen, sam = FakeImmich({}), FakeImmich({"a": ["Karen", "Bob"]}), FakeImmich({"b": ["Sam", "Bob"]})
-    assert watermark.people_in(p, (mine, karen, sam)) == ["Karen", "Bob", "Sam"]
-    assert mine.asked == ["a", "b"] and karen.asked == ["a", "b"] and sam.asked == ["b"]   # the first that names anyone is taken
-    assert watermark.people_in(p, (FakeImmich("down"), karen)) == ["Karen", "Bob"]        # a failing account is skipped
-    assert watermark.people_in(p, ()) == []
-    # the lookup is kept but switched off: the options ask no account for people
-    asked = FakeImmich({"a": ["Sam"]})
-    got = watermark.options(store, FakeImmich({}), "p", extra=(asked,))
-    assert got["subject"] == "" and got["people"] == [] and asked.asked == []
-    assert watermark.USE_IMMICH_PEOPLE is False
 
 
 class FakeFontPicker:
@@ -644,7 +634,7 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     assert client.post("/api/photos/p/watermark/whole", json={"title": "Hi"}).status_code == 404
     assert client.post("/api/photos/p/watermark/preview", json={"title": "Hi", "lines": [{"font": "Nope"}]}).status_code == 502
     o = client.get("/api/photos/p/watermark/options").get_json()
-    assert o["users"] == ["Bob", "Karen"] and o["people"] == [] and o["dates"][0] == "March 2, 2024"
+    assert o["users"] == ["Bob", "Karen"] and o["dates"][0] == "March 2, 2024" and "subject" not in o
     assert client.get("/api/photos/nope/watermark/options").status_code == 404
     f = client.post("/api/photos/p/font", json={"texts": ["Hi"], "hint": "spooky"}).get_json()
     assert f["font"] == "Liberation Serif" and f["color"] == "#ff8c1a"
@@ -654,14 +644,12 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     assert client.post("/api/photos/p/watermark", json={"title": ""}).status_code == 400
     # with the original on file: the preview says so, and the whole original can be had
     store2, revisions2 = _with_original(tmp_path / "o", size=(300, 200))
-    app2 = create_app(None, FakeImmich({}), store2, None, revisions=revisions2, thumbs=ThumbCache(str(tmp_path / "t2")),
-                      extra_immich=(FakeImmich({"a": ["Sam"]}),))
+    app2 = create_app(None, FakeImmich(), store2, None, revisions=revisions2, thumbs=ThumbCache(str(tmp_path / "t2")))
     c2 = app2.test_client()
     r = c2.post("/api/photos/p/watermark/preview", json={"title": "Hi"})
     assert r.status_code == 200 and r.headers["X-Watermark-Source"] == "original"
     r = c2.post("/api/photos/p/watermark/whole", json={"title": "Hi", "corner": "upper left"})
     assert r.status_code == 200 and r.mimetype == "image/jpeg" and r.headers["X-Watermark-Corner"] == "upper left"
-    assert c2.get("/api/photos/p/watermark/options").get_json()["subject"] == ""         # Immich's people are not offered
 
 
 # ---- the chat path and the builder speak the same language -------------------------------
@@ -705,7 +693,6 @@ def test_what_claude_reports_drawing_becomes_the_builders_state(tmp_path):
     store, revisions = _with_image(tmp_path)
     previous = {"title": "Scarlet macaw", "subtitle": "Bob · May 2026", "third": "", "lines": [{"font": "Liberation Serif"}], "pieces": [
         {"key": "title", "label": "Title", "text": "Scarlet macaw", "t": 1, "u": 0, "v": 0},
-        {"key": "subject", "label": "Subject", "text": "", "t": 0, "u": 0, "v": 0},
         {"key": "location", "label": "Location", "text": "Saratoga", "t": 0, "u": 0, "v": 0},
         {"key": "author", "label": "Author", "text": "Bob", "t": 0, "u": 1, "v": 0},
         {"key": "date", "label": "Date", "text": "May 2026", "t": 0, "u": 2, "v": 0}]}
@@ -716,13 +703,13 @@ def test_what_claude_reports_drawing_becomes_the_builders_state(tmp_path):
     assert (got["title"], got["subtitle"], got["third"]) == ("Scarlet macaw", "Bob · May 2026", "")
     assert got["lines"][0] == {"font": "Liberation Mono", "color": "#ff0000", "bold": True, "italic": False}
     assert got["corner"] == "upper left" and got["style_note"] == "a red glow"
-    assert [(x["key"], x["t"], x["u"]) for x in got["pieces"]][:5] == [("title", 1, 0), ("subject", 0, 0), ("location", 0, 0), ("author", 0, 1), ("date", 0, 2)]
+    assert [(x["key"], x["t"], x["u"]) for x in got["pieces"]][:4] == [("title", 1, 0), ("location", 0, 0), ("author", 0, 1), ("date", 0, 2)]
     # a rewritten line: its old pieces come off it and the new text goes to the first piece then free
     got = watermark.from_report({"lines": [{"text": "Wings at Dusk"}, {"text": "Bob · May 2026"}]}, previous, revisions)
     assert got["title"] == "Wings at Dusk"
     title = got["pieces"][0]
     assert (title["key"], title["text"], title["t"]) == ("title", "Wings at Dusk", 1)
-    assert [x["u"] for x in got["pieces"]] == [0, 0, 0, 1, 2]                    # the unchanged line keeps its pieces
+    assert [x["u"] for x in got["pieces"]] == [0, 0, 1, 2]                       # the unchanged line keeps its pieces
     # with nothing before it, and a font file Claude fetched, which is kept so the family draws from now on
     src = tmp_path / "fetched.ttf"
     src.write_bytes(open("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", "rb").read())
