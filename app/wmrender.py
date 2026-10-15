@@ -314,6 +314,15 @@ def render(src_path: str, dest_path: str, lines: list[dict], cache_dir: str | No
     return {"corner": lay["corner"], "colors": ["#%02x%02x%02x" % c for c in colors]}
 
 
+def can_open(src_path: str) -> bool:
+    """Whether this server can open the picture at all (a HEIC usually can't be), without decoding it."""
+    try:
+        with Image.open(src_path):
+            return True
+    except _OPEN_ERRORS:
+        return False
+
+
 def _reduced(src_path: str, longest: int) -> Image.Image:
     """The photo upright, in RGB, no larger than `longest` on its longer side."""
     try:

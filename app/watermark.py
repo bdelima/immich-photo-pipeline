@@ -338,8 +338,9 @@ def _workable(store: LibraryStore, revisions, photo_id: str) -> tuple[Photo, str
     return photo, path
 
 
-def _request(data: dict) -> tuple[list[str], dict]:
-    """The lines' texts and what to remember, from what the form sent."""
+def _request(data: dict, source: str = "none") -> tuple[list[str], dict]:
+    """The lines' texts and what to remember, from what the form sent. `source` is what the
+    preview was drawn on (see preview_source)."""
     title, subtitle, third = data.get("title"), data.get("subtitle"), data.get("third")
     texts = [_line(title, "title"), _line(subtitle, "second line"), _line(third, "third line")]
     if not any(texts):
@@ -350,13 +351,17 @@ def _request(data: dict) -> tuple[list[str], dict]:
     if cleaned is not None:
         last["pieces"] = cleaned
     # What the preview showed: the corner the renderer picked and the colour each line came out
-    # in, so Claude is told exactly those rather than "auto".
+    # in. They stand in for "auto" only when the preview was drawn on the current image, the one
+    # Claude's result will look like. A preview on the original (or on a plain panel) measured a
+    # different picture: a dark sky there may be a pale mat under the text on the result, so "auto"
+    # is left for Claude to judge on the image it draws on.
     drawn = data.get("drawn") if isinstance(data.get("drawn"), dict) else {}
-    corner = clean_corner(drawn.get("corner"))
-    colors = drawn.get("colors") if isinstance(drawn.get("colors"), list) else []
-    colors = [c.strip().lower() for c in colors if isinstance(c, str) and wmrender.parse_color(c)][:MAX_LINES]
-    if corner != "auto" or colors:
-        last["drawn"] = {"corner": corner, "colors": colors}
+    if source == "current":
+        corner = clean_corner(drawn.get("corner"))
+        colors = drawn.get("colors") if isinstance(drawn.get("colors"), list) else []
+        colors = [c.strip().lower() for c in colors if isinstance(c, str) and wmrender.parse_color(c)][:MAX_LINES]
+        if corner != "auto" or colors:
+            last["drawn"] = {"corner": corner, "colors": colors}
     return texts, last
 
 
@@ -373,6 +378,16 @@ def original_path(photo: Photo, revisions) -> str | None:
             if os.path.exists(path):
                 return path
     return None
+
+
+def preview_source(photo: Photo, revisions) -> str:
+    """What the preview is drawn on: "original" when the first original is on file and can be
+    opened here, "current" when it is on file but can't be (a HEIC, for example), so the photo's
+    current image stands in, and "none" when there is no original (an imported photo)."""
+    path = original_path(photo, revisions)
+    if not path:
+        return "none"
+    return "original" if wmrender.can_open(path) else "current"
 
 
 def _preview_texts(data: dict) -> list[str]:
@@ -431,7 +446,7 @@ def submit(store: LibraryStore, revisions, photo_id: str, data: dict) -> int:
     what the preview showed are kept with the request, so the step remembers them and the form
     starts from them next time. Fonts are fetched first, so Claude is given files that exist."""
     photo, _ = _workable(store, revisions, photo_id)
-    texts, last = _request(data if isinstance(data, dict) else {})
+    texts, last = _request(data if isinstance(data, dict) else {}, preview_source(photo, revisions))
     for text, st in zip(texts, last["lines"]):
         if text:
             try:
@@ -502,7 +517,8 @@ def _spec(state: dict, revisions) -> str:
     """The watermark spelled out for Claude: each line's text, font (and file), colour and weight,
     the corner, and the sizing rule the renderer uses. "" when there is nothing to write. Fonts
     are fetched if need be; one that can't be is named without a file. The corner and colours
-    the preview showed (`drawn`) stand in for "auto"."""
+    the preview showed (`drawn`, kept only when the preview was on the current image) stand in
+    for "auto"; otherwise "auto" is left for Claude to judge on the image it draws on."""
     if not isinstance(state, dict):
         return ""
     texts = [state.get("title", ""), state.get("subtitle", ""), state.get("third", "")]
