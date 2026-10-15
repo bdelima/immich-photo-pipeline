@@ -664,13 +664,21 @@ def people_in(photo: Photo, clients) -> list[str]:
     return people
 
 
+# Immich's named people are not offered for the Subject field for now. Immich keeps people per
+# account (a face in one household member's photo is a different person from the same face in
+# another's), and its people-sharing feature does not merge what was already recognised, so in
+# practice the originals' faces are unnamed and the lookup returned nothing. Set this to True to
+# ask again (people_in, with every account's key) once the household's people are named in Immich.
+USE_IMMICH_PEOPLE = False
+
+
 def options(store: LibraryStore, immich, photo_id: str, extra=()) -> dict:
     """What the pulldowns under the fields offer: the titles and subjects Claude suggested
-    (newest first), the places found, the people Immich named in the photo (one entry, the
-    names joined with commas), every Immich user (for the author), ways of writing the date,
-    and the fonts and colours suggested. Immich is asked for the users and people, with the
-    extra accounts' keys tried for the people (see people_in); when it can't be, those are
-    empty."""
+    (newest first), the places found, every Immich user (for the author), ways of writing the
+    date, and the fonts and colours suggested. The people Immich named in the photo (one entry,
+    the names joined with commas) only with USE_IMMICH_PEOPLE; otherwise none. Immich is asked
+    for the users (and the people, with the extra accounts' keys tried, see people_in); when it
+    can't be, those are empty."""
     photo = store.load().photos.get(photo_id)
     if photo is None:
         raise chat.ChatError("no such photo", 404)
@@ -683,7 +691,8 @@ def options(store: LibraryStore, immich, photo_id: str, extra=()) -> dict:
             users = [u for u in immich.list_user_names() if u]
         except Exception:
             users = []
-        people = people_in(photo, (immich, *extra))
+        if USE_IMMICH_PEOPLE:
+            people = people_in(photo, (immich, *extra))
     return {
         "title": recent("title") + [t for t in recent("subject") if t not in recent("title")],
         "location": recent("location"),

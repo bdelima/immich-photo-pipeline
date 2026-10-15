@@ -561,8 +561,8 @@ def test_the_options_gather_suggestions_people_users_dates_and_fonts(tmp_path):
                                                           "location": ["Saratoga Gap"], "font": ["Creepster"], "color": ["#ff8c1a pumpkin"]})
     got = watermark.options(store, FakeImmich(), "p")
     assert got["title"] == ["Two", "One", "Macaw"]                 # newest first; a subject already a title is not repeated
-    assert got["location"] == ["Saratoga Gap"] and got["people"] == ["Bob", "Sam"] and got["users"] == ["Bob", "Karen"]
-    assert got["subject"] == "Bob, Sam"
+    assert got["location"] == ["Saratoga Gap"] and got["users"] == ["Bob", "Karen"]
+    assert got["people"] == [] and got["subject"] == ""             # Immich's people are not offered (USE_IMMICH_PEOPLE)
     assert got["dates"][0] == "March 2, 2024" and got["fonts"] == ["Liberation Sans", "Liberation Serif", "Liberation Mono"]
     assert got["suggested_fonts"] == ["Creepster"] and got["suggested_colors"] == ["#ff8c1a pumpkin"]
     none = watermark.options(store, None, "p")
@@ -580,8 +580,11 @@ def test_the_people_are_asked_for_with_every_accounts_key_since_names_are_per_ac
     assert mine.asked == ["a", "b"] and karen.asked == ["a", "b"] and sam.asked == ["b"]   # the first that names anyone is taken
     assert watermark.people_in(p, (FakeImmich("down"), karen)) == ["Karen", "Bob"]        # a failing account is skipped
     assert watermark.people_in(p, ()) == []
-    got = watermark.options(store, FakeImmich({}), "p", extra=(FakeImmich({"a": ["Sam"]}),))
-    assert got["subject"] == "Sam" and got["people"] == ["Sam"]
+    # the lookup is kept but switched off: the options ask no account for people
+    asked = FakeImmich({"a": ["Sam"]})
+    got = watermark.options(store, FakeImmich({}), "p", extra=(asked,))
+    assert got["subject"] == "" and got["people"] == [] and asked.asked == []
+    assert watermark.USE_IMMICH_PEOPLE is False
 
 
 class FakeFontPicker:
@@ -641,7 +644,7 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     assert client.post("/api/photos/p/watermark/whole", json={"title": "Hi"}).status_code == 404
     assert client.post("/api/photos/p/watermark/preview", json={"title": "Hi", "lines": [{"font": "Nope"}]}).status_code == 502
     o = client.get("/api/photos/p/watermark/options").get_json()
-    assert o["users"] == ["Bob", "Karen"] and o["people"] == ["Bob", "Sam"] and o["dates"][0] == "March 2, 2024"
+    assert o["users"] == ["Bob", "Karen"] and o["people"] == [] and o["dates"][0] == "March 2, 2024"
     assert client.get("/api/photos/nope/watermark/options").status_code == 404
     f = client.post("/api/photos/p/font", json={"texts": ["Hi"], "hint": "spooky"}).get_json()
     assert f["font"] == "Liberation Serif" and f["color"] == "#ff8c1a"
@@ -658,7 +661,7 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     assert r.status_code == 200 and r.headers["X-Watermark-Source"] == "original"
     r = c2.post("/api/photos/p/watermark/whole", json={"title": "Hi", "corner": "upper left"})
     assert r.status_code == 200 and r.mimetype == "image/jpeg" and r.headers["X-Watermark-Corner"] == "upper left"
-    assert c2.get("/api/photos/p/watermark/options").get_json()["subject"] == "Sam"      # found with the extra key
+    assert c2.get("/api/photos/p/watermark/options").get_json()["subject"] == ""         # Immich's people are not offered
 
 
 # ---- the chat path and the builder speak the same language -------------------------------
