@@ -425,7 +425,8 @@ function originalDetails(sources) {
 // Author, Date) in the order they were added, with its own font, colour and weight behind the "Aa"
 // button. Below that, a field for each piece with a pulldown of choices under it. "Current" in a
 // pulldown is what the field holds now: picking something else fills the field, and Current puts it
-// back. Adding draws the text here as a new step in the history; Claude is only asked for ideas.
+// back. Adding sends Claude exactly what the preview showed, as a chat request; the result is a new
+// step in the history, in place of any earlier watermark.
 function watermarkForm(w) {
   return `<div class="wm"><div id="wmForm">` +
     `<div class="wmpreview" id="wmPreview"><img id="wmPreviewImg" alt="Watermark preview"><span class="cap" id="wmCorner">Preview</span><span class="hint" id="wmWhole" hidden>Click to see it whole</span></div>` +
@@ -507,7 +508,7 @@ function wireWatermark(id, w) {
   const status = text => { $("wmStatus").textContent = text || ""; };
 
   // ---- the preview: drawn by the server, a moment after the last change ----
-  let previewTimer = null, previewUrl = null, previewSeq = 0, lastColors = [], onOriginal = false;
+  let previewTimer = null, previewUrl = null, previewSeq = 0, lastColors = [], onOriginal = false, drawnCorner = "auto";
   const previewBody = () => { const [title, subtitle, third] = WM_LINES.map(lineText); return { title, subtitle, third, lines: WM_LINES.map(k => lines[k]), corner }; };
   const drawPreview = () => {
     clearTimeout(previewTimer);
@@ -525,6 +526,7 @@ function wireWatermark(id, w) {
         previewUrl = URL.createObjectURL(blob);
         const img = $("wmPreviewImg"); if (img) img.src = previewUrl;
         const drawn = r.headers.get("X-Watermark-Corner") || "lower right";
+        drawnCorner = drawn;
         const src = r.headers.get("X-Watermark-Source");
         onOriginal = src === "original";
         // On the original when there is one (a rough idea of the text against the picture, with no
@@ -749,19 +751,25 @@ function wireWatermark(id, w) {
     refreshChoices("location");
   };
   drawFields(); drawRows();
+  // Add: the watermark goes to Claude as a chat request, with what the preview showed (the corner
+  // it picked and the colour each line came out in) so Claude draws exactly that; the photo is
+  // re-run with its history and this watermark in place of any earlier one. The chat shows it
+  // working, as for any message, and the page reloads when the new step is in.
   $("wmSend").onclick = async () => {
     $("wmSend").disabled = true;
     const [title, subtitle, third] = WM_LINES.map(lineText);
     const r = await fetch("/api/photos/" + id + "/watermark", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, subtitle, third, pieces: items.map(({ key, label, text, t, u, v }) => ({ key, label, text, t, u, v })), lines: WM_LINES.map(k => lines[k]), corner, style_note: styleNote }) });
+      body: JSON.stringify({ title, subtitle, third, pieces: items.map(({ key, label, text, t, u, v }) => ({ key, label, text, t, u, v })), lines: WM_LINES.map(k => lines[k]), corner, style_note: styleNote,
+        drawn: { corner: drawnCorner, colors: lastColors } }) });
     const out = await r.json().catch(() => ({}));
     $("wmSend").disabled = false;
     if (!r.ok) { status(out.error || "That didn't work."); return; }
-    say("Watermark added as step " + out.step + ".");
-    closeWm(false); setFold("hist", true);
-    await select(view, true, true);
-    const i = list.findIndex(p => p.id === id);
-    if (i >= 0) openViewer(i);
+    say("Watermark sent to Claude; the new step appears when it is done.");
+    closeWm(false); setFold("chat", true);
+    const p = await api("/api/photos/" + id);
+    const log = $("chatlog");
+    if (log) { log.innerHTML = chatHtml(p); log.scrollTop = log.scrollHeight; }
+    watchChat(id);
   };
   if (folds.wm) { start(); drawPreview(); }
 }
