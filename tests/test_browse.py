@@ -213,7 +213,7 @@ def test_the_icons_and_the_pages_that_link_them_are_served(tmp_path):
     assert '{% include "_icons.html" %}' in open(rules_template).read()
 
 
-def test_the_detail_offers_a_watermark_template_and_the_route_draws_it(tmp_path):
+def test_the_detail_offers_a_watermark_template_and_the_route_queues_it_for_claude(tmp_path):
     from app.library import Source
     client, store, _ = build(tmp_path)
     meta = {"taken": "2024-03-02 14:05", "place": "Costa Rica", "owner_name": "Bob"}
@@ -227,12 +227,21 @@ def test_the_detail_offers_a_watermark_template_and_the_route_draws_it(tmp_path)
               {"key": "author", "label": "Author", "text": "Bob", "v": True},
               {"key": "date", "label": "Date", "text": "March 2024", "v": True}]
     ok = client.post("/api/photos/r1/watermark", json={"title": "Wings at Dusk", "subtitle": "Costa Rica", "third": "Bob · March 2024", "pieces": pieces})
-    assert ok.status_code == 200 and ok.get_json() == {"step": 3}
+    assert ok.status_code == 200 and ok.get_json() == {"id": 1}
     p = store.load().photos["r1"]
-    assert p.chat == [] and p.current == 3 and "Wings at Dusk" in p.revisions[3].instruction      # drawn here, no Claude
+    # queued for Claude as a chat request, the form's state kept with it; no step yet
+    assert [(m.role, m.text, m.state) for m in p.chat] == [("user", 'Watermark: "Wings at Dusk" / "Costa Rica" / "Bob · March 2024"', "queued")]
+    assert p.chat[0].watermark["title"] == "Wings at Dusk" and p.chat[0].watermark["pieces"][0]["t"] == 1 and p.current == 2
     assert client.post("/api/photos/r1/watermark", json={"title": "", "subtitle": ""}).status_code == 400
     assert client.post("/api/photos/r1/watermark", json={"title": "x", "pieces": "bad"}).status_code == 400
-    # The next time the form opens it starts from what was asked for, with the same ticks.
+    # Once Claude has drawn it, the step keeps the state, and the next time the form opens it
+    # starts from what was asked for, with the same ticks.
+    from app.library import Revision
+    def done(photo):
+        photo.revisions.append(Revision(n=3, parent=2, file=photo.revisions[2].file, instruction=photo.chat[0].text, watermark=photo.chat[0].watermark))
+        photo.current = 3
+        photo.chat[0].state = "done"
+    store.update_photo("r1", done)
     again = client.get("/api/photos/r1").get_json()["watermark"]
     assert (again["title"], again["subtitle"], again["third"], again["remembered"]) == ("Wings at Dusk", "Costa Rica", "Bob · March 2024", True)
     assert [(x["key"], x["t"], x["u"], x["v"]) for x in again["pieces"]] == [
