@@ -119,6 +119,7 @@ select.field { appearance: none; padding-right: 2rem; box-shadow: 0 3px 0 var(--
 #viewer .photo header h3 { margin: 0 .3rem 0 0; font-size: 1.05rem; }
 #viewer .stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; position: relative; padding: 1rem; }
 #viewer .stage img, #viewer .stage video { max-width: 100%; max-height: 100%; border-radius: 10px; object-fit: contain; }
+#viewer .stage img { cursor: zoom-in; }
 #viewer .stage .nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: 1.3rem; padding: .3rem .8rem; }
 #viewer .stage .nav.prev { left: 1rem; } #viewer .stage .nav.next { right: 1rem; }
 #viewer .photo footer { padding: .6rem 1.1rem; background: var(--panel); border-top: 1px solid var(--line); font-size: .82rem; color: var(--muted); }
@@ -215,6 +216,11 @@ button.orig .ph { color: var(--muted); font-size: .8rem; }
 /* The three lines, built from chips. */
 #viewer .wm .wmrows { border-bottom: 1px solid rgba(128, 128, 128, .25); padding-bottom: .4rem; }
 #viewer .wm .wmrow { display: flex; align-items: center; gap: .4rem; padding: .2rem 0; }
+#viewer .wm .mv { flex: none; display: flex; flex-direction: column; gap: 1px; }
+#viewer .wm .mv button { width: 1.3rem; height: .85rem; padding: 0; font-size: .55rem; line-height: 1; color: var(--muted); background: var(--field);
+                         border: 1px solid var(--line-2); border-radius: 4px; cursor: pointer; }
+#viewer .wm .mv button:hover:not(:disabled) { color: var(--accent-text); border-color: var(--accent-text); }
+#viewer .wm .mv button:disabled { opacity: .3; cursor: default; }
 #viewer .wm .chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; min-height: 1.7rem; }
 #viewer .wm .chip { display: inline-flex; align-items: center; background: var(--accent-soft); color: var(--accent-text); border-radius: 99px; padding: .1rem .25rem .1rem .6rem; font-size: .8rem; font-weight: 600; }
 #viewer .wm .chip button { font: inherit; font-weight: 400; color: inherit; background: none; border: 0; cursor: pointer; padding: 0 .3rem; opacity: .7; }

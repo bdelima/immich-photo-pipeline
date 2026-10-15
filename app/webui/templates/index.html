@@ -345,6 +345,8 @@ async function openViewer(i) {
     : `<img src="/media/${p.id}/full?v=${p.version}" alt="">`) +
     (i > 0 ? `<button class="btn sec nav prev" id="vPrev" aria-label="Previous">&lsaquo;</button>` : "") +
     (i < list.length - 1 ? `<button class="btn sec nav next" id="vNext" aria-label="Next">&rsaquo;</button>` : "");
+  const shown = $("stage").querySelector("img");                   // the finished photo: a click shows it large, like an original
+  if (shown) shown.onclick = () => showCurrent(p.id, p.version);
   if ($("vPrev")) $("vPrev").onclick = () => openViewer(open - 1);
   if ($("vNext")) $("vNext").onclick = () => openViewer(open + 1);
   const cur = p.history.find(h => h.current);
@@ -571,7 +573,7 @@ function wireWatermark(id, w) {
   const colorLabel = v => { const known = WM_COLORS.find(([k]) => k === v); if (known) return known[1]; const s = options.suggested_colors.find(x => x.split(" ")[0] === v); return s ? (s.split(" ").slice(1).join(" ") || v) : v; };
   const drawRows = () => {
     const free = items.filter(x => !WM_LINES.some(k => x[k] > 0));
-    $("wmRows").innerHTML = WM_LINES.map(k => {
+    $("wmRows").innerHTML = WM_LINES.map((k, i) => {
       const on = onLine(k);
       const chips = on.length ? on.map(x => `<span class="chip" data-chip="${esc(x.key)}">${esc(x.label)}<button type="button" data-off="${esc(x.key)}" aria-label="Take ${esc(x.label)} off this line">×</button></span>`).join("")
         : `<span class="blank">blank</span>`;
@@ -593,13 +595,27 @@ function wireWatermark(id, w) {
           (fontHint === k ? `<div class="hint"><input class="field" data-fonthint="${k}" maxlength="80" placeholder="Hint (optional), e.g. something spooky"><button type="button" class="send" data-fontsend="${k}" aria-label="Ask">&rarr;</button></div>` : "") +
           (fontSaw[k] ? `<div class="res">${fontSaw[k]}</div>` : "");
       }
-      return `<div class="wmrow" data-line="${k}"><span class="chips">${chips}</span>${add}${aa}</div>${strip}`;
+      const mv = `<span class="mv"><button type="button" data-up="${k}" aria-label="Move this line up"${i === 0 ? " disabled" : ""}>&#9650;</button>` +
+        `<button type="button" data-down="${k}" aria-label="Move this line down"${i === WM_LINES.length - 1 ? " disabled" : ""}>&#9660;</button></span>`;
+      return `<div class="wmrow" data-line="${k}">${mv}<span class="chips">${chips}</span>${add}${aa}</div>${strip}`;
     }).join("") +
       `<div class="wmrow corner"><span class="fl">Corner</span><select class="pd" data-corner aria-label="Corner">${WM_CORNERS.map(([v, l]) => `<option value="${v}"${v === corner ? " selected" : ""}>${l}</option>`).join("")}</select></div>` +
       (styleNote ? `<div class="res">Look, from a chat edit: <b>${esc(styleNote)}</b></div>` : "");
     const rows = $("wmRows");
     rows.querySelector("[data-corner]").onchange = e => { corner = e.target.value; drawPreview(); };
     for (const b of rows.querySelectorAll("[data-off]")) b.onclick = () => { const it = fixed(b.dataset.off); for (const k of WM_LINES) it[k] = 0; drawRows(); drawPreview(); };
+    // A line moves with everything it holds: its chips (and their order), its font, colour and weight, and the
+    // open style strip and font note, by swapping it with the line above or below.
+    const swapLines = (k, j) => {
+      for (const x of items) [x[k], x[j]] = [x[j], x[k]];
+      [lines[k], lines[j]] = [lines[j], lines[k]];
+      [fontSaw[k], fontSaw[j]] = [fontSaw[j], fontSaw[k]];
+      if (openStrip === k) openStrip = j; else if (openStrip === j) openStrip = k;
+      if (fontHint === k) fontHint = j; else if (fontHint === j) fontHint = k;
+      drawRows(); drawPreview();
+    };
+    for (const b of rows.querySelectorAll("[data-up]")) b.onclick = () => swapLines(b.dataset.up, WM_LINES[WM_LINES.indexOf(b.dataset.up) - 1]);
+    for (const b of rows.querySelectorAll("[data-down]")) b.onclick = () => swapLines(b.dataset.down, WM_LINES[WM_LINES.indexOf(b.dataset.down) + 1]);
     for (const s of rows.querySelectorAll("[data-add]")) s.onchange = () => {
       const it = fixed(s.value), k = s.dataset.add; if (!it) return;
       for (const j of WM_LINES) it[j] = 0;                                 // a piece goes on one line only
@@ -781,6 +797,13 @@ function showOriginal(id, index, type) {
     `<button class="btn sec sm close" aria-label="Close original">Close</button>`;
   o.hidden = false;
   o.onclick = e => { if (e.target.tagName !== "VIDEO") closeOriginal(); };
+}
+// The finished photo (the step now showing), full size, in the same overlay.
+function showCurrent(id, version) {
+  const o = $("overlay");
+  o.innerHTML = `<img src="/media/${id}/full?v=${version}" alt="The photo"><button class="btn sec sm close" aria-label="Close photo">Close</button>`;
+  o.hidden = false;
+  o.onclick = () => closeOriginal();
 }
 function closeOriginal() { const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
 function closeViewer() { closeOriginal(); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }

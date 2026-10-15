@@ -128,6 +128,29 @@ def test_the_subject_field_is_not_shown_and_a_saved_subject_becomes_a_title_choi
     assert 'key: x.key === "subject" ? "" : x.key || ""' in page
 
 
+def test_each_line_has_up_and_down_arrows_that_swap_it_with_its_neighbour_taking_all_it_holds():
+    page = read("templates", "index.html")
+    assert 'data-up="${k}" aria-label="Move this line up"${i === 0 ? " disabled" : ""}' in page            # nothing above the first line
+    assert 'data-down="${k}" aria-label="Move this line down"${i === WM_LINES.length - 1 ? " disabled" : ""}' in page
+    swap = page[page.index("const swapLines = (k, j) => {"):page.index('for (const b of rows.querySelectorAll("[data-up]"))')]
+    for bit in ("[x[k], x[j]] = [x[j], x[k]]",                       # the chips and their order
+                "[lines[k], lines[j]] = [lines[j], lines[k]]",         # the font, colour and weight
+                "[fontSaw[k], fontSaw[j]] = [fontSaw[j], fontSaw[k]]", "openStrip", "fontHint",
+                "drawRows(); drawPreview();"):
+        assert bit in swap
+    assert page.index('class="mv"') < page.index('<span class="chips">${chips}</span>')                    # the arrows are on the left
+    assert "#viewer .wm .mv" in read("static", "pipeline.css")
+
+
+def test_clicking_the_finished_photo_shows_it_large_in_the_overlay_the_original_uses():
+    page = read("templates", "index.html")
+    assert "if (shown) shown.onclick = () => showCurrent(p.id, p.version);" in page
+    fn = page[page.index("function showCurrent"):page.index("function closeOriginal")]
+    assert '`<img src="/media/${id}/full?v=${version}" alt="The photo">' in fn and 'const o = $("overlay");' in fn
+    assert "o.onclick = () => closeOriginal();" in fn                        # a click, or Esc, closes it as for an original
+    assert "#viewer .stage img { cursor: zoom-in; }" in read("static", "pipeline.css")
+
+
 def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it():
     page = read("templates", "index.html")
     brand = page[page.index('<div class="brand">'):page.index("</nav>")]
