@@ -1,3 +1,36 @@
+{% macro rule_card(r, proposed) %}
+      <div class="card rule" data-rule="{{ r.id }}">
+        <div class="rule-view rule-row">
+          <div><div class="label">Applies to</div><span class="chip{{ '' if proposed else ' blue' }}">{{ scope_labels[r.scope] }}</span></div>
+          <div class="body"><div class="label">Rule {{ r.id }}</div>{{ r.text }}</div>
+          <div class="actions">
+            {% if proposed %}<button class="btn sm" data-act="activate" data-id="{{ r.id }}">Save</button>{% endif %}
+            <button class="btn sec sm" data-edit="{{ r.id }}">Edit</button>
+            <button class="btn sec sm" data-act="retire" data-id="{{ r.id }}">{{ 'Dismiss' if proposed else 'Retire' }}</button>
+          </div>
+        </div>
+        {% if r.previous %}
+        <div class="prev rule-view">
+          <div class="head"><span class="label">Previous version</span><span class="chip">{{ scope_labels[r.previous.scope] }}</span>
+            <button class="btn sec sm" data-act="swap" data-id="{{ r.id }}">Use this version</button></div>
+          <div class="txt">{{ r.previous.text }}</div>
+        </div>
+        {% endif %}
+        <div class="editor" hidden>
+          <div>
+            <div class="label">Applies to</div>
+            <select class="field" data-scope aria-label="Applies to">
+              {% for s in scopes %}<option value="{{ s }}"{{ ' selected' if s == r.scope else '' }}>{{ scope_labels[s] }}</option>{% endfor %}
+            </select>
+          </div>
+          <div>
+            <div class="label">Rule {{ r.id }}</div>
+            <textarea class="field" data-text maxlength="{{ max_chars }}">{{ r.text }}</textarea>
+          </div>
+          <div class="foot"><button class="btn" data-save="{{ r.id }}">Save changes</button><button class="btn sec" data-cancel>Cancel</button><span class="counter"></span></div>
+        </div>
+      </div>
+{% endmacro %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -26,11 +59,7 @@
 
       <h3 class="section-title">Active</h3>
       {% for r in active %}
-      <div class="card rule">
-        <div><div class="label">Applies to</div><span class="chip blue">{{ scope_labels[r.scope] }}</span></div>
-        <div class="body"><div class="label">Rule {{ r.id }}</div>{{ r.text }}</div>
-        <div class="actions"><button class="btn sec sm" data-act="retire" data-id="{{ r.id }}">Retire</button></div>
-      </div>
+      {{ rule_card(r, false) }}
       {% else %}
       <p class="muted">No rules yet.</p>
       {% endfor %}
@@ -38,30 +67,25 @@
       {% if proposed %}
       <h3 class="section-title">Proposed by the recipe (not in use until saved)</h3>
       {% for r in proposed %}
-      <div class="card rule">
-        <div><div class="label">Applies to</div><span class="chip">{{ scope_labels[r.scope] }}</span></div>
-        <div class="body"><div class="label">Rule {{ r.id }}</div>{{ r.text }}</div>
-        <div class="actions">
-          <button class="btn sm" data-act="activate" data-id="{{ r.id }}">Save</button>
-          <button class="btn sec sm" data-act="retire" data-id="{{ r.id }}">Dismiss</button>
-        </div>
-      </div>
+      {{ rule_card(r, true) }}
       {% endfor %}
       {% endif %}
 
       <h3 class="section-title">Add a rule</h3>
       <form id="add-form" class="card add-form">
-        <div>
-          <div class="label">Applies to</div>
-          <select class="field" name="scope" aria-label="Applies to">
-            {% for s in scopes %}<option value="{{ s }}">{{ scope_labels[s] }}</option>{% endfor %}
-          </select>
+        <div class="editor">
+          <div>
+            <div class="label">Applies to</div>
+            <select class="field" name="scope" aria-label="Applies to">
+              {% for s in scopes %}<option value="{{ s }}">{{ scope_labels[s] }}</option>{% endfor %}
+            </select>
+          </div>
+          <div>
+            <div class="label">Rule</div>
+            <textarea class="field" name="text" maxlength="{{ max_chars }}" placeholder="e.g. Keep collage items balanced by size" required></textarea>
+          </div>
+          <div class="foot"><button class="btn" type="submit">Add rule</button><span class="counter"></span></div>
         </div>
-        <div class="grow">
-          <div class="label">Rule</div>
-          <input class="field" type="text" name="text" maxlength="300" placeholder="e.g. Keep collage items balanced by size" required>
-        </div>
-        <button class="btn" type="submit">Add rule</button>
       </form>
     </div>
   </main>
@@ -78,10 +102,38 @@
     const data = await res.json();
     if (res.ok) { location.reload(); } else { status.textContent = "Error: " + data.error; }
   }
+  // A text box that grows with what is typed, with a count of characters used.
+  function wireBox(box, counter, limit) {
+    const grow = () => {
+      box.style.height = "auto";
+      box.style.height = Math.max(88, Math.min(box.scrollHeight + 2, 320)) + "px";
+      counter.textContent = box.value.length + " / " + limit;
+      counter.className = "counter" + (box.value.length >= limit ? " over" : "");
+    };
+    box.addEventListener("input", grow);
+    grow();
+    return grow;
+  }
+  const LIMIT = {{ max_chars }};
   document.querySelectorAll("button[data-act]").forEach((b) => {
     b.addEventListener("click", () => call(`/api/rules/${b.dataset.id}/${b.dataset.act}`));
   });
-  document.getElementById("add-form").addEventListener("submit", (e) => {
+  document.querySelectorAll(".rule[data-rule]").forEach((card) => {
+    const editor = card.querySelector(".editor"), box = card.querySelector("[data-text]");
+    const grow = wireBox(box, card.querySelector(".counter"), LIMIT);
+    const show = editing => {
+      editor.hidden = !editing;
+      card.querySelectorAll(".rule-view").forEach((el) => { el.hidden = editing; });
+      if (editing) { grow(); box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    };
+    card.querySelector("[data-edit]").addEventListener("click", () => show(true));
+    card.querySelector("[data-cancel]").addEventListener("click", () => { box.value = box.defaultValue; show(false); });
+    card.querySelector("[data-save]").addEventListener("click", () =>
+      call(`/api/rules/${card.dataset.rule}/edit`, { text: box.value, scope: card.querySelector("[data-scope]").value }));
+  });
+  const addForm = document.getElementById("add-form");
+  wireBox(addForm.querySelector("textarea"), addForm.querySelector(".counter"), LIMIT);
+  addForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     call("/api/rules", { text: f.get("text"), scope: f.get("scope") });

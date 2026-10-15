@@ -22,7 +22,7 @@ def asset(**kw):
 def test_a_captured_photo_gives_its_local_time_place_and_owner():
     assert metadata.meta_from_asset(asset()) == {
         "taken": "2024-03-02 14:05", "taken_kind": "captured", "place": "Playa Hermosa, Guanacaste, Costa Rica",
-        "latitude": 10.5, "longitude": -85.7, "owner_name": "Bob"}
+        "latitude": 10.5, "longitude": -85.7, "owner_name": "Bob", "details": 2}
 
 
 def test_without_a_capture_date_the_file_date_is_used_and_labelled_as_such():
@@ -95,11 +95,11 @@ def stocked(tmp_path, **sources):
 
 
 def test_backfill_fills_missing_details_and_leaves_known_ones_alone(tmp_path):
-    store = stocked(tmp_path, a={}, b={"taken": "2020-01-01 10:00"}, c={})
+    store = stocked(tmp_path, a={}, b={"taken": "2020-01-01 10:00", "details": 2}, c={})
     clients, tried = [Account({"a": asset(), "b": asset()})], {}
     assert metadata.backfill(clients, store, tried=tried) == 2
     metas = [s.meta for s in store.load().photos["p"].sources]
-    assert metas[0]["owner_name"] == "Bob" and metas[1] == {"taken": "2020-01-01 10:00"}
+    assert metas[0]["owner_name"] == "Bob" and metas[1] == {"taken": "2020-01-01 10:00", "details": 2}
     assert metas[2] == {"unavailable": True}
     assert metadata.backfill(clients, store, tried=tried) == 0            # nothing left to ask about
 
@@ -112,3 +112,34 @@ def test_backfill_retries_later_when_immich_cannot_be_reached_without_starving_t
     # the two that just failed go to the back of the line
     assert metadata.backfill([Account({"a": asset(), "b": asset(), "c": asset()})], store, limit=2, tried=tried) == 2
     assert [bool(s.meta) for s in store.load().photos["p"].sources] == [True, False, True]
+
+
+def test_picture_size_camera_and_exposure_are_read_when_present():
+    item = asset(exifInfo={"dateTimeOriginal": "2024-03-02T20:05:09.000Z", "exifImageWidth": 4032, "exifImageHeight": 3024,
+                           "fileSizeInByte": 3250000, "make": "Google", "model": "Pixel 8 Pro", "exposureTime": "1/250",
+                           "fNumber": 1.7000000476837158, "iso": 50})
+    meta = metadata.meta_from_asset(item)
+    assert (meta["width"], meta["height"], meta["size_bytes"], meta["camera"]) == (4032, 3024, 3250000, "Pixel 8 Pro")
+    assert (meta["exposure_time"], meta["f_number"], meta["iso"]) == ("1/250", 1.7, 50)
+
+
+def test_the_make_stands_in_for_a_missing_model_and_a_numeric_exposure_time_is_written_as_a_fraction():
+    meta = metadata.meta_from_asset(asset(exifInfo={"make": "Canon", "exposureTime": 0.004}))
+    assert meta["camera"] == "Canon" and meta["exposure_time"] == "1/250"
+    assert metadata.meta_from_asset(asset(exifInfo={"exposureTime": 2}))["exposure_time"] == "2"
+    plain = metadata.meta_from_asset(asset(exifInfo={}))
+    for key in ("width", "height", "size_bytes", "camera", "exposure_time", "f_number", "iso"):
+        assert key not in plain
+
+
+def test_backfill_tops_up_details_kept_before_more_was_read_and_keeps_what_was_there(tmp_path):
+    older = {"taken": "2020-01-01 10:00", "place": "Old Place", "owner_name": "Bob"}
+    store = stocked(tmp_path, a=dict(older), gone=dict(older), done={**older, "details": 2}, lost={"unavailable": True})
+    item = asset(exifInfo={"city": "New City", "model": "Pixel 8 Pro"})
+    clients, tried = [Account({"a": item, "done": item})], {}
+    assert metadata.backfill(clients, store, tried=tried) == 2                # a, and gone (which Immich no longer has)
+    metas = {s.asset_id: s.meta for s in store.load().photos["p"].sources}
+    assert metas["a"]["camera"] == "Pixel 8 Pro" and metas["a"]["details"] == 2 and metas["a"]["place"] == "New City"
+    assert metas["gone"] == {**older, "details": 2}                           # kept, and not asked about again
+    assert metas["done"] == {**older, "details": 2} and metas["lost"] == {"unavailable": True}
+    assert metadata.backfill(clients, store, tried=tried) == 0

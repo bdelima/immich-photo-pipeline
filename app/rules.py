@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 SCOPES = ("all", "single", "collage", "imported")
 SCOPE_LABELS = {"all": "all photos", "single": "single photos", "collage": "collages", "imported": "imported photos"}
 MAX_ACTIVE_RULES = 20
-MAX_RULE_CHARS = 300
+MAX_RULE_CHARS = 400
 
 
 class RulesFull(RuntimeError):
@@ -60,6 +60,9 @@ class Rule:
     # asset can be matched back to it.
     source_asset_id: str | None = None
     created_at: str = ""
+    # The wording and scope this rule had before its last edit ({"text", "scope"}),
+    # kept so an edit that does not work out can be undone; None if never edited.
+    previous: dict | None = None
 
 
 def clean_rule_text(text: str) -> str:
@@ -200,6 +203,45 @@ class RulesStore:
             )
             rules.append(rule)
             self._save(next_id + 1, rules)
+            return rule
+
+    def edit(self, rule_id: str, text: str, scope: str) -> Rule | None:
+        """Changes the wording and/or scope of an active or proposed rule. The
+        wording and scope it had are kept as its previous version (one step back:
+        a later edit replaces it). Saving with nothing changed keeps everything as
+        it was. Returns None for an unknown id; raises ValueError for a bad scope,
+        unusable text, or a retired rule."""
+        if scope not in SCOPES:
+            raise ValueError(f"unknown scope {scope!r}")
+        cleaned = clean_rule_text(text)
+        with self._exclusive():
+            next_id, rules = self._load()
+            rule = next((r for r in rules if r.id == rule_id), None)
+            if rule is None:
+                return None
+            if rule.status == "retired":
+                raise ValueError("a retired rule can't be edited")
+            if (cleaned, scope) != (rule.text, rule.scope):
+                rule.previous = {"text": rule.text, "scope": rule.scope}
+                rule.text, rule.scope = cleaned, scope
+                self._save(next_id, rules)
+            return rule
+
+    def swap_previous(self, rule_id: str) -> Rule | None:
+        """Puts the previous version back; what was showing becomes the previous
+        version, so swapping again goes forward again. Returns None for an
+        unknown id; raises ValueError if the rule has no previous version."""
+        with self._exclusive():
+            next_id, rules = self._load()
+            rule = next((r for r in rules if r.id == rule_id), None)
+            if rule is None:
+                return None
+            if not rule.previous:
+                raise ValueError("this rule has no previous version")
+            now = {"text": rule.text, "scope": rule.scope}
+            rule.text, rule.scope = rule.previous["text"], rule.previous["scope"]
+            rule.previous = now
+            self._save(next_id, rules)
             return rule
 
     def set_status(self, rule_id: str, status: str) -> Rule | None:

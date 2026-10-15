@@ -13,7 +13,7 @@ from ..health import HealthStore
 from ..immich_client import ImmichClient
 from ..library import REVIEW, STATUS_FAILED, STATUS_PROCESSING, Library, LibraryStore
 from ..revisions import RevisionStore
-from ..rules import MAX_ACTIVE_RULES, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
+from ..rules import MAX_ACTIVE_RULES, MAX_RULE_CHARS, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
 from ..thumbs import ThumbCache
 from ..version import current as current_version
 from . import events
@@ -86,7 +86,7 @@ def _overview(library: Library) -> dict:
 def _rule_json(rule) -> dict:
     return {
         "id": rule.id, "text": rule.text, "scope": rule.scope, "status": rule.status,
-        "origin": rule.origin, "created_at": rule.created_at,
+        "origin": rule.origin, "created_at": rule.created_at, "previous": rule.previous,
     }
 
 
@@ -98,7 +98,7 @@ def _register_rules_routes(app: Flask, rules: RulesStore) -> None:
             "rules.html",
             active=[r for r in all_rules if r.status == "active"],
             proposed=[r for r in all_rules if r.status == "proposed"],
-            scopes=SCOPES, scope_labels=SCOPE_LABELS, limit=MAX_ACTIVE_RULES,
+            scopes=SCOPES, scope_labels=SCOPE_LABELS, limit=MAX_ACTIVE_RULES, max_chars=MAX_RULE_CHARS,
         )
 
     @app.get("/api/rules")
@@ -118,6 +118,27 @@ def _register_rules_routes(app: Flask, rules: RulesStore) -> None:
         except RulesFull as exc:
             return jsonify({"error": str(exc)}), 409
         return jsonify({"ok": True, "rule": _rule_json(rule)}), 201
+
+    @app.post("/api/rules/<rule_id>/edit")
+    def api_edit_rule(rule_id: str):
+        body = request.get_json(silent=True) or {}
+        try:
+            rule = rules.edit(rule_id, body.get("text", ""), body.get("scope", "all"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if rule is None:
+            return jsonify({"error": f"unknown rule {rule_id!r}"}), 404
+        return jsonify({"ok": True, "rule": _rule_json(rule)})
+
+    @app.post("/api/rules/<rule_id>/swap")
+    def api_swap_rule(rule_id: str):
+        try:
+            rule = rules.swap_previous(rule_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if rule is None:
+            return jsonify({"error": f"unknown rule {rule_id!r}"}), 404
+        return jsonify({"ok": True, "rule": _rule_json(rule)})
 
     @app.post("/api/rules/<rule_id>/retire")
     def api_retire_rule(rule_id: str):
