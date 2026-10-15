@@ -307,3 +307,29 @@ button.orig .ph { color: var(--muted); font-size: .8rem; }
   #viewer .close-top { display: inline-block; }
   #viewer .asidebar .btn { display: none; }
 }
+
+/* ---- deleting from the trash: confirmation dialog, days-left badge, auto-delete editor ---- */
+.btn.danger { color: #fff; border-color: #8f1d1d; background: linear-gradient(#d24848, #b42323); box-shadow: 0 3px 0 #7a1717, 0 6px 10px rgba(155, 28, 28, .25); }
+.modalback { position: fixed; inset: 0; background: rgba(8, 11, 18, .55); display: flex; align-items: center; justify-content: center; z-index: 60; }
+.modal { width: 27rem; max-width: calc(100% - 2rem); max-height: calc(100% - 2rem); overflow-y: auto; background: var(--panel); border: 1px solid var(--line-2);
+         border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, .45); padding: 1.2rem 1.3rem 1.1rem; }
+.modal h3 { margin: 0 0 .5rem; font-size: 1.1rem; }
+.modal p { margin: .4rem 0; color: var(--soft); font-size: .92rem; line-height: 1.45; }
+.modal .strip2 { display: flex; align-items: center; gap: .4rem; margin: .7rem 0 .5rem; }
+.modal .strip2 img, .modal .strip2 span { width: 3rem; height: 3rem; border-radius: 9px; border: 1px solid var(--line-2); object-fit: cover; background: var(--chip); }
+.modal .strip2 small { color: var(--muted); font-size: .8rem; }
+.modal ul { margin: .4rem 0 .4rem 1.1rem; padding: 0; color: var(--soft); font-size: .9rem; line-height: 1.5; }
+.modal .keep { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: .55rem; margin-top: .7rem; }
+.modal .acts, .pop .acts { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1rem; }
+.badge.age.due { background: var(--bad); }
+.pop { position: fixed; z-index: 40; width: 23rem; max-width: calc(100% - 1rem); background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px;
+       box-shadow: var(--pop); padding: .9rem 1rem; }
+.pop h4 { margin: 0 0 .6rem; font-size: .98rem; }
+.pop label.opt { display: flex; align-items: center; gap: .5rem; padding: .35rem .2rem; font-size: .9rem; cursor: pointer; }
+.pop label.opt .field { width: 4.6rem; padding: .25rem .5rem; }
+.pop .presets { display: flex; gap: .35rem; margin: .3rem 0 .2rem 1.6rem; flex-wrap: wrap; }
+.pop .presets button { font: inherit; font-size: .78rem; padding: .12rem .6rem; border-radius: 99px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--soft); cursor: pointer; }
+.pop .presets button.on { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-text); }
+.pop .warnbox { margin: .6rem 0 .2rem; padding: .5rem .65rem; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-size: .84rem; border: 1px solid var(--bad-line); }
+.pop .fine { font-size: .8rem; color: var(--muted); margin: .6rem 0 0; line-height: 1.4; }
+.pop .acts { margin-top: .8rem; gap: .5rem; }
