@@ -169,6 +169,8 @@ def purge_assets(immich: ImmichClient, store: LibraryStore) -> int:
     if not pending:
         return 0
     in_use = {p.immich_asset_id for p in library.photos.values() if p.immich_asset_id}
+    # An original of any remaining photo is never deleted either (see actions.delete).
+    in_use |= {s.asset_id for p in library.photos.values() for s in p.sources if s.asset_id}
     doomed = [a for a in pending if a not in in_use]
     if doomed:
         try:

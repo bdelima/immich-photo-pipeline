@@ -10,7 +10,7 @@ from app import actions
 from app.actions import ActionError
 from app.cycle import Cycle
 from app.immich_client import ImmichError
-from app.library import DEFAULT_TRASH_DAYS, LibraryStore, Photo, Revision
+from app.library import DEFAULT_TRASH_DAYS, LibraryStore, Photo, Revision, Source
 from app.publish import purge_assets
 from app.revisions import RevisionStore
 from app.thumbs import ThumbCache
@@ -120,6 +120,36 @@ def test_purge_also_clears_the_asset_from_other_photos_waiting_to_trash_it(tmp_p
     actions.delete(store, revisions, ["t1"])
     purge_assets(FakeImmich(), store)
     assert "old-1" not in store.load().photos["t2"].stale_asset_ids
+
+
+def test_a_published_copy_that_is_the_original_asset_itself_is_never_queued_for_deletion(tmp_path):
+    store, revisions = build(tmp_path)
+
+    def add(lib):
+        # a video kept exactly as it was added: Immich handed back the original's own asset
+        lib.photos["v"] = Photo(id="v", home="review", media_type="video", trashed=True, trashed_at=ago(40),
+                                sources=[Source(asset_id="ORIGINAL-1")], immich_asset_id="ORIGINAL-1",
+                                stale_asset_ids=["ORIGINAL-1", "copy-1"])
+
+    store.update(add)
+    actions.delete(store, revisions, ["v"])
+    assert store.load().purge_asset_ids == ["copy-1"]                     # a real copy is still queued, the original is not
+    immich = FakeImmich()
+    purge_assets(immich, store)
+    assert immich.deleted == [(["copy-1"], True)]
+
+
+def test_the_original_of_a_photo_that_stays_is_not_deleted_from_immich_either(tmp_path):
+    store, revisions = build(tmp_path)
+
+    def add(lib):
+        lib.photos["keeper"] = Photo(id="keeper", home="review", sources=[Source(asset_id="shared-1")])
+        lib.purge_asset_ids.append("shared-1")
+
+    store.update(add)
+    immich = FakeImmich()
+    purge_assets(immich, store)
+    assert immich.deleted == [] and "shared-1" not in store.load().purge_asset_ids
 
 
 # ---- retention --------------------------------------------------------------

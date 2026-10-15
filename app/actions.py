@@ -195,12 +195,22 @@ def delete(store: LibraryStore, revisions: RevisionStore, ids) -> Result:
     original is never touched. Only photos in the trash can be deleted."""
     ids = clean_ids(ids)
     removed: list[str] = []
+    originals: set[str] | None = None
 
     def one(library, photo, result):
+        nonlocal originals
         if not photo.trashed:
             return result.skip(photo.id, "it isn't in the trash")
+        if originals is None:
+            # Every photo's own originals, taken before anything is removed. A published copy can be
+            # the very same Immich asset as an original (Immich stores identical bytes once, so a
+            # photo kept exactly as it was added, a video for example, can come back as the original
+            # itself), and an original is never queued for deletion.
+            originals = {s.asset_id for p in library.photos.values() for s in p.sources if s.asset_id}
         assets = [*photo.stale_asset_ids, *([photo.immich_asset_id] if photo.immich_asset_id else [])]
         for asset_id in assets:
+            if asset_id in originals:
+                continue
             if asset_id not in library.purge_asset_ids:
                 library.purge_asset_ids.append(asset_id)
         del library.photos[photo.id]
