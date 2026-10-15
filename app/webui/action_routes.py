@@ -1,4 +1,4 @@
-"""The routes behind the action bar: promote, move, trash, restore and revert.
+"""The routes behind the action bar: promote, move, trash, restore, delete and revert.
 
 Each takes JSON, acts through app/actions.py, and answers
 {"done": [...], "skipped": [{"id", "reason"}]}. A request that is wrong as a
@@ -64,6 +64,25 @@ def register_action_routes(
     @app.post("/api/photos/restore")
     def api_restore():
         return respond(lambda: actions.restore(store, body().get("ids")))
+
+    @app.post("/api/photos/delete")
+    def api_delete():
+        return respond(lambda: actions.delete(store, revisions, body().get("ids")))
+
+    @app.get("/api/trash-settings")
+    def api_trash_settings():
+        return jsonify({"trash_days": store.load().trash_days})
+
+    @app.post("/api/trash-settings")
+    def api_set_trash_settings():
+        try:
+            days = actions.set_trash_days(store, body().get("trash_days"))
+        except actions.ActionError as exc:
+            return jsonify({"error": str(exc)}), 400
+        # A shorter limit takes effect at once, as the editor says it will.
+        gone = actions.delete_expired(store, revisions)
+        changed()
+        return jsonify({"trash_days": days, "deleted": len(gone)})
 
     @app.post("/api/photos/<photo_id>/revert")
     def api_revert(photo_id: str):

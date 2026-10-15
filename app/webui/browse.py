@@ -83,6 +83,7 @@ def summary(photo: Photo) -> dict:
         "home": photo.home,
         "live": photo.live,
         "trashed": photo.trashed,
+        "trashed_at": photo.trashed_at,
         "imported": photo.imported,
         "created_at": photo.created_at,
         "has_image": rev is not None,
@@ -169,7 +170,7 @@ def register_browse_routes(
         photos = photos_in_view(store.load(), request.args.get("view", "review"))
         if photos is None:
             return jsonify({"error": "unknown view"}), 400
-        return jsonify({"photos": [summary(p) for p in photos]})
+        return jsonify({"photos": [summary(p) for p in photos], "trash_days": store.load().trash_days})
 
     @app.get("/api/photos/<photo_id>")
     def api_photo(photo_id: str):

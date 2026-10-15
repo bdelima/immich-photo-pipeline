@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import logging
 
-from . import metadata
+from . import actions, metadata
 from .albums import ensure_home_albums
 from .immich_client import ImmichClient
 from .intake import Intake
 from .library import LibraryStore
 from .notes import sync_notes
 from .projection import sync_albums, sync_live, sync_review
-from .publish import publish_pending, tidy_stale
+from .publish import publish_pending, purge_assets, tidy_stale
 from .revisions import RevisionStore
 from .sharing import VIEWER, ensure_shared
 from .worker import Worker
@@ -70,7 +70,14 @@ class Cycle:
         if self.pipeline_url:
             self._step("updating album notes", lambda: sync_notes(
                 self.immich, self.store.load(), self.pipeline_url, self.live_album_id, self.review_album_id))
-        # Last, so an asset is out of every album before it goes to the trash.
+        # Photos past the trash limit go first, then every deleted photo's copies
+        # are deleted from Immich for good. Both come before tidy_stale, which
+        # would otherwise move a deleted photo's waiting copy to Immich's trash
+        # and forget its id, leaving it there for Immich's own retention.
+        if self.revisions is not None:
+            self._step("deleting old trash", lambda: actions.delete_expired(self.store, self.revisions))
+        self._step("deleting from Immich", lambda: purge_assets(self.immich, self.store))
+        # After the albums are synced, so an asset is out of every album before it goes to the trash.
         self._step("clearing old copies", lambda: tidy_stale(self.immich, self.store))
 
     def _intake(self) -> None:
