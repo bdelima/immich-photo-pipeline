@@ -30,67 +30,56 @@ def test_junk_dates_are_left_out():
     assert watermark.month_year("soon") == "" and watermark.month_year("2024-13-01") == ""
 
 
-def test_the_request_to_claude_carries_both_lines_and_says_it_is_for_this_photo():
-    text = watermark.instruction("Costa Rica", "Bob · March 2024")
-    assert '"Costa Rica"' in text and '"Bob · March 2024"' in text and "this photo only" in text
-    assert "lower right corner" in text and "Arial" in text and "3D" in text
+def test_the_summary_names_the_lines_and_refuses_nothing_or_too_much():
+    assert watermark.summary("Costa Rica", "Bob · March 2024") == 'Watermark: "Costa Rica" / "Bob · March 2024"'
+    assert watermark.summary('He said "hi"', "", "C") == """Watermark: "He said 'hi'" / "C\""""
+    for bad in ((" ", ""), ("x" * 121, ""), (5, ""), ("", "", "x" * 121), ("A", "", 5)):
+        with pytest.raises(chat.ChatError):
+            watermark.summary(*bad)
 
 
-def test_a_single_line_and_quotes_are_handled():
-    assert 'the title "He said \'hi\'" on top' in watermark.instruction('He said "hi"', "")
-    assert 'rule): "Bob".' in watermark.instruction("", "Bob")
+def test_the_request_to_claude_spells_the_watermark_out_and_replaces_any_earlier_one(tmp_path):
+    store, revisions = _with_image(tmp_path)
+    state = {"title": "Costa Rica", "subtitle": "Bob", "third": "", "lines": [{"font": "Liberation Serif", "bold": True}, {"color": "#ff8c1a"}],
+             "corner": "auto", "drawn": {"corner": "upper left", "colors": ["#ffffff", "#ff8c1a"]}}
+    text = watermark.request(state, revisions)
+    assert text.startswith("Draw this watermark on the photo, exactly as specified")
+    assert 'line 1 "Costa Rica" in Liberation Serif bold (file /usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf), colour #ffffff' in text
+    assert 'line 2 "Bob" in Liberation Sans (file' in text and "colour #ff8c1a" in text
+    assert "Placed in upper left" in text and "3.2%" in text                     # the corner the preview picked stands in for auto
+    assert "replaces any earlier one" in text and "Change nothing else" in text
+    assert "Placed in the lower right corner, or another" in watermark.request({"title": "x"}, revisions)   # nothing drawn yet: the rule
+    assert "Placed in lower left" in watermark.request({"title": "x", "corner": "lower left", "drawn": {"corner": "upper left"}}, revisions)  # a chosen corner wins
+    assert watermark.request({"title": "", "subtitle": ""}, revisions) == "" and watermark.request("junk", revisions) == ""
 
 
-def test_a_third_line_is_allowed_but_never_required():
-    text = watermark.instruction("Costa Rica", "Bob", "Wings at Dusk")
-    assert 'the title "Costa Rica" on top and "Bob" underneath it and "Wings at Dusk" below that.' in text
-    assert 'the title "A" on top and "C" below that.' in watermark.instruction("A", "", "C")
-    assert 'rule): "C".' in watermark.instruction("", "", "C")
-    assert "below that" not in watermark.instruction("A", "B")
-    with pytest.raises(chat.ChatError):
-        watermark.instruction("", "", "x" * 121)
-    with pytest.raises(chat.ChatError):
-        watermark.instruction("A", "", 5)
-
-
-def test_an_empty_or_overlong_watermark_is_refused():
-    with pytest.raises(chat.ChatError):
-        watermark.instruction(" ", "")
-    with pytest.raises(chat.ChatError):
-        watermark.instruction("x" * 121, "")
-    with pytest.raises(chat.ChatError):
-        watermark.instruction(5, "")
-
-
-def test_adding_draws_the_watermark_here_as_a_new_step_and_asks_claude_nothing(tmp_path):
-    from PIL import Image
+def test_adding_queues_the_watermark_for_claude_with_the_form_and_what_the_preview_showed(tmp_path):
     store, revisions = _with_image(tmp_path, size=(400, 300))
-    before = store.load().photos["p"]
-    step = watermark.apply(store, revisions, "p", {"title": "Costa Rica", "subtitle": "Bob", "third": "Wings at Dusk",
-                                                   "lines": [{"font": "Liberation Serif", "bold": True}, {"color": "#ff8c1a"}, {}]})
+    mid = watermark.submit(store, revisions, "p", {"title": "Costa Rica", "subtitle": "Bob", "third": "Wings at Dusk",
+                                                   "lines": [{"font": "Liberation Serif", "bold": True}, {"color": "#ff8c1a"}, {}],
+                                                   "drawn": {"corner": "Upper-Left", "colors": ["#FFFFFF", "#ff8c1a", "junk"]}})
     p = store.load().photos["p"]
-    assert step == 1 and p.current == 1 and len(p.revisions) == 2 and p.chat == []
-    rev = p.revisions[1]
-    assert rev.instruction == 'Watermark: "Costa Rica" / "Bob" / "Wings at Dusk"' and rev.origin == "processed"
-    assert rev.watermark["title"] == "Costa Rica" and rev.watermark["lines"][0] == {"font": "Liberation Serif", "color": "auto", "bold": True, "italic": False}
-    assert rev.watermark["lines"][1]["color"] == "#ff8c1a" and p.last_watermark == rev.watermark
-    with Image.open(revisions.path(rev.file)) as im:
-        assert im.size == (400, 300)
-    assert rev.sha256 != before.revisions[0].sha256                       # the image changed
-    assert not any(f.startswith(".wm-") for f in os.listdir(revisions.root))    # no scratch left behind
+    assert mid == 1 and len(p.revisions) == 1 and p.current == 0                    # nothing drawn here
+    m = p.chat[0]
+    assert (m.role, m.text, m.state) == ("user", 'Watermark: "Costa Rica" / "Bob" / "Wings at Dusk"', "queued")
+    assert m.watermark["title"] == "Costa Rica" and m.watermark["lines"][0] == {"font": "Liberation Serif", "color": "auto", "bold": True, "italic": False}
+    assert m.watermark["drawn"] == {"corner": "upper left", "colors": ["#ffffff", "#ff8c1a"]}
+    watermark.submit(store, revisions, "p", {"title": "x"})
+    assert "drawn" not in store.load().photos["p"].chat[1].watermark                # nothing from the preview: nothing kept
 
 
 def test_a_photo_that_cannot_be_changed_is_refused(tmp_path):
     store, revisions = _with_image(tmp_path, media_type="video")
     with pytest.raises(chat.ChatError):
-        watermark.apply(store, revisions, "p", {"title": "Costa Rica"})
+        watermark.submit(store, revisions, "p", {"title": "Costa Rica"})
     with pytest.raises(chat.ChatError) as e:
-        watermark.apply(store, revisions, "nope", {"title": "x"})
+        watermark.submit(store, revisions, "nope", {"title": "x"})
     assert e.value.status == 404
     store, revisions = _with_image(tmp_path / "busy")
     store.update_photo("p", lambda p: setattr(p, "status", "processing"))
     with pytest.raises(chat.ChatError):
-        watermark.apply(store, revisions, "p", {"title": "x"})
+        watermark.submit(store, revisions, "p", {"title": "x"})
+    assert store.load().photos["p"].chat == []
 
 
 # ---- identifying what is in the picture ---------------------------------------------------
@@ -124,6 +113,17 @@ def _with_image(tmp_path, size=(8, 8), **kw):
     p.current = 0
     store.update(lambda lib: lib.photos.update(p=p))
     return store, revisions
+
+
+def _drawn(store, revisions, photo_id, data, recipe=None):
+    """Submits the watermark and lets a fake Claude run finish it: the photo is treated as imported
+    (edited from its first image) so no original is needed. Returns the fake recipe."""
+    from test_chat import FakeRecipe
+    recipe = recipe or FakeRecipe()
+    store.update_photo(photo_id, lambda p: setattr(p, "imported", True))
+    watermark.submit(store, revisions, photo_id, data)
+    assert chat.run_job(store, revisions, recipe, None, photo_id) is True
+    return recipe
 
 
 def test_identify_names_the_current_image_and_cleans_the_answer(tmp_path):
@@ -244,8 +244,8 @@ def test_asking_for_a_watermark_remembers_its_lines_pieces_and_ticks_for_next_ti
         {"key": "date", "label": "Date", "text": "March 2024", "t": False, "u": False, "v": True},
         {"key": "", "label": "Title idea", "text": "The Quiet Harbor", "t": False, "u": False, "v": False},
     ]
-    watermark.apply(store, revisions, "p", {"title": "Wings 'at' Dusk", "subtitle": "Playa Hermosa", "third": "Bob · March 2024", "pieces": pieces,
-                                             "lines": [{"font": "Liberation Mono", "italic": True}]})
+    _drawn(store, revisions, "p", {"title": "Wings 'at' Dusk", "subtitle": "Playa Hermosa", "third": "Bob · March 2024", "pieces": pieces,
+                                   "lines": [{"font": "Liberation Mono", "italic": True}]})
     last = store.load().photos["p"].last_watermark
     assert (last["title"], last["subtitle"], last["third"]) == ("Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024")
     got = watermark.starting_point(store.load().photos["p"])
@@ -259,7 +259,7 @@ def test_asking_for_a_watermark_remembers_its_lines_pieces_and_ticks_for_next_ti
         ("", "Title idea", "The Quiet Harbor", False, False, False)]
     assert lines_of(got["pieces"]) == ["Wings 'at' Dusk", "Playa Hermosa", "Bob · March 2024"]
     assert got["lines"][0] == {"font": "Liberation Mono", "color": "auto", "bold": False, "italic": True}
-    watermark.apply(store, revisions, "p", {"title": "Second try", "subtitle": "x"})
+    _drawn(store, revisions, "p", {"title": "Second try", "subtitle": "x"})
     assert store.load().photos["p"].last_watermark["title"] == "Second try"
 
 
@@ -288,14 +288,14 @@ def test_pieces_from_the_page_are_cleaned_and_bounded():
             watermark.clean_pieces(bad)
 
 
-def test_a_refused_watermark_is_not_remembered(tmp_path):
+def test_a_refused_watermark_is_not_remembered_or_queued(tmp_path):
     store, revisions = _with_image(tmp_path)
     with pytest.raises(chat.ChatError):
-        watermark.apply(store, revisions, "p", {"title": "", "subtitle": "", "third": ""})
+        watermark.submit(store, revisions, "p", {"title": "", "subtitle": "", "third": ""})
     with pytest.raises(chat.ChatError):
-        watermark.apply(store, revisions, "p", {"title": "A", "pieces": "not a list"})
+        watermark.submit(store, revisions, "p", {"title": "A", "pieces": "not a list"})
     p = store.load().photos["p"]
-    assert p.last_watermark is None and len(p.revisions) == 1
+    assert p.last_watermark is None and len(p.revisions) == 1 and p.chat == []
 
 
 def test_an_older_library_without_the_field_still_loads():
@@ -450,8 +450,8 @@ def test_a_font_that_is_not_installed_is_refused_with_no_network(tmp_path, monke
         raise requests.ConnectionError("no network")
     monkeypatch.setattr(wmrender.requests, "get", down)
     with pytest.raises(chat.ChatError) as e:
-        watermark.apply(store, revisions, "p", {"title": "Hi", "lines": [{"font": "Creepster"}]})
-    assert "Google Fonts" in str(e.value) and len(store.load().photos["p"].revisions) == 1
+        watermark.submit(store, revisions, "p", {"title": "Hi", "lines": [{"font": "Creepster"}]})
+    assert "Google Fonts" in str(e.value) and store.load().photos["p"].chat == []    # the font is fetched before Claude is asked
 
 
 def test_a_google_font_is_fetched_once_and_kept(tmp_path, monkeypatch):
@@ -603,9 +603,9 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     from app.webui.server import create_app
     from app.thumbs import ThumbCache
     store, revisions = _with_image(tmp_path, size=(300, 200))
-    changed = []
+    changed, woken = [], []
     app = create_app(None, FakeImmich(), store, None, revisions=revisions, thumbs=ThumbCache(str(tmp_path / "t")),
-                     on_change=lambda: changed.append(1), recipe=FakeFontPicker())
+                     on_change=lambda: changed.append(1), on_job=lambda: woken.append(1), recipe=FakeFontPicker())
     client = app.test_client()
     r = client.post("/api/photos/p/watermark/preview", json={"title": "Hi", "lines": [{"color": "black"}]})
     assert r.status_code == 200 and r.mimetype == "image/png"
@@ -619,8 +619,8 @@ def test_the_routes_draw_preview_offer_options_and_suggest_fonts(tmp_path):
     f = client.post("/api/photos/p/font", json={"texts": ["Hi"], "hint": "spooky"}).get_json()
     assert f["font"] == "Liberation Serif" and f["color"] == "#ff8c1a"
     w = client.post("/api/photos/p/watermark", json={"title": "Hi", "lines": [{"font": "Liberation Serif"}]})
-    assert w.status_code == 200 and w.get_json() == {"step": 1} and changed == [1]
-    assert store.load().photos["p"].current == 1
+    assert w.status_code == 200 and w.get_json() == {"id": 1} and woken == [1] and changed == []   # queued for Claude, the worker woken
+    assert store.load().photos["p"].current == 0 and store.load().photos["p"].chat[0].text == 'Watermark: "Hi"'
     assert client.post("/api/photos/p/watermark", json={"title": ""}).status_code == 400
     # with the original on file: the preview says so, and the whole original can be had
     store2, revisions2 = _with_original(tmp_path / "o", size=(300, 200))
@@ -645,7 +645,8 @@ def test_the_corner_can_be_chosen_and_is_kept_with_the_step(tmp_path):
     assert watermark.clean_note(" a red <glow> ") == "a red glow" and watermark.clean_note(5) == ""
     png, info = watermark.preview(store, revisions, "p", {"title": "Hi", "corner": "upper left"})
     assert info["corner"] == "upper left"
-    watermark.apply(store, revisions, "p", {"title": "Hi", "corner": "lower left", "style_note": "a glow"})
+    recipe = _drawn(store, revisions, "p", {"title": "Hi", "corner": "lower left", "style_note": "a glow"})
+    assert "Placed in lower left" in recipe.edits[-1][1]                        # Claude is told the chosen corner
     rev = store.load().photos["p"].current_revision()
     assert rev.watermark["corner"] == "lower left" and rev.watermark["style_note"] == "a glow"
     got = watermark.starting_point(store.load().photos["p"])
@@ -714,7 +715,14 @@ def test_a_chat_edit_replays_the_watermark_in_full_and_keeps_what_claude_reports
     store, revisions, recipe, rules = build(tmp_path)
     add_photo(tmp_path, store, revisions, steps=("first",))
     Image.new("RGB", (300, 200), (30, 30, 30)).save(revisions.path(store.load().photos["a"].current_revision().file))
-    watermark.apply(store, revisions, "a", {"title": "Scarlet macaw", "lines": [{"font": "Liberation Serif", "color": "#ff8c1a"}], "corner": "upper left"})
+    # the builder's Add: a chat request Claude draws from, the form's state kept on the step
+    watermark.submit(store, revisions, "a", {"title": "Scarlet macaw", "lines": [{"font": "Liberation Serif", "color": "#ff8c1a"}], "corner": "upper left"})
+    assert run(store, revisions, recipe, rules) is True
+    note = recipe.runs[-1][1]
+    assert "Draw this watermark on the photo, exactly as specified" in note and "Placed in upper left" in note
+    assert "replaces any earlier one" in note and f"keep any font file you fetch under {watermark.font_dir(revisions)}" in note
+    rev = store.load().photos["a"].current_revision()
+    assert rev.instruction == 'Watermark: "Scarlet macaw"' and rev.watermark["corner"] == "upper left" and rev.watermark["lines"][0]["color"] == "#ff8c1a"
     recipe.results = [RecipeResult(status="done", watermark={"lines": [{"text": "Scarlet macaw", "font": "Liberation Serif", "color": "#00ff00"}], "corner": "lower left", "style_note": "glowing"})]
     chat.enqueue(store, "a", "make the watermark glow green")
     assert run(store, revisions, recipe, rules) is True
@@ -734,6 +742,31 @@ def test_a_chat_edit_replays_the_watermark_in_full_and_keeps_what_claude_reports
     note = recipe.runs[-1][1]
     assert "Placed in lower left" in note and "Its look beyond that: glowing" in note
     assert store.load().photos["a"].current_revision().watermark is None       # Claude reported nothing this time
+
+
+def test_adding_a_watermark_again_replays_the_history_without_the_earlier_watermarks(tmp_path):
+    """The old watermark is not drawn again: every other step is replayed and the new watermark
+    takes its place, whether the old one is the latest step or buried under later ones."""
+    store, revisions, recipe, rules = build(tmp_path)
+    add_photo(tmp_path, store, revisions, steps=("first", "crop tighter"))
+    chat.enqueue(store, "a", "add a watermark saying Old in the corner")      # typed in chat, before steps were marked
+    run(store, revisions, recipe, rules)
+    watermark.submit(store, revisions, "a", {"title": "Middle"})              # a builder watermark, marked
+    run(store, revisions, recipe, rules)
+    chat.enqueue(store, "a", "warmer")                                        # a plain edit on top
+    run(store, revisions, recipe, rules)
+    watermark.submit(store, revisions, "a", {"title": "New"})
+    assert run(store, revisions, recipe, rules) is True
+    note = recipe.runs[-1][1]
+    assert "1) crop tighter 2) add a watermark saying Old in the corner (superseded by the watermark below; do not draw it) 3) warmer" in note
+    assert "Middle" not in note and 'line 1 "New"' in note                     # the marked step is left out entirely
+    # a plain edit after that replays only the latest watermark in full: the earlier ones stay out
+    chat.enqueue(store, "a", "brighter")
+    run(store, revisions, recipe, rules)
+    note = recipe.runs[-1][1]
+    assert 'Watermark drawn by the pipeline: line 1 "New"' in note and "Middle" not in note
+    assert "add a watermark saying Old in the corner (superseded by the watermark below; do not draw it)" in note
+    assert note.index("superseded") < note.index('line 1 "New"') and "3) warmer 4) Watermark drawn" in note
 
 
 def test_a_font_file_from_anywhere_but_google_fonts_is_refused(tmp_path, monkeypatch):
