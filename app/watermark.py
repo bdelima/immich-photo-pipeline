@@ -1,5 +1,5 @@
-"""The watermark builder: up to three lines made of pieces (title, subject, location,
-author, date), seeded from what Immich knew about the original (see metadata.py),
+"""The watermark builder: up to three lines made of pieces (title, location, author,
+date), seeded from what Immich knew about the original (see metadata.py),
 each line in its own font, colour and weight. The preview is drawn here (see
 wmrender.py); adding it sends Claude an exact description of what the preview showed
 (text, font files, colours, sizes, corner) as a chat request, so Claude re-runs the
@@ -60,20 +60,22 @@ def template(photo: Photo) -> dict:
     return {"title": p["place"], "subtitle": " · ".join(x for x in (p["owner"], p["date"]) if x)}
 
 
-# The five things a watermark is made of, each with its own field in the form. Every one can
-# be placed on one of the three lines (t = first, u = second, v = third).
-FIXED = (("title", "Title"), ("subject", "Subject"), ("location", "Location"), ("author", "Author"), ("date", "Date"))
+# The four things a watermark is made of, each with its own field in the form. Every one can
+# be placed on one of the three lines (t = first, u = second, v = third). (A Subject field, fed
+# by the people Immich had named, was dropped: Immich keeps people per account and in practice
+# had no names to offer; a saved Subject piece comes back as an extra, see clean_pieces.)
+FIXED = (("title", "Title"), ("location", "Location"), ("author", "Author"), ("date", "Date"))
 MAX_PIECES = 20
 MAX_LABEL = 40
 
 
 def base_pieces(photo: Photo, *, placed: bool) -> list[dict]:
-    """The five fields filled in from the original's details: the title and subject are empty, the location
+    """The four fields filled in from the original's details: the title is empty, the location
     comes from Immich, the author is the uploader, the date is the month. `placed` puts the
     location on the first line and the author, then the date, on the second, as the template always did."""
     p = parts(photo)
-    texts = {"title": "", "subject": "", "location": p["place"], "author": p["owner"], "date": p["date"]}
-    lines = {"title": "", "subject": "", "location": "t", "author": "u", "date": "u"}
+    texts = {"title": "", "location": p["place"], "author": p["owner"], "date": p["date"]}
+    lines = {"title": "", "location": "t", "author": "u", "date": "u"}
     # `auto` marks a piece as taken from Immich just now (the page may tidy it, e.g. leave off the home country)
     return [{"key": key, "label": label, "text": texts[key], "auto": True,
              "t": int(placed and lines[key] == "t"), "u": int(placed and lines[key] == "u") * (2 if key == "date" else 1), "v": 0}
@@ -131,8 +133,8 @@ def starting_point(photo: Photo) -> dict:
     """What the watermark form starts with: the last watermark asked for on
     this photo if there was one, otherwise the template from the original's
     details. `remembered` says which. `pieces` is what the form's fields and
-    rows hold: the five fixed ones (title, subject, location, author, date) and any
-    others that were added, each with the lines it is ticked for."""
+    rows hold: the four fixed ones (title, location, author, date) and any others that
+    were added, each with the lines it is ticked for."""
     last = _remembered(photo)
     if isinstance(last, dict) and any(last.get(k) for k in ("title", "subtitle", "third")):
         saved = clean_pieces(last.get("pieces")) if isinstance(last.get("pieces"), list) else None
@@ -143,7 +145,7 @@ def starting_point(photo: Photo) -> dict:
                      for n, k in enumerate(("title", "subtitle", "third"), 1) if last.get(k)]
         have = {x["key"] for x in saved if x["key"]}
         fixed = [x for x in base_pieces(photo, placed=False) if x["key"] not in have]
-        order = {key: i for i, (key, _) in enumerate(FIXED)}          # the five first, in order; the rest after
+        order = {key: i for i, (key, _) in enumerate(FIXED)}          # the four first, in order; the rest after
         pieces = sorted(fixed + saved, key=lambda x: order.get(x["key"], len(FIXED)))
         return {"title": last.get("title", ""), "subtitle": last.get("subtitle", ""), "third": last.get("third", ""),
                 "pieces": pieces, "lines": clean_lines(last.get("lines")), "corner": clean_corner(last.get("corner")),
@@ -642,62 +644,25 @@ def _taken(photo: Photo) -> str:
     return ""
 
 
-def people_in(photo: Photo, clients) -> list[str]:
-    """The people Immich has named in the photo's originals, without repeats, in the order the
-    originals were added. Named people are per account in Immich: the pipeline's own account can
-    see a household member's original but not the names they gave the faces in it, so each
-    account is asked in turn (the pipeline's first, then every extra key) and the first that
-    names anyone is taken for that original. An account that fails or sees nothing never stops
-    the next being asked."""
-    people: list[str] = []
-    for source in photo.sources:
-        if not source.asset_id:
-            continue
-        for client in clients:
-            try:
-                found = [n for n in client.asset_people(source.asset_id) if n]
-            except Exception:
-                continue
-            if found:
-                people += [n for n in found if n not in people]
-                break
-    return people
-
-
-# Immich's named people are not offered for the Subject field for now. Immich keeps people per
-# account (a face in one household member's photo is a different person from the same face in
-# another's), and its people-sharing feature does not merge what was already recognised, so in
-# practice the originals' faces are unnamed and the lookup returned nothing. Set this to True to
-# ask again (people_in, with every account's key) once the household's people are named in Immich.
-USE_IMMICH_PEOPLE = False
-
-
-def options(store: LibraryStore, immich, photo_id: str, extra=()) -> dict:
+def options(store: LibraryStore, immich, photo_id: str) -> dict:
     """What the pulldowns under the fields offer: the titles and subjects Claude suggested
     (newest first), the places found, every Immich user (for the author), ways of writing the
-    date, and the fonts and colours suggested. The people Immich named in the photo (one entry,
-    the names joined with commas) only with USE_IMMICH_PEOPLE; otherwise none. Immich is asked
-    for the users (and the people, with the extra accounts' keys tried, see people_in); when it
-    can't be, those are empty."""
+    date, and the fonts and colours suggested. Immich is asked for the users; when it can't be,
+    they are empty."""
     photo = store.load().photos.get(photo_id)
     if photo is None:
         raise chat.ChatError("no such photo", 404)
     sug = photo.suggestions if isinstance(photo.suggestions, dict) else {}
     recent = lambda key: list(reversed(sug.get(key))) if isinstance(sug.get(key), list) else []
     users: list[str] = []
-    people: list[str] = []
     if immich is not None:
         try:
             users = [u for u in immich.list_user_names() if u]
         except Exception:
             users = []
-        if USE_IMMICH_PEOPLE:
-            people = people_in(photo, (immich, *extra))
     return {
         "title": recent("title") + [t for t in recent("subject") if t not in recent("title")],
         "location": recent("location"),
-        "people": people,
-        "subject": ", ".join(people),
         "users": users,
         "dates": date_choices(_taken(photo)),
         "fonts": list(wmrender.INSTALLED),
