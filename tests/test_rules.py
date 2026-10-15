@@ -169,3 +169,73 @@ def test_imported_photo_rules_have_their_own_scope(tmp_path):
     assert rules.active_texts("single") == ["Thin bevels.", "Single only."]
     assert rules.active_texts("collage") == ["Thin bevels."]
     assert rules.active_texts("imported") == ["Small watermarks."]
+
+
+# ---- editing a rule, and keeping its previous version -------------------------
+
+def test_the_limit_is_400_characters():
+    assert MAX_RULE_CHARS == 400
+
+
+def test_edit_changes_wording_and_scope_and_keeps_one_previous_version(tmp_path):
+    store = RulesStore(str(tmp_path / "rules.json"))
+    r = store.add("Prefer thin bevels.", "single")
+    edited = store.edit(r.id, "Prefer thin bevels, never thick.", "all")
+    assert edited.text == "Prefer thin bevels, never thick." and edited.scope == "all"
+    assert edited.previous == {"text": "Prefer thin bevels.", "scope": "single"}
+    again = store.edit(r.id, "Third wording.", "all")
+    assert again.previous == {"text": "Prefer thin bevels, never thick.", "scope": "all"}   # only one is kept
+
+
+def test_saving_an_unchanged_rule_does_not_replace_the_previous_version(tmp_path):
+    store = RulesStore(str(tmp_path / "rules.json"))
+    r = store.add("One.", "all")
+    store.edit(r.id, "Two.", "all")
+    same = store.edit(r.id, "Two.", "all")
+    assert same.previous == {"text": "One.", "scope": "all"}
+
+
+def test_edit_errors_and_swap(tmp_path):
+    store = RulesStore(str(tmp_path / "rules.json"))
+    r = store.add("One.", "all")
+    assert store.edit("r99", "x", "all") is None and store.swap_previous("r99") is None
+    with pytest.raises(ValueError):
+        store.edit(r.id, "x", "nope")
+    with pytest.raises(ValueError):
+        store.swap_previous(r.id)                     # nothing to put back yet
+    store.edit(r.id, "Two.", "collage")
+    back = store.swap_previous(r.id)
+    assert (back.text, back.scope) == ("One.", "all") and back.previous == {"text": "Two.", "scope": "collage"}
+    store.set_status(r.id, "retired")
+    with pytest.raises(ValueError):
+        store.edit(r.id, "Three.", "all")
+
+
+def test_api_edit_and_swap(tmp_path):
+    client, rules = client_for(tmp_path)
+    rules.add("Prefer thin bevels.", "single")
+    done = client.post("/api/rules/r1/edit", json={"text": "Thin bevels\nonly.", "scope": "collage"})
+    rule = done.get_json()["rule"]
+    assert done.status_code == 200 and rule["text"] == "Thin bevels only." and rule["scope"] == "collage"
+    assert rule["previous"] == {"text": "Prefer thin bevels.", "scope": "single"}
+    assert client.post("/api/rules/r1/edit", json={"text": "x", "scope": "nope"}).status_code == 400
+    assert client.post("/api/rules/r9/edit", json={"text": "x", "scope": "all"}).status_code == 404
+    swapped = client.post("/api/rules/r1/swap").get_json()["rule"]
+    assert swapped["text"] == "Prefer thin bevels." and swapped["scope"] == "single"
+    assert client.post("/api/rules/r9/swap").status_code == 404
+
+
+def test_the_rules_page_has_an_editor_a_counter_and_the_limit():
+    from app.webui.server import create_app as _  # noqa: F401
+    html = open(os.path.join(os.path.dirname(__file__), "..", "app", "webui", "templates", "rules.html"), encoding="utf-8").read()
+    assert "data-edit" in html and "data-save" in html and "data-cancel" in html and 'data-act="swap"' in html
+    assert "maxlength=\"{{ max_chars }}\"" in html and "<textarea" in html and "counter" in html
+
+
+def test_a_proposed_rule_can_be_edited_too(tmp_path):
+    client, rules = client_for(tmp_path)
+    rules.add("An idea.", "all", status="proposed", lineage_id="L", source_asset_id="a1")
+    page = client.get("/rules").get_data(as_text=True)
+    assert page.count("data-edit") >= 1
+    done = client.post("/api/rules/r1/edit", json={"text": "A better idea.", "scope": "single"})
+    assert done.status_code == 200 and done.get_json()["rule"]["status"] == "proposed"

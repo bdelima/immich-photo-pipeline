@@ -115,7 +115,7 @@ def detail(photo: Photo, rules: RulesStore | None = None) -> dict:
     out.update({
         "sources": [
             {"index": i, "name": s.name or s.asset_id, "has_copy": bool(s.file), "media_type": _source_media_type(s),
-             "meta": s.meta}
+             "asset_id": s.asset_id, "file_name": s.name, "meta": s.meta}
             for i, s in enumerate(photo.sources)
         ],
         "history": [

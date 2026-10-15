@@ -165,7 +165,7 @@ def test_the_original_is_served_and_listed_in_the_detail(tmp_path):
     rel = revisions.save_source("r1", 0, make_image(tmp_path / "orig.jpg", color=(10, 200, 10)), "orig.jpg")
     store.update(lambda lib: lib.photos["r1"].sources.append(Source(asset_id="x", file=rel, name="orig.jpg")))
     d = client.get("/api/photos/r1").get_json()
-    assert d["sources"] == [{"index": 0, "name": "orig.jpg", "has_copy": True, "media_type": "image", "meta": {}}]
+    assert d["sources"] == [{"index": 0, "name": "orig.jpg", "has_copy": True, "media_type": "image", "asset_id": "x", "file_name": "orig.jpg", "meta": {}}]
     full = client.get("/media/r1/source/0")
     assert full.status_code == 200 and "immutable" in full.headers["Cache-Control"]
     thumb = client.get("/media/r1/source/0/thumb")
