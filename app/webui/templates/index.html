@@ -19,6 +19,7 @@
       <span class="chip" id="total"></span>
       <span class="sp"></span>
       <span id="status" class="status" role="status"></span>
+      <button class="btn sec sm" id="retBtn" aria-haspopup="dialog" aria-expanded="false" hidden></button>
     </div>
     <div id="bar" class="card" hidden>
       <strong id="count"></strong>
@@ -31,7 +32,7 @@
         <button class="btn" id="moveBtn" onclick="moveMenu(this)">Move to &#9662;</button>
         <button class="btn warn" onclick="trashSel()">Trash</button>
       </span>
-      <span id="intrash" hidden><button class="btn" onclick="restoreSel()">Restore</button></span>
+      <span id="intrash" hidden><button class="btn" onclick="restoreSel()">Restore</button> <button class="btn warn" id="delSel" onclick="deleteSel()">Delete</button></span>
     </div>
     <div id="grid" class="grid" style="margin-top:1rem"></div>
     <div id="empty" class="empty" hidden></div>
@@ -47,9 +48,11 @@
     </div>
   </div>
   <div id="overlay" hidden></div>
+  <div id="confirm" class="modalback" hidden></div>
+  <div id="retPop" class="pop" role="dialog" aria-label="Auto-delete from Trash" hidden></div>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 <script>
-let view = "review", list = [], open = -1, albums = [], treeAlbums = [], loadToken = 0;
+let view = "review", list = [], open = -1, albums = [], treeAlbums = [], loadToken = 0, trashDays = 30;
 const selected = new Set();
 // What the last action in each place said. Each view has its own, so the
 // message belongs to the place it happened and not to whatever is open now.
@@ -139,6 +142,8 @@ async function select(v, keep, keepViewer) {
   const canon = canonicalView(v, treeAlbums);
   if (canon !== v) { view = canon; history.replaceState(null, "", viewHash(canon)); renderStatus(); renderTree(canon, "").catch(() => {}); }
   list = photos.photos;
+  trashDays = photos.trash_days ?? trashDays;
+  paintRetention();
   for (const id of [...selected]) if (!list.some(p => p.id === id)) selected.delete(id);
   $("total").textContent = list.length + (list.length === 1 ? " photo" : " photos");
   $("grid").innerHTML = list.map((p, i) => tile(p, i)).join("");
@@ -212,6 +217,95 @@ const ids = () => [...selected];
 const promote = live => act("/api/photos/promote", { ids: ids(), live }, live ? "Added to Live" : "Removed from Live");
 const trashSel = () => act("/api/photos/trash", { ids: ids() }, "Trashed");
 const restoreSel = () => act("/api/photos/restore", { ids: ids() }, "Restored");
+
+// ---- deleting from the trash for good, and the auto-delete limit ----
+const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+// Whole days left before a trashed photo is auto-deleted, or null when that is off or unknown.
+function daysLeft(p) {
+  if (!trashDays || !p.trashed_at) return null;
+  const age = (Date.now() - new Date(p.trashed_at).getTime()) / 864e5;
+  return Math.ceil(trashDays - age);
+}
+const leftText = n => n <= 0 ? "due" : n + "d left";
+function closeConfirm() { const c = $("confirm"); c.hidden = true; c.innerHTML = ""; }
+// Asks before anything is deleted. Cancel has the focus, so Enter alone never deletes.
+function confirmDelete(photos, go) {
+  const n = photos.length, c = $("confirm");
+  const thumbs = photos.slice(0, 8).map(p => p.has_image && p.media_type === "image" ? `<img src="/media/${esc(p.id)}/thumb?v=${p.version}" alt="">` : `<span></span>`).join("");
+  c.innerHTML = `<div class="modal" role="alertdialog" aria-labelledby="cdT">
+    <h3 id="cdT">Delete ${n === 1 ? "this photo" : plural(n, "photo")} permanently?</h3>
+    <div class="strip2">${thumbs}${n > 8 ? `<small>+${n - 8} more</small>` : ""}</div>
+    <p>This can't be undone. ${n === 1 ? "It removes" : "For each photo it removes"}:</p>
+    <ul><li>the finished photo and every earlier step</li><li>the pipeline's copy of the original</li><li>its history and chat</li><li>its copy in Immich, deleted for good (including from Immich's trash)</li></ul>
+    <div class="keep">Not touched: the contributor's original in their own Immich library.</div>
+    <div class="acts"><button class="btn sec" id="cdNo">Cancel</button><button class="btn danger" id="cdYes">Delete</button></div></div>`;
+  c.hidden = false;
+  $("cdNo").onclick = closeConfirm;
+  $("cdYes").onclick = () => { closeConfirm(); go(); };
+  c.onclick = e => { if (e.target === c) closeConfirm(); };
+  $("cdNo").focus();
+}
+const deleteSel = () => { const photos = selPhotos(); if (photos.length) confirmDelete(photos, () => act("/api/photos/delete", { ids: photos.map(p => p.id) }, "Deleted")); };
+async function deleteOpen(p) {
+  const at = open;
+  const out = await act("/api/photos/delete", { ids: [p.id] }, "Deleted");
+  if (out && out.done.length && list.length) openViewer(Math.min(at, list.length - 1));
+}
+
+const retLabel = () => "Auto-delete: " + (trashDays ? "after " + plural(trashDays, "day") : "off") + " ▾";
+function paintRetention() {
+  const b = $("retBtn");
+  b.hidden = view !== "trash";
+  b.textContent = retLabel();
+  if (view !== "trash") closeRetention();
+}
+function closeRetention() { const p = $("retPop"); if (!p.hidden) { p.hidden = true; p.innerHTML = ""; $("retBtn").setAttribute("aria-expanded", "false"); } }
+function openRetention() {
+  const pop = $("retPop"), btn = $("retBtn");
+  pop.innerHTML = `<h4>Auto-delete from Trash</h4>
+    <label class="opt"><input type="radio" name="rm" value="never"${trashDays ? "" : " checked"}> Never &mdash; keep until I delete them</label>
+    <label class="opt"><input type="radio" name="rm" value="days"${trashDays ? " checked" : ""}> After <input class="field" type="number" id="rd" min="1" max="365" value="${trashDays || 30}" aria-label="Days in Trash"> days in Trash</label>
+    <div class="presets" id="rPresets">${[7, 14, 30, 60, 90].map(d => `<button type="button" data-d="${d}">${d}</button>`).join("")}</div>
+    <div class="warnbox" id="rWarn" hidden></div>
+    <p class="fine">Counted from the day each photo was trashed, and checked every poll cycle. Deleting also permanently purges its copy in Immich.</p>
+    <div class="acts"><button class="btn sec sm" id="rNo">Cancel</button><button class="btn sm" id="rYes">Save</button></div>`;
+  const r = btn.getBoundingClientRect();
+  pop.style.top = (r.bottom + 8) + "px";
+  pop.style.right = Math.max(8, document.documentElement.clientWidth - r.right) + "px";
+  pop.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  const never = () => pop.querySelector("input[name=rm]:checked").value === "never";
+  const draft = () => never() ? 0 : Math.max(1, Math.min(365, Math.floor(+$("rd").value) || 1));
+  const refresh = () => {
+    const d = draft();
+    // Photos the new limit would delete now: the ones already in the list that have been there that long.
+    const due = d ? list.filter(p => p.trashed_at && (Date.now() - new Date(p.trashed_at).getTime()) / 864e5 >= d).length : 0;
+    $("rWarn").hidden = !due;
+    $("rWarn").textContent = due ? `Saving will delete ${plural(due, "photo")} right away: ${due === 1 ? "it has" : "they have"} been in Trash ${plural(d, "day")} or more.` : "";
+    $("rYes").textContent = due ? "Save and delete " + due : "Save";
+    $("rd").disabled = never();
+    for (const b of pop.querySelectorAll("#rPresets button")) b.classList.toggle("on", !never() && +b.dataset.d === d);
+  };
+  for (const el of pop.querySelectorAll("input[name=rm]")) el.onchange = refresh;
+  $("rd").oninput = refresh;
+  for (const b of pop.querySelectorAll("#rPresets button")) b.onclick = () => { pop.querySelector("input[value=days]").checked = true; $("rd").value = b.dataset.d; refresh(); };
+  $("rNo").onclick = closeRetention;
+  $("rYes").onclick = async () => {
+    const days = draft();
+    const res = await fetch("/api/trash-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trash_days: days }) });
+    const out = await res.json();
+    if (!res.ok) { say(out.error || "That didn't work.", true); return; }
+    closeRetention();
+    trashDays = out.trash_days;
+    await select(view, true, true);
+    say(out.deleted ? `Auto-deleted ${plural(out.deleted, "photo")} older than ${plural(trashDays, "day")}` : "Auto-delete: " + (trashDays ? "after " + plural(trashDays, "day") : "off"));
+  };
+  refresh();
+  $("rd").focus();
+}
+$("retBtn").onclick = () => $("retPop").hidden ? openRetention() : closeRetention();
+document.addEventListener("click", e => { if (!$("retPop").hidden && !e.target.closest("#retPop, #retBtn")) closeRetention(); });
+
 async function revertTo(id, step) {
   const r = await fetch("/api/photos/" + id + "/revert", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ step }) });
   const out = await r.json();
@@ -222,7 +316,11 @@ async function revertTo(id, step) {
   if (i >= 0) openViewer(i);
 }
 // What a thumbnail shows; when it is unchanged the tile is left alone.
-const tileSig = p => [p.version, p.status, p.live, p.has_image, p.media_type].join("|");
+const tileSig = p => [p.version, p.status, p.live, p.has_image, p.media_type, p.trashed_at, trashDays].join("|");
+function trashBadge(p) {
+  const n = p.trashed ? daysLeft(p) : null;
+  return n === null ? "" : `<span class="badge age${n <= 0 ? " due" : ""}">${leftText(n)}</span>`;
+}
 function tile(p, i) {
   const label = p.status !== "ready" ? p.status.replace("_", " ") : p.media_type === "video" ? "video" : "";
   const inner = p.media_type === "image" && p.has_image
@@ -230,7 +328,7 @@ function tile(p, i) {
     : `<div class="ph">${esc(p.media_type === "video" ? "Video" : p.status.replace("_", " "))}</div>`;
   const on = selected.has(p.id);
   return `<div class="tile${on ? " sel" : ""}" data-i="${i}" data-id="${esc(p.id)}" data-sig="${esc(tileSig(p))}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""} aria-label="Select">${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
-         `${p.live ? `<span class="badge live">Live</span>` : ""}</div>`;
+         `${p.live ? `<span class="badge live">Live</span>` : ""}${trashBadge(p)}</div>`;
 }
 
 // ---- chat ----
@@ -327,14 +425,18 @@ async function openViewer(i) {
     `<h3>${esc(p.id.slice(0, 8))}</h3><span class="chip">${esc(p.home)}</span>` +
     (p.live ? `<span class="chip blue">Live</span>` : "") +
     (p.status !== "ready" ? `<span class="chip bad">${esc(p.status.replace("_", " "))}</span>` : "") +
+    (p.trashed && daysLeft(p) !== null ? `<span class="chip${daysLeft(p) <= 0 ? " bad" : ""}">${daysLeft(p) <= 0 ? "deletes next cycle" : "deletes in " + plural(daysLeft(p), "day")}</span>` : "") +
     `<span class="sp"></span>` +
-    (p.trashed ? `<button class="btn" id="vRestore">Restore</button>` :
+    (p.trashed ? `<button class="btn sm" id="vRestore">Restore</button><button class="btn warn sm" id="vDelete">Delete</button>` :
       `<button class="btn sec sm" id="vLive">${p.live ? "Remove from Live" : "Add to Live"}</button>` +
       `<button class="btn sm" id="vMove">Move to &#9662;</button>` +
       `<button class="btn warn sm" id="vTrash">Trash</button>`) +
     `<button class="btn sec sm close-top" id="vClose2">Close</button>`;
   const run = (path, what) => act(path, { ids: [p.id], ...(path.endsWith("promote") ? { live: !p.live } : {}) }, what, p.id);
-  if (p.trashed) $("vRestore").onclick = () => run("/api/photos/restore", "Restored");
+  if (p.trashed) {
+    $("vRestore").onclick = () => run("/api/photos/restore", "Restored");
+    $("vDelete").onclick = () => confirmDelete([p], () => deleteOpen(p));
+  }
   else {
     $("vLive").onclick = () => run("/api/photos/promote", p.live ? "Removed from Live" : "Added to Live");
     $("vTrash").onclick = () => run("/api/photos/trash", "Trashed");
@@ -850,6 +952,8 @@ function showCurrent(id, version) {
 function closeOriginal() { const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
 function closeViewer() { closeOriginal(); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !$("confirm").hidden) { closeConfirm(); return; }
+  if (e.key === "Escape" && !$("retPop").hidden) { closeRetention(); return; }
   if (e.key === "Escape" && !$("overlay").hidden) { if (!$("infoPop") || $("infoPop").hidden) closeOriginal(); else toggleInfo(false); return; }
   if (e.key === "Escape" && menuEl) { closeMenu(); return; }
   if (open < 0) return;
