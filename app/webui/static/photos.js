@@ -23,8 +23,8 @@ const PhotosPane = (() => {
     "(Account settings &rarr; Sharing &rarr; Partners). Their photos then appear here.";
 
   const pane = $("photosView");
-  let built = false, started = false, sc, tl, host, note, head, selbar, panel, resBox, resHead, moreBtn;
-  const secs = {};            // bucket -> { bucket, month, count, el, head, body, items, layout, rendered, ... }
+  let built = false, started = false, sc, tl, host, note, head, selbar, panel, resBox, resHead, rtl;
+  let secs = {};            // bucket -> { bucket, month, count, el, head, body, items, layout, rendered, ... }
   let order = [];             // buckets, newest first
   let inflight = 0, savedTop = 0;
 
@@ -41,7 +41,7 @@ const PhotosPane = (() => {
   // What the person has asked to see. Photos already in the pipeline are hidden unless showSent.
   const Q = { text: "", mode: "context", from: "", to: "", country: "", state: "", city: "", type: "", owner: "", make: "", model: "", lens: "",
     people: new Set(), favorites: false, archive: false, notInAlbum: false };
-  let showSent = false, searching = false, monthsStale = false, resSec = null, nextPage = null, loadingMore = false, searchToken = 0;
+  let showSent = false, searching = false, monthsStale = false, allResults = [], main = null, nextPage = null, loadingMore = false, searchToken = 0;
   const sel = new Set();     // selected photo ids
   const byId = new Map();    // photo id -> { it, s } for every photo loaded (its section, for the day and removals)
   const MODES = { context: "Context", file_name: "File name", description: "Description", path: "Full path or folder", ocr: "OCR" };
@@ -90,8 +90,8 @@ const PhotosPane = (() => {
       '<div class="ph-wrap"><div class="ph-scroll" id="ph-scroll"><div id="ph-note" class="ph-note" hidden></div>' +
       '<div id="ph-res" class="ph-resline" hidden><span id="ph-restext"></span><button class="btn sec sm" id="ph-resclear">Clear search</button></div>' +
       '<div id="ph-results" hidden></div><div id="ph-months"></div></div>' +
-      '<div class="ph-tl" id="ph-tl" role="tree" aria-label="Timeline"></div></div>';
-    sc = $("ph-scroll"); tl = $("ph-tl"); host = $("ph-months"); note = $("ph-note");
+      '<div class="ph-tl" id="ph-tl" role="tree" aria-label="Timeline"></div><div class="ph-tl" id="ph-rtl" role="tree" aria-label="Timeline of the results" hidden></div></div>';
+    sc = $("ph-scroll"); tl = $("ph-tl"); rtl = $("ph-rtl"); host = $("ph-months"); note = $("ph-note");
     head = $("ph-head"); selbar = $("ph-selbar"); panel = $("ph-panel"); resBox = $("ph-results"); resHead = $("ph-res");
     sc.addEventListener("scroll", () => { schedule(); clearTimeout(followTimer); followTimer = setTimeout(follow, FOLLOW_MS); }, { passive: true });
     let rz = null;
@@ -195,7 +195,6 @@ const PhotosPane = (() => {
 
   function relayoutAll() {
     const W = width();
-    if (searching && resSec && resSec.items && resSec.items.length) { clearRows(resSec); computeLayout(resSec, W); setHeight(resSec, resSec.layout.h); }
     for (const b of order) {
       const s = secs[b];
       if (s.layout && s.items && s.items.length) { clearRows(s); computeLayout(s, W); setHeight(s, s.layout.h); }
@@ -211,20 +210,16 @@ const PhotosPane = (() => {
   function update() {
     if (!built || pane.hidden) return;
     const box = sc.getBoundingClientRect();
-    if (searching) {                       // the results replace the months
-      if (resSec && resSec.items) {
-        drawRows(resSec, box);
-        const r = resSec.el.getBoundingClientRect();
-        if (nextPage && !loadingMore && r.bottom < box.bottom + DATA_NEAR) loadMore();
-      }
-      return;
-    }
     if (!order.length) return;
     for (const b of order) {
       const s = secs[b], r = s.el.getBoundingClientRect();
       if (r.bottom > box.top - DATA_NEAR && r.top < box.bottom + DATA_NEAR && !s.items) ensure(s);
       const near = r.bottom > box.top - TILE_NEAR && r.top < box.bottom + TILE_NEAR;
       if (near && s.items) drawRows(s, box); else if (s.rendered.size) clearRows(s);
+    }
+    if (searching && nextPage && !loadingMore) {            // the end of the results is close: fetch the next page
+      const last = secs[order[order.length - 1]];
+      if (last && last.el.getBoundingClientRect().bottom < box.bottom + DATA_NEAR) loadMore();
     }
   }
 
@@ -278,7 +273,7 @@ const PhotosPane = (() => {
   }
 
   // ---- the timeline: year > month > day ----
-  const rowOf = {}, kidsOf = {}, isOpen = {}, auto = {};
+  let rowOf = {}, kidsOf = {}, isOpen = {}, auto = {};
   let current = null, here = null;
 
   function node(key, label, count, cls, expandable, parentEl) {
@@ -356,7 +351,7 @@ const PhotosPane = (() => {
   // Which row the photos on screen belong to: the day at the top of the screen once its month is
   // known, otherwise its month. Called when scrolling pauses, so it does not flicker.
   function follow() {
-    if (!built || pane.hidden || searching || !order.length) return;
+    if (!built || pane.hidden || !order.length) return;
     const box = sc.getBoundingClientRect(), probe = box.top + 64;
     let s = null;
     for (const b of order) { const x = secs[b]; if (x.el.getBoundingClientRect().bottom > probe) { s = x; break; } }
@@ -441,6 +436,7 @@ const PhotosPane = (() => {
     });
   }
   const item = () => cur && cur.s.items[cur.i];
+  const flatItems = () => order.flatMap(b => secs[b].items || []);
   function openViewer(s, i) { if (!pv) buildViewer(); if (i < 0) return; cur = { s, i }; pv.hidden = false; show(); }
   function closeViewer() { if (!pv || pv.hidden) return; pv.hidden = true; stage.innerHTML = ""; cur = null; }
   // Zoom works by sizing the picture to a multiple of its fitted width; the stage scrolls (and drags) to pan.
@@ -474,7 +470,7 @@ const PhotosPane = (() => {
   }
   // Whether there is a photo before or after, looking across month boundaries.
   function edges() {
-    if (cur.s.results) { $("pv-prev").hidden = cur.i <= 0; $("pv-next").hidden = cur.i >= cur.s.items.length - 1 && !nextPage; return; }
+    if (cur.s.results) { const f = flatItems(), j = f.indexOf(item()); $("pv-prev").hidden = j <= 0; $("pv-next").hidden = j >= f.length - 1 && !nextPage; return; }
     const k = order.indexOf(cur.s.bucket);
     $("pv-prev").hidden = cur.i <= 0 && k <= 0;
     $("pv-next").hidden = cur.i >= cur.s.items.length - 1 && k >= order.length - 1;
@@ -483,10 +479,12 @@ const PhotosPane = (() => {
   async function step(d) {
     if (!cur) return;
     if (cur.s.results) {                              // search results: along the list, fetching the next page at its end
-      const j = cur.i + d;
-      if (j >= cur.s.items.length && nextPage && !loadingMore) await loadMore();
-      if (!cur || j < 0 || j >= cur.s.items.length) return;
-      cur = { s: cur.s, i: j }; show(); return;
+      const here_ = item();
+      let f = flatItems(), j = f.indexOf(here_) + d;
+      if (j >= f.length && nextPage && !loadingMore) { await loadMore(); f = flatItems(); j = f.indexOf(here_) + d; }
+      if (!cur || j < 0 || j >= f.length) return;
+      const e = byId.get(f[j].id);
+      cur = { s: e.s, i: e.s.items.indexOf(f[j]) }; show(); return;
     }
     let k = order.indexOf(cur.s.bucket), i = cur.i + d, s = cur.s;
     while (i < 0 || i >= s.items.length) {
@@ -554,20 +552,33 @@ const PhotosPane = (() => {
     return bits.join(" · ");
   }
   function resultText() {
-    const n = resSec && resSec.items ? resSec.items.length : 0;
+    const n = allResults.length;
     return (n ? plural(n, "result") + (nextPage ? " so far" : "") : "No results") + (summary() ? " for " + summary() : "") + ". Newest first on each page.";
   }
 
+  // A search shows its results the way the main page shows the timeline: by month and day, with a timeline of
+  // its own. The main page's state is put aside while searching and put back when the search is cleared.
+  function enterSearch() {
+    if (!main) main = { secs, order, rowOf, kidsOf, isOpen, auto, current, here, host, tl };
+    secs = {}; order = []; rowOf = {}; kidsOf = {}; isOpen = {}; auto = {}; current = null; here = null;
+    host = resBox; tl = rtl; allResults = [];
+    host.innerHTML = ""; tl.innerHTML = "";
+    $("ph-months").hidden = true; $("ph-tl").hidden = true; resBox.hidden = false; rtl.hidden = false;
+  }
+  function leaveSearch() {
+    if (!main) return;
+    ({ secs, order, rowOf, kidsOf, isOpen, auto, current, here, host, tl } = main); main = null;
+    resBox.hidden = true; rtl.hidden = true; resBox.innerHTML = ""; rtl.innerHTML = "";
+    host.hidden = false; tl.hidden = false;
+  }
   async function runSearch() {
     readForm(); closePanel();
     if (!hasSearch()) { await clearSearch(false); return; }
     const token = ++searchToken;
     searching = true; sel.clear();
     for (const [id, e] of byId) if (e.s.results) byId.delete(id);
-    tl.hidden = true; host.hidden = true; resBox.hidden = false; resHead.hidden = false;
+    enterSearch(); resHead.hidden = false;
     $("ph-clear").hidden = false;
-    resBox.innerHTML = '<section class="ph-month"><div class="ph-body"></div></section>';
-    resSec = { results: true, items: [], layout: null, rendered: new Map(), el: resBox.firstChild, body: resBox.firstChild.firstChild, head: null, bucket: "" };
     nextPage = null;
     $("ph-restext").textContent = "Searching…";
     sc.scrollTop = 0; closeViewer(); paintSel();
@@ -577,15 +588,43 @@ const PhotosPane = (() => {
       addResults(d);
     } catch (e) {
       if (token !== searchToken) return;
-      resSec.items = []; $("ph-restext").textContent = "Couldn't search Immich. " + (e.message || "");
+      $("ph-restext").textContent = "Couldn't search Immich. " + (e.message || "");
     }
   }
   function addResults(d) {
     nextPage = d.next || null;
-    resSec.items = resSec.items.concat(d.items); reg(resSec, d.items);
-    if (resSec.items.length) layoutSection(resSec); else resSec.body.innerHTML = "";
+    allResults = allResults.concat(d.items).sort((a, b) => (b.day + b.time).localeCompare(a.day + a.time));
+    rebuildResults();
     $("ph-restext").textContent = resultText();
     schedule();
+  }
+  // Groups everything found so far into months (newest first) and lays them out like the main page.
+  function rebuildResults() {
+    const top = sc.scrollTop;
+    for (const [id, e] of byId) if (e.s.results) byId.delete(id);
+    for (const k of Object.keys(secs)) delete secs[k];
+    for (const o of [rowOf, kidsOf, isOpen, auto]) for (const k of Object.keys(o)) delete o[k];
+    host.innerHTML = ""; tl.innerHTML = ""; order = []; current = null; here = null;
+    const groups = new Map();
+    for (const it of allResults) {
+      if (!it.day) continue;
+      const m = it.day.slice(0, 7);
+      if (!groups.has(m)) groups.set(m, []);
+      groups.get(m).push(it);
+    }
+    const months = [...groups.keys()].sort().reverse().map(m => ({ bucket: "r" + m, month: m, count: groups.get(m).length }));
+    order = months.map(m => m.bucket);
+    for (const m of months) {
+      const el = document.createElement("section"); el.className = "ph-month";
+      el.innerHTML = '<h3 class="ph-mh">' + esc(monthLabel(m.month)) + ' <span class="muted">' + m.count.toLocaleString() + '</span></h3><div class="ph-body"></div>';
+      secs[m.bucket] = { bucket: m.bucket, month: m.month, count: m.count, el, head: el.firstChild, body: el.lastChild, items: groups.get(m.month),
+        layout: null, rendered: new Map(), state: "ready", promise: null, failed: false, warmed: true, results: true };
+      host.appendChild(el);
+    }
+    buildTimeline(months);
+    for (const m of months) { const s = secs[m.bucket]; reg(s, s.items); layoutSection(s); }
+    sc.scrollTop = top;
+    schedule(); follow();
   }
   async function loadMore() {
     if (!searching || !nextPage || loadingMore) return;
@@ -604,9 +643,8 @@ const PhotosPane = (() => {
       for (const b of $("ph-modes").children) b.classList.toggle("on", b.dataset.mode === "context");
     }
     for (const [id, e] of byId) if (e.s.results) byId.delete(id);
-    sel.clear(); resSec = null; nextPage = null; searching = false;
-    resBox.hidden = true; resHead.hidden = true; resBox.innerHTML = ""; $("ph-clear").hidden = true;
-    host.hidden = false; tl.hidden = false;
+    sel.clear(); allResults = []; nextPage = null; searching = false;
+    leaveSearch(); resHead.hidden = true; $("ph-clear").hidden = true; $("ph-months").hidden = false;
     closeViewer(); paintSel();
     if (monthsStale) { monthsStale = false; resetMonths(); } else { schedule(); follow(); }
   }
@@ -720,6 +758,7 @@ const PhotosPane = (() => {
   // Removes photos from the page (trashed, or sent and hidden), keeping the layout and the viewer in step.
   function dropItems(ids) {
     const curId = cur && item() ? item().id : null, touched = new Set();
+    if (searching) { const gone = new Set(ids); allResults = allResults.filter(i => !gone.has(i.id)); }
     for (const id of ids) {
       const e = byId.get(id); if (!e) continue;
       e.s.items = e.s.items.filter(i => i.id !== id); byId.delete(id); sel.delete(id); touched.add(e.s);
