@@ -6,14 +6,14 @@
   <title>immich-photo-pipeline</title>
   {% include "_icons.html" %}
   <link rel="stylesheet" href="{{ url_for('static', filename='pipeline.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='photos.css') }}">
 </head>
 <body>
   <nav>
     <div class="brand"><img src="{{ url_for('static', filename='icon-small.svg') }}" alt="" width="28" height="28"><h1>Immich Photo Pipeline</h1></div>
     <div id="tree"></div>
-    <div class="links"><a class="item" href="/rules">Recipe rules</a></div>
   </nav>
-  <main>
+  <main id="pipeView">
     <div class="card head">
       <h2 id="title"></h2>
       <span class="chip" id="total"></span>
@@ -37,6 +37,8 @@
     <div id="grid" class="grid" style="margin-top:1rem"></div>
     <div id="empty" class="empty" hidden></div>
   </main>
+  <main id="photosView" class="ph-pane" hidden></main>
+  <main id="rulesView" hidden></main>
   <div id="viewer">
     <div class="dialog">
       <section class="photo">
@@ -50,7 +52,10 @@
   <div id="overlay" hidden></div>
   <div id="confirm" class="modalback" hidden></div>
   <div id="retPop" class="pop" role="dialog" aria-label="Auto-delete from Trash" hidden></div>
+<script>window.FEATURES = {{ features|tojson }};</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='photos.js') }}"></script>
+<script src="{{ url_for('static', filename='rules.js') }}"></script>
 <script>
 let view = "review", list = [], open = -1, albums = [], treeAlbums = [], loadToken = 0, trashDays = 30;
 const selected = new Set();
@@ -116,8 +121,31 @@ function moveMenu(anchor) {
   openMenu(anchor, moveItems(photos), home => act("/api/photos/move", { ids: photos.map(p => p.id), home }, "Moved to " + home));
 }
 
+// ---- the places ----
+// Photos and Recipe rules are views in this window, like Review and the albums: the sidebar and
+// header stay, only the area on the right changes (photos.js and rules.js draw them).
+const isPane = v => v === "photos" || v === "rules";
+function showPane(v) {
+  if (v !== "photos") PhotosPane.hide();               // remembers where the timeline was, before it is hidden
+  $("pipeView").hidden = isPane(v);
+  $("photosView").hidden = v !== "photos";
+  $("rulesView").hidden = v !== "rules";
+}
+async function openPane(v) {
+  const token = ++loadToken;                           // anything still loading for the last place is dropped
+  view = v;
+  closeViewer(); closeMenu();
+  document.title = viewTitle(v) + " · immich-photo-pipeline";
+  showPane(v);
+  renderTree(v, "").then(t => { treeAlbums = t.albums; albums = t.albums.map(a => a.name); }).catch(() => {});
+  if (v === "photos") PhotosPane.show(); else RulesPane.show();
+}
+
 // ---- the grid ----
 async function select(v, keep, keepViewer) {
+  if (isPane(v) && window.FEATURES[v]) return openPane(v);
+  if (isPane(v)) { history.replaceState(null, "", viewHash("review")); v = "review"; }   // not available here
+  showPane(v);
   const token = ++loadToken;
   view = v;
   if (!keepViewer) closeViewer();
@@ -971,7 +999,7 @@ document.addEventListener("keydown", e => {
 // selection and the scroll position are left as they are.
 async function syncCounts() {
   const t = await api("/api/tree");
-  const links = [...document.querySelectorAll("#tree a.item")];
+  const links = [...document.querySelectorAll("#tree a.item:not(.pane)")];
   const want = ["queue", "review", "live", ...t.albums.map(a => a.view), "trash"];
   if (links.length !== want.length || links.some((a, i) => a.dataset.view !== want[i])) {
     // An album appeared or went: redraw the (small) sidebar.
@@ -983,6 +1011,7 @@ async function syncCounts() {
   links.forEach((a, i) => paintCount(a, a.dataset.view, counts[i]));
 }
 async function syncGrid() {
+  if (isPane(view)) return;                            // Photos and Recipe rules have no grid to keep in step
   const token = loadToken, v = view;
   const photos = (await api("/api/photos?view=" + encodeURIComponent(v))).photos;
   if (token !== loadToken || v !== view) return;       // the person went elsewhere meanwhile
