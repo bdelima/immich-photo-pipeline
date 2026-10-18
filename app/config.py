@@ -98,6 +98,9 @@ class Config:
     revisions_path: str = "/data/revisions"
     # Thumbnails made for the web UI. Disposable: anything here is remade on demand.
     thumbs_path: str = "/data/thumbs"
+    # Copies of the Immich thumbnails the Photos view shows, kept without a size limit (about 4 GB
+    # per 100,000 photos). Disposable: anything here is fetched again on demand.
+    immich_thumbs_path: str = "/data/immich-thumbs"
     # How many photos are processed at the same time. One is plenty for a
     # household; each is a Claude run.
     worker_count: int = 1
@@ -144,6 +147,7 @@ class Config:
             library_path=_env("LIBRARY_PATH", "/data/library.json"),
             revisions_path=_env("REVISIONS_PATH", "/data/revisions"),
             thumbs_path=_env("THUMBS_PATH", "/data/thumbs"),
+            immich_thumbs_path=_env("IMMICH_THUMBS_PATH", "/data/immich-thumbs"),
             worker_count=max(1, _env_int("WORKER_COUNT", 1)),
             pipeline_url=_env("PIPELINE_URL").strip().rstrip("/"),
             import_album_id=_env("IMPORT_ALBUM_ID"),
