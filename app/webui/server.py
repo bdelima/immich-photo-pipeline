@@ -1,6 +1,8 @@
 """The small purpose-built web UI: browsing the library (see browse.py), and
-(at /rules) the recipe rules the reviewers have taught -- add one, retire
-one, or confirm a proposed one. Actions on photos are built on top of this.
+the recipe rules the reviewers have taught -- add one, retire one, or confirm a
+proposed one. The page is one window: Photos and Recipe rules are views inside
+it (#photos, #rules), like Review and the albums. Actions on photos are built on
+top of this.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 from ..config import Config
 from ..health import HealthStore
 from ..immich_client import ImmichClient
+from ..immich_thumbs import ImmichThumbCache
 from ..library import REVIEW, STATUS_FAILED, STATUS_PROCESSING, Library, LibraryStore
 from ..revisions import RevisionStore
 from ..rules import MAX_ACTIVE_RULES, MAX_RULE_CHARS, SCOPE_LABELS, SCOPES, RulesFull, RulesStore
@@ -29,6 +32,7 @@ def create_app(
     cfg: Config, immich: ImmichClient, store: LibraryStore, health: HealthStore,
     rules: RulesStore | None = None, revisions: RevisionStore | None = None,
     thumbs: ThumbCache | None = None, on_change=None, on_job=None, recipe=None, extra_immich=(),
+    immich_thumbs: ImmichThumbCache | None = None,
 ) -> Flask:
     app = Flask(__name__)
 
@@ -46,7 +50,10 @@ def create_app(
 
     @app.get("/")
     def index():
-        return render_template("index.html", overview=_overview(store.load()))
+        # Which views the sidebar offers: Photos needs Immich, Recipe rules needs the rules store.
+        return render_template(
+            "index.html", overview=_overview(store.load()),
+            features={"photos": immich is not None, "rules": rules is not None})
 
     @app.get("/api/events")
     def api_events():
@@ -66,7 +73,7 @@ def create_app(
         register_action_routes(app, store, revisions, cfg, on_change)
         register_chat_routes(app, store, on_job, recipe, revisions, on_change, immich, extra_immich)
     if immich is not None:
-        register_household_routes(app, immich)
+        register_household_routes(app, immich, immich_thumbs)
     if rules is not None:
         _register_rules_routes(app, rules)
 
@@ -94,8 +101,9 @@ def _rule_json(rule) -> dict:
 
 
 def _register_rules_routes(app: Flask, rules: RulesStore) -> None:
-    @app.get("/rules")
-    def rules_page():
+    @app.get("/api/rules/view")
+    def rules_view():
+        """The Recipe rules view's contents, drawn on the server, for the main page to show."""
         all_rules = rules.all()
         return render_template(
             "rules.html",
