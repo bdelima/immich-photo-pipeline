@@ -43,7 +43,7 @@ def test_the_original_opens_with_an_info_button_beside_close_and_a_three_group_p
 
 def test_escape_closes_the_popup_before_the_picture():
     page = read("templates", "index.html")
-    assert 'if (!$("infoPop") || $("infoPop").hidden) closeOriginal(); else toggleInfo(false);' in page
+    assert 'if (!$("infoPop") || $("infoPop").hidden) backLayer("overlay", closeOriginal); else toggleInfo(false);' in page
 
 
 def test_the_info_button_matches_close_in_height_and_is_round():

@@ -444,7 +444,7 @@ function wireFolds() {
 async function openViewer(i) {
   if (i < 0 || i >= list.length) return;
   stopPoll(); closeMenu();
-  open = i;
+  open = i; pushLayer("viewer", closeViewer);
   const p = await api("/api/photos/" + list[i].id);
   if (open !== i) return;
   if (!$("viewer").classList.contains("open")) for (const k of Object.keys(folds)) folds[k] = false;   // a photo opens with every section folded
@@ -512,7 +512,7 @@ async function openViewer(i) {
     (p.legacy_notes.length ? `<h4>Earlier notes</h4><ul class="meta" style="margin:0 1.1rem .5rem;padding-left:1.1rem">${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
     foldSection("chat", "Chat", chat) +
     (p.chat_blocked ? "" : foldSection("wm", "Watermark", watermarkForm(p.watermark)));
-  $("vClose").onclick = $("vClose2").onclick = closeViewer;
+  $("vClose").onclick = $("vClose2").onclick = () => backLayer("viewer", closeViewer);
   wireFolds();
   wireWatermark(p.id, p.watermark);
   for (const b of $("panel").querySelectorAll("[data-orig]")) b.onclick = () => showOriginal(p.id, p.sources.find(x => x.index === +b.dataset.orig), b.dataset.type);
@@ -689,8 +689,8 @@ function wireWatermark(id, w) {
       status("");
       const o = $("overlay");
       o.innerHTML = `<img src="${url}" alt="The original with the watermark"><button class="btn sec sm close" aria-label="Close">Close</button>`;
-      o.hidden = false;
-      o.onclick = () => { closeOriginal(); URL.revokeObjectURL(url); };
+      o.hidden = false; pushLayer("overlay", closeOriginal);
+      o.onclick = () => { backLayer("overlay", closeOriginal); URL.revokeObjectURL(url); };
     } catch (e) { status("That couldn't be drawn."); }
   };
   // The colour each line was drawn in (the server skips empty lines, so count the ones with text).
@@ -929,11 +929,11 @@ function showOriginal(id, source, type) {
     `<button type="button" class="btn sec sm close" aria-label="Close original">Close</button></div>` +
     `<div class="infopop" id="infoPop" role="dialog" aria-label="About this original" hidden>` +
     `<h5>About this original <button type="button" class="x" id="infoX" aria-label="Close information">&times;</button></h5>${originalInfo(source)}</div>`;
-  o.hidden = false;
-  o.onclick = e => { if (e.target.tagName !== "VIDEO") closeOriginal(); };
+  o.hidden = false; pushLayer("overlay", closeOriginal);
+  o.onclick = e => { if (e.target.tagName !== "VIDEO") backLayer("overlay", closeOriginal); };
   const tools = o.querySelector(".tools");
   tools.onclick = e => e.stopPropagation();                    // the buttons are not clicks on the photo
-  tools.querySelector(".close").onclick = closeOriginal;
+  tools.querySelector(".close").onclick = () => backLayer("overlay", closeOriginal);
   $("infoPop").onclick = e => e.stopPropagation();
   $("infoBtn").onclick = () => toggleInfo();
   $("infoX").onclick = () => toggleInfo(false);
@@ -974,20 +974,32 @@ function originalInfo(source) {
 function showCurrent(id, version) {
   const o = $("overlay");
   o.innerHTML = `<img src="/media/${id}/full?v=${version}" alt="The photo"><button class="btn sec sm close" aria-label="Close photo">Close</button>`;
-  o.hidden = false;
-  o.onclick = () => closeOriginal();
+  o.hidden = false; pushLayer("overlay", closeOriginal);
+  o.onclick = () => backLayer("overlay", closeOriginal);
 }
-function closeOriginal() { const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
-function closeViewer() { closeOriginal(); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
+// The photo window and the original/finished photo over it each take one step in the browser's history, so the
+// browser's Back button closes the top one (and nothing more) and leaves the page where it was. Their own Back,
+// Close and Escape give that step back; a close the page makes by itself (changing view, the photo gone) does
+// not touch the history, so it can never undo a change of view.
+const layers = []; let skipPops = 0;
+function pushLayer(name, close) {
+  if (layers.some(l => l.name === name)) return;
+  try { history.pushState({ layer: name }, ""); layers.push({ name, close }); } catch (e) { /* no history: Back just won't be caught */ }
+}
+function dropLayer(name) { const i = layers.findIndex(l => l.name === name); if (i >= 0) layers.splice(i, 1); return i >= 0; }
+function backLayer(name, close) { if (dropLayer(name)) { close(); skipPops++; history.back(); } else close(); }
+window.addEventListener("popstate", () => { if (skipPops) { skipPops--; return; } const l = layers.pop(); if (l) l.close(); });
+function closeOriginal() { dropLayer("overlay"); const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
+function closeViewer() { closeOriginal(); dropLayer("viewer"); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && !$("confirm").hidden) { closeConfirm(); return; }
   if (e.key === "Escape" && !$("retPop").hidden) { closeRetention(); return; }
-  if (e.key === "Escape" && !$("overlay").hidden) { if (!$("infoPop") || $("infoPop").hidden) closeOriginal(); else toggleInfo(false); return; }
+  if (e.key === "Escape" && !$("overlay").hidden) { if (!$("infoPop") || $("infoPop").hidden) backLayer("overlay", closeOriginal); else toggleInfo(false); return; }
   if (e.key === "Escape" && menuEl) { closeMenu(); return; }
   if (open < 0) return;
   const typing = ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName);
   if (typing && e.key !== "Escape") return;
-  if (e.key === "Escape") closeViewer();
+  if (e.key === "Escape") backLayer("viewer", closeViewer);
   else if (e.key === "ArrowRight") openViewer(open + 1);
   else if (e.key === "ArrowLeft") openViewer(open - 1);
 });

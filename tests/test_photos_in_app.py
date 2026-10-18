@@ -135,3 +135,11 @@ def test_the_browsers_back_button_closes_the_viewer_the_same_as_its_own_back_but
     js = read("static", "photos.js")
     assert 'history.pushState({ phViewer: 1 }, "")' in js and 'window.addEventListener("popstate"' in js
     assert '$("pv-back").onclick = backFromViewer;' in js and "history.back()" in js
+
+
+def test_the_browsers_back_button_closes_the_photo_window_and_the_original_over_it_in_the_pipeline_views():
+    page = read("templates", "index.html")
+    assert "function pushLayer(name, close)" in page and 'window.addEventListener("popstate"' in page
+    assert 'pushLayer("viewer", closeViewer)' in page and 'pushLayer("overlay", closeOriginal)' in page
+    assert 'backLayer("viewer", closeViewer)' in page and 'backLayer("overlay", closeOriginal)' in page
+    assert "$(\"vClose\").onclick = $(\"vClose2\").onclick = closeViewer;" not in page      # the buttons give the history step back
