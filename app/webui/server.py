@@ -20,6 +20,7 @@ from . import events
 from .action_routes import register_action_routes
 from .browse import register_browse_routes
 from .chat_routes import register_chat_routes
+from .household_routes import register_household_routes
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,8 @@ def create_app(
         register_browse_routes(app, store, revisions, thumbs, rules)
         register_action_routes(app, store, revisions, cfg, on_change)
         register_chat_routes(app, store, on_job, recipe, revisions, on_change, immich, extra_immich)
+    if immich is not None:
+        register_household_routes(app, immich)
     if rules is not None:
         _register_rules_routes(app, rules)
 
