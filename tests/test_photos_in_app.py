@@ -122,3 +122,10 @@ def test_photos_search_select_send_download_and_trash_use_the_household_routes()
 
 def test_the_collage_maker_place_is_not_part_of_the_photos_view():
     assert "Make collage" not in read("static", "photos.js")
+
+
+def test_search_results_are_shown_like_the_timeline_by_month_and_day_with_their_own_timeline():
+    js = read("static", "photos.js")
+    assert 'id="ph-rtl"' in js and "function rebuildResults()" in js and "buildTimeline(months)" in js     # months, days and a timeline of the results
+    assert "function enterSearch()" in js and "function leaveSearch()" in js                             # the main page's state is put aside, then back
+    assert "resSec" not in js and "flatItems" in js                                                      # the viewer steps across months of results
