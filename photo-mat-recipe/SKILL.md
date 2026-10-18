@@ -1,11 +1,11 @@
 ---
 name: "photo-mat-recipe"
-description: "Build a beveled 3D matted photo (or portrait-photo collage) for a screensaver/TV display: optimize, straighten if safe, crop to 16:9 including the mat, and pick a mat color from the photo's own palette."
+description: "Build a beveled 3D matted photo (or a collage of 2 to 12 photos) for a screensaver/TV display: optimize, straighten if safe, crop to 16:9 including the mat, and pick a mat color from the photo's own palette."
 ---
 
 # Photo Mat Recipe
 
-Turns a photo (or a set of portrait photos) into a museum-style matted image sized for a 16:9 screensaver/TV, with a beveled 3D mat edge in a color pulled from the photo itself.
+Turns a photo (or a set of 2 to 12 photos, landscape and portrait mixed) into a museum-style matted image sized for a 16:9 screensaver/TV, with a beveled 3D mat edge in a color pulled from the photo itself.
 
 Work in Python with Pillow (PIL) and OpenCV (cv2) + numpy. Always preserve full source resolution - never upscale.
 
@@ -108,16 +108,18 @@ paste the photo onto canvas at (mat, mat)
 
 Light is assumed to come from the upper-left (standard convention) - don't flip this without being asked.
 
-## 7. Multi-photo collages (portrait photos side-by-side)
+## 7. Multi-photo collages (2 to 12 photos, landscape and portrait mixed)
 
-When the user wants portrait-orientation photos combined into one wide image (they fill a 16:9 screen far better combined than one portrait alone):
+A person chooses between 2 and 12 photos that belong together and the pipeline hands them to you in the order they were chosen. They can be any mix of landscape and portrait. The result is ONE wide image that fills a 16:9 screen.
 
-- 2 photos side-by-side require cropping each down to roughly half their original height to reach true 16:9 - this is often too aggressive and risks cutting into tall subjects (e.g. a surfboard filling the frame). It's fine to accept a less-than-16:9 ratio (some letterboxing) rather than ruin a photo; tell the user this tradeoff plainly.
-- 3 photos side-by-side reach true 16:9 with a MUCH gentler per-photo crop (~80% of original height kept, vs ~50% for 2-up) because the added photo increases total content width while mat/gap overhead stays nearly fixed. Prefer 3-up over 2-up when the user has 3 photos and screen-filling matters, and explain the crop-amount tradeoff in these terms if asked.
-- Always check each photo's actual safe margins (see section 5) before picking a shared crop-trim amount; different photos in the same collage may need different trim amounts if their subjects' safe margins differ - apply the smallest safe trim as the common amount, or crop asymmetrically per-photo as needed.
-- Build each photo panel by cropping it to the same target height, running it through optimize(), and placing panels left-to-right into one canvas with a shared mat (mat border on the outside, a narrower gap of ~80px between photos), each with its own bevel+shadow treatment (same mat_color for all panels, each panel beveled individually with that color).
-- Pick ONE mat color per collage per the rules in section 3, considering all photos in the set together.
-- A photo that is already a comfortable "wide" shape (e.g. a close-up bird/nature photo not shot portrait) can be resized (not cropped) to match the target panel height, since it may not need trimming to fit - only crop photos that actually need their aspect changed.
+- **You choose the arrangement for this set.** Look at the photos together first (their shapes, subjects and colors), then pick the layout that suits them: a single row, two rows, a larger "hero" photo beside a grid of smaller ones, columns of stacked landscapes next to a portrait, whatever shows this particular set best. There is no fixed template. Do not force a grid when the photos do not suit one. Keep the order they were given in as the reading order (left to right, then top to bottom) unless a different order is clearly better for the picture; if you do change it, say so in your reply.
+- **One shared mat for the whole collage.** Build the collage on a single 16:9 canvas (section 4). The mat border goes around the outside and a narrower gap of about 80px separates photos (a little less than that is fine at 9 or more photos so they do not become tiny). Each photo gets its own bevel and drop shadow (section 6), all with the same mat_color.
+- **Balanced sizes.** No photo should dwarf the rest or be reduced to a sliver. Panels in a row share one height and panels in a column share one width, so the edges line up. Give a photo more room only when the layout is deliberately built around a hero photo; with many photos keep the sizes close to one another. A photo may be larger only if it is the clear subject and the others still read comfortably at screen size. Rules the person has taught (for collages) override this default.
+- **Fill the canvas, but never ruin a photo.** Crop each panel only as much as the layout needs and check each photo's safe margins first (section 5). When filling 16:9 exactly would cut into a subject, accept a little more mat or a different arrangement instead, and tell the person plainly that you did.
+- **Mixing shapes.** Pair a portrait with a stack of two landscapes of about the same combined height, or put portraits in a row of their own. A photo that is already close to its panel's shape is resized, not cropped. With only 2 or 3 portrait photos a single row (side by side) is usually best: 3 reach true 16:9 with a much gentler crop than 2 do (about 80% of the height kept against about 50%), so with 2 portraits accept some extra mat rather than cutting into tall subjects.
+- Run each photo through optimize() (section 2) after cropping and before it is placed.
+- Pick ONE mat color for the collage per the rules in section 3, considering all the photos in the set together.
+- If the person asks for a different arrangement in the photo's chat ("make the first one bigger", "two rows", "swap the second and third"), rebuild the collage from the original photos with that change; the earlier steps and rules still apply.
 
 ## 8. Batch processing from a zip of photos
 
