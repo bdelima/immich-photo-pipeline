@@ -29,7 +29,7 @@ const PhotosPane = (() => {
   const monthLabel = m => { const [y, mo] = m.split("-"); return MONTHS[+mo - 1] + " " + y; };
   const shortMonth = m => MONTHS[+m.slice(5, 7) - 1].slice(0, 3);
   const dayLabel = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-  const dayShort = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" }) + " " + +d.slice(8, 10);
+  const dayShort = d => String(+d.slice(8, 10));        // the timeline column is narrow: the day number only
   const dur = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
     return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(r).padStart(2, "0"); };
   const niceBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
