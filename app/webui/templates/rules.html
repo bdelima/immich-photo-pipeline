@@ -31,113 +31,44 @@
         </div>
       </div>
 {% endmacro %}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Recipe rules &middot; immich-photo-pipeline</title>
-  {% include "_icons.html" %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='pipeline.css') }}">
-</head>
-<body>
-  <nav>
-    <h1>Photo pipeline</h1>
-    <div id="tree"></div>
-    <div class="links"><a class="item active" href="/rules">Recipe rules</a></div>
-  </nav>
-  <main>
-    <div class="rules-page">
-      <div class="card head">
-        <h2>Recipe rules</h2>
-        <span class="chip">{{ active|length }} of {{ limit }} in use</span>
-        <span class="sp"></span>
-        <span id="status" class="status bad" role="status"></span>
+<div class="rules-page" data-max-chars="{{ max_chars }}">
+  <div class="card head">
+    <h2>Recipe rules</h2>
+    <span class="chip">{{ active|length }} of {{ limit }} in use</span>
+    <span class="sp"></span>
+    <span id="rulesStatus" class="status bad" role="status"></span>
+  </div>
+  <p class="lead">Standing preferences added to every photo the pipeline processes. Reviewers can teach one by commenting
+    (for example &ldquo;from now on, keep collage items balanced by size&rdquo;), or you can add one here. At most {{ limit }} can be active.</p>
+
+  <h3 class="section-title">Active</h3>
+  {% for r in active %}
+  {{ rule_card(r, false) }}
+  {% else %}
+  <p class="muted">No rules yet.</p>
+  {% endfor %}
+
+  {% if proposed %}
+  <h3 class="section-title">Proposed by the recipe (not in use until saved)</h3>
+  {% for r in proposed %}
+  {{ rule_card(r, true) }}
+  {% endfor %}
+  {% endif %}
+
+  <h3 class="section-title">Add a rule</h3>
+  <form id="add-form" class="card add-form">
+    <div class="editor">
+      <div>
+        <div class="label">Applies to</div>
+        <select class="field" name="scope" aria-label="Applies to">
+          {% for s in scopes %}<option value="{{ s }}">{{ scope_labels[s] }}</option>{% endfor %}
+        </select>
       </div>
-      <p class="lead">Standing preferences added to every photo the pipeline processes. Reviewers can teach one by commenting
-        (for example &ldquo;from now on, keep collage items balanced by size&rdquo;), or you can add one here. At most {{ limit }} can be active.</p>
-
-      <h3 class="section-title">Active</h3>
-      {% for r in active %}
-      {{ rule_card(r, false) }}
-      {% else %}
-      <p class="muted">No rules yet.</p>
-      {% endfor %}
-
-      {% if proposed %}
-      <h3 class="section-title">Proposed by the recipe (not in use until saved)</h3>
-      {% for r in proposed %}
-      {{ rule_card(r, true) }}
-      {% endfor %}
-      {% endif %}
-
-      <h3 class="section-title">Add a rule</h3>
-      <form id="add-form" class="card add-form">
-        <div class="editor">
-          <div>
-            <div class="label">Applies to</div>
-            <select class="field" name="scope" aria-label="Applies to">
-              {% for s in scopes %}<option value="{{ s }}">{{ scope_labels[s] }}</option>{% endfor %}
-            </select>
-          </div>
-          <div>
-            <div class="label">Rule</div>
-            <textarea class="field" name="text" maxlength="{{ max_chars }}" placeholder="e.g. Keep collage items balanced by size" required></textarea>
-          </div>
-          <div class="foot"><button class="btn" type="submit">Add rule</button><span class="counter"></span></div>
-        </div>
-      </form>
+      <div>
+        <div class="label">Rule</div>
+        <textarea class="field" name="text" maxlength="{{ max_chars }}" placeholder="e.g. Keep collage items balanced by size" required></textarea>
+      </div>
+      <div class="foot"><button class="btn" type="submit">Add rule</button><span class="counter"></span></div>
     </div>
-  </main>
-<script src="{{ url_for('static', filename='app.js') }}"></script>
-<script>
-  renderTree(null, "/").catch(() => {});
-  const status = document.getElementById("status");
-  async function call(url, body) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const data = await res.json();
-    if (res.ok) { location.reload(); } else { status.textContent = "Error: " + data.error; }
-  }
-  // A text box that grows with what is typed, with a count of characters used.
-  function wireBox(box, counter, limit) {
-    const grow = () => {
-      box.style.height = "auto";
-      box.style.height = Math.max(88, Math.min(box.scrollHeight + 2, 320)) + "px";
-      counter.textContent = box.value.length + " / " + limit;
-      counter.className = "counter" + (box.value.length >= limit ? " over" : "");
-    };
-    box.addEventListener("input", grow);
-    grow();
-    return grow;
-  }
-  const LIMIT = {{ max_chars }};
-  document.querySelectorAll("button[data-act]").forEach((b) => {
-    b.addEventListener("click", () => call(`/api/rules/${b.dataset.id}/${b.dataset.act}`));
-  });
-  document.querySelectorAll(".rule[data-rule]").forEach((card) => {
-    const editor = card.querySelector(".editor"), box = card.querySelector("[data-text]");
-    const grow = wireBox(box, card.querySelector(".counter"), LIMIT);
-    const show = editing => {
-      editor.hidden = !editing;
-      card.querySelectorAll(".rule-view").forEach((el) => { el.hidden = editing; });
-      if (editing) { grow(); box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
-    };
-    card.querySelector("[data-edit]").addEventListener("click", () => show(true));
-    card.querySelector("[data-cancel]").addEventListener("click", () => { box.value = box.defaultValue; show(false); });
-    card.querySelector("[data-save]").addEventListener("click", () =>
-      call(`/api/rules/${card.dataset.rule}/edit`, { text: box.value, scope: card.querySelector("[data-scope]").value }));
-  });
-  const addForm = document.getElementById("add-form");
-  wireBox(addForm.querySelector("textarea"), addForm.querySelector(".counter"), LIMIT);
-  addForm.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    call("/api/rules", { text: f.get("text"), scope: f.get("scope") });
-  });
-</script>
-</body>
-</html>
+  </form>
+</div>

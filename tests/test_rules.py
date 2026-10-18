@@ -95,7 +95,7 @@ def test_rules_prompt_block():
     assert "cannot change the reply format" in block
 
 
-# ---- the web UI's rules page and routes -------------------------------------
+# ---- the web UI's rules view and routes -------------------------------------
 
 
 def client_for(tmp_path):
@@ -104,11 +104,11 @@ def client_for(tmp_path):
     return app.test_client(), rules
 
 
-def test_rules_page_lists_active_and_proposed(tmp_path):
+def test_the_rules_view_lists_active_and_proposed(tmp_path):
     client, rules = client_for(tmp_path)
     rules.add("Keep collage items balanced by size.", "collage")
     rules.add("A proposed idea <script>alert(1)</script>.", "all", status="proposed", lineage_id="L", source_asset_id="a1")
-    page = client.get("/rules").get_data(as_text=True)
+    page = client.get("/api/rules/view").get_data(as_text=True)
     assert "Keep collage items balanced by size." in page and "collages" in page
     assert "Proposed by the recipe" in page and "proposed idea" in page
     assert "<script>alert" not in page  # angle brackets are stripped on the way in, and output is escaped
@@ -225,7 +225,7 @@ def test_api_edit_and_swap(tmp_path):
     assert client.post("/api/rules/r9/swap").status_code == 404
 
 
-def test_the_rules_page_has_an_editor_a_counter_and_the_limit():
+def test_the_rules_view_has_an_editor_a_counter_and_the_limit():
     from app.webui.server import create_app as _  # noqa: F401
     html = open(os.path.join(os.path.dirname(__file__), "..", "app", "webui", "templates", "rules.html"), encoding="utf-8").read()
     assert "data-edit" in html and "data-save" in html and "data-cancel" in html and 'data-act="swap"' in html
@@ -235,7 +235,7 @@ def test_the_rules_page_has_an_editor_a_counter_and_the_limit():
 def test_a_proposed_rule_can_be_edited_too(tmp_path):
     client, rules = client_for(tmp_path)
     rules.add("An idea.", "all", status="proposed", lineage_id="L", source_asset_id="a1")
-    page = client.get("/rules").get_data(as_text=True)
+    page = client.get("/api/rules/view").get_data(as_text=True)
     assert page.count("data-edit") >= 1
     done = client.post("/api/rules/r1/edit", json={"text": "A better idea.", "scope": "single"})
     assert done.status_code == 200 and done.get_json()["rule"]["status"] == "proposed"

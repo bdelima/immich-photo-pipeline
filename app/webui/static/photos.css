@@ -1,23 +1,43 @@
-/* The household Photos page (/photos); the colours and buttons come from pipeline.css. */
-/* ---- household photos (/photos) ---- */
-.ph-wrap { max-width: none; }
-.ph-top { display: flex; align-items: center; gap: .8rem; margin-bottom: .6rem; }
-.ph-top h2 { margin: 0; font-size: 1.25rem; }
+/* The Photos view of the main page (#photos). Colours and buttons come from pipeline.css. */
+/* the line under Photos in the sidebar (the one above Recipe rules is nav .links, in pipeline.css) */
+nav .sep { margin: .7rem .4rem; border-top: 1px solid var(--line); }
+
+/* The photos scroll in their own box; the timeline is a narrow column to the right of its scroll bar. */
+#photosView.ph-pane { display: flex; padding: 0; overflow: hidden; }
+.ph-scroll { flex: 1; min-width: 0; overflow-y: auto; overflow-anchor: none; padding: 1.4rem 1.2rem 1.4rem 1.7rem; }  /* photos.js keeps the place itself when a month above changes height */
 .ph-note { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1.1rem; margin: .6rem 0; color: var(--soft); }
-.ph-mh { position: sticky; top: -1.4rem; z-index: 2; margin: 0; padding: .7rem 0 .4rem; background: var(--bg); font-size: 1.05rem; }
+.ph-mh { position: sticky; top: 0; z-index: 2; margin: 0; padding: .7rem 0 .4rem; background: var(--bg); font-size: 1.05rem; line-height: 1.6rem; }
 .ph-mh .muted { font-weight: 400; font-size: .8rem; }
-.ph-day { font-size: .78rem; color: var(--muted); margin: .7rem 0 .3rem; }
-.ph-row { display: flex; gap: 4px; margin-bottom: 4px; }
+.ph-body { position: relative; }
+.ph-day, .ph-row { position: absolute; left: 0; }
+.ph-day { font-size: .78rem; color: var(--muted); padding-top: .7rem; }
+.ph-row { display: flex; gap: 4px; }
+.ph-fail { padding: 1rem 0; }
+/* a tile is a grey box of its final size; the picture fades in over it */
 .ph-tile { position: relative; flex: none; padding: 0; border: 0; background: var(--chip); border-radius: 3px; overflow: hidden; cursor: pointer; }
-.ph-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ph-tile img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .25s ease-out; }
+.ph-tile img.in { opacity: 1; }
 .ph-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ph-owner, .ph-dur { position: absolute; font-size: .7rem; color: #fff; background: rgba(0, 0, 0, .55); border-radius: 99px; padding: .05rem .5rem; }
 .ph-owner { left: 6px; bottom: 6px; }
 .ph-dur { right: 6px; top: 6px; }
-#ph-rail { position: fixed; right: 4px; top: 4rem; bottom: 1rem; display: flex; flex-direction: column; justify-content: flex-start; gap: .1rem; z-index: 3; overflow-y: auto; }
-#ph-rail button { border: 0; background: transparent; color: var(--muted); font-size: .72rem; cursor: pointer; padding: .15rem .3rem; border-radius: 6px; }
-#ph-rail button.on { color: var(--accent-text); background: var(--accent-soft); font-weight: 700; }
-main#ph-main { padding-right: 3.4rem; }
+
+/* the timeline: years, with months under them, with days under those; counts on years only */
+.ph-tl { width: 5.6rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: .4rem .2rem; font-size: .72rem; scrollbar-width: thin; user-select: none; }
+.ph-tl .nd { white-space: nowrap; display: flex; align-items: center; gap: .15rem; border-radius: 6px; padding: .1rem .2rem; cursor: pointer; }
+.ph-tl .nd:hover { background: var(--panel-2); }
+.ph-tl .nd:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ph-tl .nd.here { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.ph-tl .tw { width: .7rem; text-align: center; color: var(--muted); font-size: .7rem; flex: none; }
+.ph-tl .tw.leaf { visibility: hidden; }
+.ph-tl .c:empty { display: none; }
+.ph-tl .c { margin-left: auto; color: var(--muted); font-size: .64rem; font-weight: 400; }
+.ph-tl .y > .nd { font-weight: 700; }
+.ph-tl .mo { padding-left: .55rem; }
+.ph-tl .dy { padding-left: 1.15rem; }
+.ph-tl .dy.wait { color: var(--muted); }
+
+/* the full-window viewer */
 #pv { position: fixed; inset: 0; z-index: 20; background: #000; color: #fff; display: flex; flex-direction: column; }
 #pv[hidden] { display: none; }
 .pv-bar { display: flex; align-items: center; gap: .5rem; padding: .5rem .8rem; background: rgba(0, 0, 0, .6); }
@@ -35,4 +55,11 @@ main#ph-main { padding-right: 3.4rem; }
 .pv-nav { position: absolute; top: 50%; transform: translateY(-50%); border: 0; width: 2.6rem; height: 4rem; font-size: 2rem; color: #fff; background: rgba(255, 255, 255, .12); cursor: pointer; border-radius: 8px; }
 .pv-nav.prev { left: .6rem; } .pv-nav.next { right: .6rem; }
 .pv-nav[hidden] { display: none; }
-@media (max-width: 700px) { nav { display: none; } main#ph-main { padding: 1rem .8rem; padding-right: 2.6rem; } }
+
+/* on a phone the sidebar is stacked above, so the view takes a fixed share of the height */
+@media (max-width: 760px) {
+  #photosView.ph-pane { flex: none; height: 80vh; }
+  .ph-scroll { padding: 1rem .8rem; }
+  .ph-tl { width: 5.4rem; font-size: .68rem; }
+  .ph-tl .dy { padding-left: .9rem; }
+}

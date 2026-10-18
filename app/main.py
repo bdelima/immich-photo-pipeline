@@ -11,6 +11,7 @@ from .config import Config
 from .cycle import Cycle
 from .health import HealthStore
 from .immich_client import ImmichClient, ImmichError
+from .immich_thumbs import ImmichThumbCache
 from .intake import Intake
 from .library import LibraryStore
 from .recipe_runner import RecipeRunner, format_auth_instructions
@@ -136,8 +137,10 @@ def main() -> None:
     app = create_app(
         cfg, immich, store, health, rules=rules, revisions=revisions, thumbs=ThumbCache(cfg.thumbs_path),
         on_change=poll_wake.set, on_job=worker.wake, recipe=recipe, extra_immich=extra_clients,
+        immich_thumbs=ImmichThumbCache(cfg.immich_thumbs_path),
     )
-    app.run(host=cfg.webui_host, port=cfg.webui_port)
+    # Threaded, so a screenful of thumbnails is served in parallel rather than one at a time.
+    app.run(host=cfg.webui_host, port=cfg.webui_port, threaded=True)
 
 
 if __name__ == "__main__":

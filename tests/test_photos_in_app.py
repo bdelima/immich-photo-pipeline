@@ -1,0 +1,98 @@
+"""Photos and Recipe rules are views inside the main page, not pages of their own."""
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from app.library import LibraryStore
+from app.revisions import RevisionStore
+from app.rules import RulesStore
+from app.thumbs import ThumbCache
+from app.webui.server import create_app
+
+HERE = os.path.join(os.path.dirname(__file__), "..", "app", "webui")
+
+
+def read(*parts):
+    with open(os.path.join(HERE, *parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
+class Immich:
+    pass
+
+
+def client(tmp_path, immich=True, rules=True):
+    app = create_app(
+        None, Immich() if immich else None, LibraryStore(str(tmp_path / "lib.json")), None,
+        rules=RulesStore(str(tmp_path / "rules.json")) if rules else None,
+        revisions=RevisionStore(str(tmp_path / "rev")), thumbs=ThumbCache(str(tmp_path / "th")))
+    return app.test_client()
+
+
+def test_there_are_no_pages_called_photos_or_rules_any_more(tmp_path):
+    c = client(tmp_path)
+    assert c.get("/photos").status_code == 404 and c.get("/rules").status_code == 404
+    for gone in ("photos.html",):
+        assert not os.path.exists(os.path.join(HERE, "templates", gone))
+    assert "/photos" not in read("static", "app.js") and 'href="/rules"' not in read("templates", "index.html")
+
+
+def test_the_main_page_holds_both_views_and_the_sidebar_offers_what_the_server_can_show(tmp_path):
+    page = client(tmp_path).get("/").get_data(as_text=True)
+    assert 'id="photosView"' in page and 'id="rulesView"' in page and 'id="pipeView"' in page
+    assert 'window.FEATURES = {"photos": true, "rules": true}' in page.replace("\n", "")
+    assert "photos.js" in page and "rules.js" in page and "photos.css" in page
+    only = client(tmp_path, immich=False, rules=False).get("/").get_data(as_text=True)
+    assert 'window.FEATURES = {"photos": false, "rules": false}' in only.replace("\n", "")
+
+
+def test_the_sidebar_is_photos_a_line_the_places_a_line_then_recipe_rules():
+    js = read("static", "app.js")
+    body = js[js.index("async function renderTree"):js.index("// A small version hint")]
+    order = [body.index(k) for k in ('paneItem("photos"', 'class="sep"', 'treeItem("queue"', 'treeItem("review"', 'treeItem("live"',
+                                      '>Albums<', 'treeItem("trash"', 'class="links"', 'paneItem("rules"')]
+    assert order == sorted(order)
+    assert body.count('<div class="sep">') == 1 and body.count('<div class="links">') == 1
+    assert 'PANE_VIEWS = { photos: "Photos", rules: "Recipe rules" }' in js
+    assert 'class="brand"' in read("templates", "index.html") and "Immich Photo Pipeline" in read("templates", "index.html")
+
+
+def test_choosing_photos_or_rules_swaps_the_area_on_the_right_and_nothing_else():
+    page = read("templates", "index.html")
+    assert 'const isPane = v => v === "photos" || v === "rules";' in page
+    assert "if (isPane(v) && window.FEATURES[v]) return openPane(v);" in page
+    assert "PhotosPane.show()" in page and "RulesPane.show()" in page and "PhotosPane.hide()" in page
+    assert "if (isPane(view)) return;" in page                       # the live sync has no grid to keep in step there
+    assert '#tree a.item:not(.pane)' in page                         # and its count check ignores the two views
+
+
+def test_the_rules_view_is_drawn_by_the_server_and_redrawn_after_a_change(tmp_path):
+    c = client(tmp_path)
+    c.post("/api/rules", json={"text": "Keep it tidy.", "scope": "all"})
+    html = c.get("/api/rules/view").get_data(as_text=True)
+    assert "<html" not in html and "Keep it tidy." in html and 'data-max-chars="' in html and 'id="add-form"' in html
+    js = read("static", "rules.js")
+    assert "location.reload" not in js and "await show()" in js     # redraws in place
+    assert client(tmp_path, rules=False).get("/api/rules/view").status_code == 404
+
+
+def test_the_timeline_follows_the_photos_down_to_the_day_and_jumps_to_the_newest_in_a_row():
+    js = read("static", "photos.js")
+    assert "const FOLLOW_MS = 120;" in js and "clearTimeout(followTimer); followTimer = setTimeout(follow, FOLLOW_MS)" in js
+    assert 'node(g.y, g.y, g.n, "y", true)' in js                    # counts on years only
+    assert 'node(m.month, shortMonth(m.month), 0, "mo", true' in js and 'node(d, dayShort(d), 0, "dy", false' in js
+    assert "async function jump(key)" in js and "auto[k] = true" in js and "delete auto[k]" in js
+    assert "a row the person opened stays" in js
+    css = read("static", "photos.css")
+    assert re.search(r"\.ph-scroll \{[^}]*overflow-y: auto", css) and re.search(r"\.ph-tl \{[^}]*width: 5\.6rem", css)
+
+
+def test_months_are_kept_and_only_near_rows_are_drawn_with_the_next_and_previous_fetched_ahead():
+    js = read("static", "photos.js")
+    assert "if (s.items) return Promise.resolve(s);" in js           # a month's list is fetched once per session
+    assert "function clearRows" in js and "TILE_NEAR" in js and "s.rendered" in js
+    assert "for (const j of [i - 1, i + 1])" in js and "new Image().src = thumbUrl" in js
+    assert not re.search(r"s\.items\s*=\s*null", js)                 # never thrown away
+    assert "opacity: 0" in read("static", "photos.css") and ".ph-tile img.in" in read("static", "photos.css")

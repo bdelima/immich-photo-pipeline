@@ -1,21 +1,29 @@
-"""The household Photos page (/photos) and what it reads: the months of everyone's timeline,
-one month's photos, thumbnails and previews, video playback, and the details of one photo.
+"""What the Photos view reads: the months of everyone's timeline, one month's photos,
+thumbnails and previews, video playback, and the details of one photo.
 
 All read-only. Pictures are passed through from Immich with the pipeline's own key (the
 household members have partnered it, see app/household.py), so the browser never talks to
-Immich itself.
+Immich itself. Thumbnails are kept on disk (app/immich_thumbs.py) and every picture carries
+an ETag, so the browser can ask "has it changed?" and be told no without the bytes again.
 """
 from __future__ import annotations
 
-from flask import Flask, Response, abort, jsonify, render_template, request, stream_with_context
+import hashlib
+
+from flask import Flask, Response, abort, jsonify, request, send_file, stream_with_context
 
 from .. import household, metadata
 from ..immich_client import ImmichClient, ImmichError
+from ..immich_thumbs import ImmichThumbCache
 
 _PASS_HEADERS = ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges")
 
 
-def register_household_routes(app: Flask, immich: ImmichClient) -> None:
+# How long a browser may reuse a picture without asking. After that it asks with its ETag.
+PICTURE_MAX_AGE = 3600
+
+
+def register_household_routes(app: Flask, immich: ImmichClient, thumb_cache: ImmichThumbCache | None = None) -> None:
     state: dict = {}
 
     def own_id() -> str:
@@ -31,10 +39,6 @@ def register_household_routes(app: Flask, immich: ImmichClient) -> None:
         if not household.valid_asset_id(asset_id):
             abort(404)
         return asset_id
-
-    @app.get("/photos")
-    def photos_page():
-        return render_template("photos.html")
 
     @app.get("/api/household/months")
     def api_household_months():
@@ -56,11 +60,25 @@ def register_household_routes(app: Flask, immich: ImmichClient) -> None:
         return jsonify({"items": items})
 
     def image(asset_id: str, size: str):
-        try:
-            data, content_type = immich.fetch_image(asset_id_or_404(asset_id), size)
-        except ImmichError as exc:
-            return failed(exc)
-        return Response(data, mimetype=content_type, headers={"Cache-Control": "private, max-age=86400"})
+        asset_id = asset_id_or_404(asset_id)
+        cache_control = f"private, max-age={PICTURE_MAX_AGE}"
+        kept = thumb_cache.get(asset_id, size) if thumb_cache else None
+        if kept is None:
+            try:
+                data, content_type = immich.fetch_image(asset_id, size)
+            except ImmichError as exc:
+                return failed(exc)
+            if thumb_cache:
+                kept = thumb_cache.put(asset_id, size, data, content_type)
+            if kept is None:        # not kept (no cache, or it could not be written): serve what we have
+                etag = '"' + hashlib.sha1(data).hexdigest() + '"'
+                resp = Response(data, mimetype=content_type, headers={"Cache-Control": cache_control, "ETag": etag})
+                return resp.make_conditional(request)
+        path, mime = kept
+        # send_file adds an ETag and Last-Modified from the file and answers a repeat request with 304.
+        resp = send_file(path, mimetype=mime, conditional=True, max_age=PICTURE_MAX_AGE)
+        resp.headers["Cache-Control"] = cache_control
+        return resp
 
     @app.get("/api/household/<asset_id>/thumb")
     def api_household_thumb(asset_id: str):

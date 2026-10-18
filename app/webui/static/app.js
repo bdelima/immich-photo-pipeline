@@ -3,13 +3,16 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const api = async url => { const r = await fetch(url); if (!r.ok) throw new Error(url + " " + r.status); return r.json(); };
 
-// A view is "review", "live", "queue", "trash" or "album:<slug>". It is the
+// A view is "review", "live", "queue", "trash" or "album:<slug>"; "photos" (the household
+// timeline) and "rules" (the recipe rules) are views in the same window too. It is the
 // address fragment of the main page (/#album:costa-rica), which is how the
 // notes on the Immich albums link straight to one. An older link that has
 // the album's name (/#album:Costa%20Rica) still works.
+const PANE_VIEWS = { photos: "Photos", rules: "Recipe rules" };
 const viewHash = v => "#" + encodeURIComponent(v).replace(/%3A/gi, ":");
 const hashView = h => { try { return decodeURIComponent((h || "").replace(/^#/, "")); } catch (e) { return ""; } };
 const viewTitle = (v, albums) => {
+  if (PANE_VIEWS[v]) return PANE_VIEWS[v];
   if (!v.startsWith("album:")) return v.charAt(0).toUpperCase() + v.slice(1);
   const a = (albums || []).find(x => x.view === v || x.name === v.slice(6));
   return a ? a.name : v.slice(6);
@@ -69,15 +72,22 @@ document.addEventListener("click", e => {
 function treeItem(v, label, n, active, base) {
   return `<a class="item${v === active ? " active" : ""}" href="${base}${viewHash(v)}" data-view="${esc(v)}"><span>${esc(label)}</span>${countHtml(v, n)}</a>`;
 }
-// Draws the sidebar. `base` is "" on the main page and "/" elsewhere, so the
-// same links work from the Recipe rules page.
+// Photos and Recipe rules have no count. They are views in the same window, and the sidebar offers
+// only the ones the server can show (window.FEATURES, set by the page).
+function paneItem(v, active) {
+  return `<a class="item pane${v === active ? " active" : ""}" href="${viewHash(v)}" data-view="${v}"><span>${PANE_VIEWS[v]}</span></a>`;
+}
+// Draws the sidebar: Photos, a line, the places the pipeline keeps (Queue, Review, Live, the albums,
+// Trash), then a line (the .links box) and Recipe rules. `base` is the page's own address, "" on the main page.
 async function renderTree(active, base) {
-  const t = await api("/api/tree");
+  const t = await api("/api/tree"), feat = window.FEATURES || {};
   $("tree").innerHTML =
+    (feat.photos ? paneItem("photos", active) + `<div class="sep"></div>` : "") +
     treeItem("queue", "Queue", t.queue, active, base) + treeItem("review", "Review", t.review, active, base) +
     treeItem("live", "Live", t.live, active, base) +
     `<div class="group">Albums</div>` + t.albums.map(a => treeItem(a.view, a.name, a.count, active, base)).join("") +
-    `<div class="group">&nbsp;</div>` + treeItem("trash", "Trash", t.trash, active, base);
+    `<div class="group">&nbsp;</div>` + treeItem("trash", "Trash", t.trash, active, base) +
+    (feat.rules ? `<div class="links">` + paneItem("rules", active) + `</div>` : "");
   return t;
 }
 
@@ -92,15 +102,4 @@ async function renderTree(active, base) {
     el.textContent = /^\d/.test(v) ? "v" + v : v;
     (h.closest(".brand") || h).after(el);       // under the icon and title, not inside the row
   } catch (e) { /* the hint is optional */ }
-})();
-
-// The Photos page is reached from the links at the foot of the sidebar, on every page that has
-// them. It is added here, once, so each page does not have to list it; a page that already has
-// the link (the Photos page itself) is left alone.
-(() => {
-  const links = document.querySelector("nav .links");
-  if (!links || links.querySelector('a[href="/photos"]')) return;
-  const a = document.createElement("a");
-  a.className = "item"; a.href = "/photos"; a.textContent = "Photos";
-  links.prepend(a);
 })();
