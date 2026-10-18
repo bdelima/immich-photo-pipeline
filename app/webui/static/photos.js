@@ -412,7 +412,7 @@ const PhotosPane = (() => {
       '<button class="pv-nav prev" id="pv-prev" aria-label="Previous photo">&lsaquo;</button><button class="pv-nav next" id="pv-next" aria-label="Next photo">&rsaquo;</button>';
     document.body.appendChild(pv);
     stage = $("pv-stage"); side = $("pv-side"); vtitle = $("pv-title");
-    $("pv-back").onclick = closeViewer;
+    $("pv-back").onclick = backFromViewer;
     $("pv-prev").onclick = () => step(-1);
     $("pv-next").onclick = () => step(1);
     $("pv-send").onclick = e => sendMenu(e.currentTarget, [item().id]);
@@ -432,13 +432,23 @@ const PhotosPane = (() => {
     document.addEventListener("keydown", e => {
       if (pv.hidden) return;
       if (document.querySelector(".ph-modalback") || sendEl) return;                  // a dialog or menu has the keys first
-      if (e.key === "Escape") closeViewer(); else if (e.key === "ArrowLeft") step(-1); else if (e.key === "ArrowRight") step(1);
+      if (e.key === "Escape") backFromViewer(); else if (e.key === "ArrowLeft") step(-1); else if (e.key === "ArrowRight") step(1);
     });
   }
   const item = () => cur && cur.s.items[cur.i];
   const flatItems = () => order.flatMap(b => secs[b].items || []);
-  function openViewer(s, i) { if (!pv) buildViewer(); if (i < 0) return; cur = { s, i }; pv.hidden = false; show(); }
+  // The viewer takes one step in the browser's history, so the browser's Back button closes it and leaves the
+  // timeline where it was, the same as the Back button on the viewer. Stepping between photos adds nothing.
+  let pushed = false;
+  function openViewer(s, i) {
+    if (!pv) buildViewer(); if (i < 0) return;
+    if (pv.hidden) { try { history.pushState({ phViewer: 1 }, ""); pushed = true; } catch (e) { /* no history: Back just won't be caught */ } }
+    cur = { s, i }; pv.hidden = false; show();
+  }
   function closeViewer() { if (!pv || pv.hidden) return; pv.hidden = true; stage.innerHTML = ""; cur = null; }
+  // Back button, Escape: also gives back the history step the viewer took.
+  function backFromViewer() { if (pushed) { pushed = false; closeViewer(); history.back(); } else closeViewer(); }
+  window.addEventListener("popstate", () => { if (pv && !pv.hidden) { pushed = false; closeViewer(); } else pushed = false; });
   // Zoom works by sizing the picture to a multiple of its fitted width; the stage scrolls (and drags) to pan.
   function setZoom(z) { zoom = Math.min(ZMAX, Math.max(1, Math.round(z * 100) / 100)); applyZoom(true); }
   function applyZoom(keepCentre) {

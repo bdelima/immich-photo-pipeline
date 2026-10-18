@@ -129,3 +129,9 @@ def test_search_results_are_shown_like_the_timeline_by_month_and_day_with_their_
     assert 'id="ph-rtl"' in js and "function rebuildResults()" in js and "buildTimeline(months)" in js     # months, days and a timeline of the results
     assert "function enterSearch()" in js and "function leaveSearch()" in js                             # the main page's state is put aside, then back
     assert "resSec" not in js and "flatItems" in js                                                      # the viewer steps across months of results
+
+
+def test_the_browsers_back_button_closes_the_viewer_the_same_as_its_own_back_button():
+    js = read("static", "photos.js")
+    assert 'history.pushState({ phViewer: 1 }, "")' in js and 'window.addEventListener("popstate"' in js
+    assert '$("pv-back").onclick = backFromViewer;' in js and "history.back()" in js
