@@ -263,7 +263,12 @@ class ImmichClient:
     def _timeline_get(self, path: str, params: dict) -> Any:
         """A GET on the timeline endpoints. Immich 1.133 dropped the `size` query
         parameter (buckets are always months); a server that still wants it
-        answers 400 without it, so that one case is retried with it."""
+        answers 400 without it, so that one case is retried with it.
+
+        `visibility=timeline` is always sent: Immich refuses `withPartners` (400) unless
+        the visibility is named and is not archive or locked, and it is also what keeps
+        archived photos off the page."""
+        params = {**params, "visibility": "timeline"}
         try:
             return self._request("GET", path, params=params)
         except ImmichError as exc:
@@ -273,7 +278,7 @@ class ImmichClient:
 
     def timeline_buckets(self) -> list[dict]:
         """The months that have photos, newest first, on this account's timeline
-        with its partners' (GET /timeline/buckets?withPartners=true):
+        with its partners' (GET /timeline/buckets?withPartners=true&visibility=timeline):
         [{"timeBucket": "2026-10-01T00:00:00.000Z", "count": 412}, ...]."""
         body = self._timeline_get("/timeline/buckets", {"withPartners": "true"})
         return [b for b in (body or []) if isinstance(b, dict) and b.get("timeBucket")]

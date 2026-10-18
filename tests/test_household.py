@@ -83,6 +83,29 @@ def test_timeline_retries_with_size_on_400():
     assert out[0]["count"] == 3 and seen[1]["size"] == "MONTH" and seen[0]["withPartners"] == "true"
 
 
+def immich_refuses_partners_without_visibility(params):
+    """Immich's own rule (timeline.service.ts): withPartners is refused unless a visibility
+    other than archive or locked is named."""
+    if params.get("withPartners") == "true" and params.get("visibility") in (None, "archive", "locked"):
+        raise ImmichError("GET /timeline -> 400: withPartners is only supported for non-archived, "
+                          "non-trashed, non-favorited, non-locked assets")
+
+
+def test_both_timeline_calls_name_the_timeline_visibility_so_immich_accepts_withPartners():
+    seen = []
+
+    def handler(method, path, params):
+        seen.append((path, dict(params)))
+        immich_refuses_partners_without_visibility(params)
+        return [{"timeBucket": BUCKET, "count": 3}] if path.endswith("/buckets") else {"id": []}
+
+    c = client(handler)
+    assert c.timeline_buckets()[0]["count"] == 3
+    assert c.timeline_bucket(BUCKET) == []
+    assert [p["visibility"] for _, p in seen] == ["timeline", "timeline"]
+    assert all(p["withPartners"] == "true" for _, p in seen)
+
+
 def test_timeline_other_errors_propagate():
     def handler(method, path, params):
         raise ImmichError("GET /timeline/buckets -> 500: boom")
@@ -170,6 +193,17 @@ def test_month_items_default_ratio():
     assert items[0]["ratio"] == household.DEFAULT_RATIO
 
 
+def test_video_length_from_milliseconds_or_the_older_clock_text():
+    assert household._seconds(65000) == 65 and household._seconds(999) == 0 and household._seconds(0) == 0
+    assert household._seconds("0:01:05.000") == 65 and household._seconds("0:00:00.00000") == 0
+    assert household._seconds(None) == 0 and household._seconds(True) == 0 and household._seconds("junk") == 0
+
+
+def test_month_items_reads_a_video_length_given_in_milliseconds():
+    items = household.month_items(FakeImmich([row(ID1, isVideo=True, duration=125000)]), BUCKET, ME)
+    assert items[0]["seconds"] == 125
+
+
 def test_valid_ids_and_buckets():
     assert household.valid_asset_id(ID1) and not household.valid_asset_id("../etc/passwd")
     assert household.valid_bucket(BUCKET) and household.valid_bucket("2026-10-01") and not household.valid_bucket("x")
@@ -235,3 +269,18 @@ def test_photos_link_is_added_to_every_sidebar():
         html = open(os.path.join(root, "templates", name), encoding="utf-8").read()
         assert 'class="links"' in html and "app.js" in html            # so each of them gets it
     assert 'href="/photos"' in open(os.path.join(root, "templates", "photos.html"), encoding="utf-8").read()
+
+
+def test_every_detail_the_info_panel_reads_is_one_the_metadata_provides():
+    import re
+    from app import metadata
+    root = os.path.join(os.path.dirname(__file__), "..", "app", "webui", "static")
+    js = open(os.path.join(root, "photos.js"), encoding="utf-8").read()
+    meta = metadata.meta_from_asset({
+        "localDateTime": "2026-10-02T01:30:00.000Z", "owner": {"name": "Anna"},
+        "exifInfo": {"dateTimeOriginal": "2026-10-02T01:30:00.000Z", "city": "Tamarindo", "country": "Costa Rica",
+                     "latitude": 10.3, "longitude": -85.8, "exifImageWidth": 4000, "exifImageHeight": 3000,
+                     "fileSizeInByte": 2500000, "model": "X100V", "exposureTime": 0.004, "fNumber": 2.0, "iso": 200}})
+    panel = js[js.index("async function loadInfo"):js.index('document.getElementById("pv-back")')]
+    read = set(re.findall(r"\bm\.(\w+)", panel))
+    assert read and read <= set(meta), sorted(read - set(meta))

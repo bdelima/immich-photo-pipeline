@@ -16,6 +16,7 @@
   function monthLabel(m) { const [y, mo] = m.split("-"); return MONTHS[+mo - 1] + " " + y; }
   function dur(s) { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
     return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(r).padStart(2, "0"); }
+  function niceBytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
   function dayLabel(d) { const dt = new Date(d + "T12:00:00"); return dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }); }
 
   function showNote(html) { note.innerHTML = html; note.hidden = !html; }
@@ -140,8 +141,10 @@
     try {
       const r = await api("/api/household/" + it.id), m = r.meta || {}, rows = [];
       const add = (k, v) => { if (v) rows.push("<dt>" + k + "</dt><dd>" + esc(String(v)) + "</dd>"); };
+      const size = [m.width && m.height ? m.width + " × " + m.height : "", m.size_bytes ? niceBytes(m.size_bytes) : ""].filter(Boolean).join(" · ");
+      const exposure = [m.exposure_time ? m.exposure_time + " s" : "", m.f_number ? "f/" + m.f_number : "", m.iso ? "ISO " + m.iso : ""].filter(Boolean).join(" · ");
       add("File", r.file_name); add("Owner", m.owner_name); add("Taken", m.taken); add("Place", m.place);
-      add("Camera", m.camera); add("Exposure", m.exposure); add("Size", m.size);
+      add("Camera", m.camera); add("Exposure", exposure); add("Size", size);
       if (flat[cur] === it) side.innerHTML = "<h4>Details</h4><dl>" + (rows.join("") || "<dd>No details.</dd>") + "</dl>";
     } catch (e) { side.innerHTML = '<p class="muted">Couldn\'t load details.</p>'; }
   }

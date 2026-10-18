@@ -57,7 +57,13 @@ def _local(created, offset_hours) -> tuple[str, str]:
 
 
 def _seconds(duration) -> int:
-    """"0:00:12.345" -> 12. Immich writes a video's length as h:mm:ss.fff; "0:00:00.00000" means none."""
+    """A video's length in whole seconds. Immich 1.133 and later give milliseconds as a
+    number (null for a photo); older versions wrote "h:mm:ss.fff", where "0:00:00.00000"
+    means none."""
+    if isinstance(duration, bool):
+        return 0
+    if isinstance(duration, (int, float)):
+        return max(0, int(duration // 1000))
     if not isinstance(duration, str):
         return 0
     try:
