@@ -765,16 +765,14 @@ const PhotosPane = (() => {
       const one = trashed.length === 1;
       const ok = await ask({
         title: (one ? "This photo is" : trashed.length + " photos are") + " in the pipeline's trash",
-        text: "A photo that is still in the pipeline can't be sent again. Purge " + (one ? "it" : "them") + " from the trash so " + (one ? "it becomes" : "they become") +
-          " eligible again, then send to " + dest.label + "? The processed photo made from " + (one ? "it" : "each") + " is deleted for good (for a collage, the whole collage). " +
+        text: "A photo that is still in the pipeline can't be sent again. Send to " + dest.label + " and purge " + (one ? "its" : "their") +
+          " processed photo from the trash so " + (one ? "it becomes" : "they become") + " eligible again? The processed photo made from " + (one ? "it" : "each") +
+          " is deleted for good (for a collage, the whole collage), but only for a photo that was sent. " +
           "The original stays in its owner's Immich library.",
-        yes: "Purge and send", no: "Cancel", danger: true });
+        yes: "Send and purge", no: "Cancel", danger: true });
       if (!ok) return;
-      const out = await post("/api/household/purge", { ids: trashed });
-      if (!out) return;
-      for (const id of trashed) if (byId.has(id)) byId.get(id).it.pipeline = "";
     }
-    const out = await post("/api/household/send", { ids, dest: dest.key });
+    const out = await post("/api/household/send", { ids, dest: dest.key, purge: trashed.length > 0 });
     if (!out) return;
     markSent(out.done);
     report(out, plural(out.done.length, "photo") + " sent to " + dest.label);

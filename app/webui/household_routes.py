@@ -277,33 +277,50 @@ def register_household_routes(
     @app.post("/api/household/send")
     def api_household_send():
         """Sends photos to an entry queue ({"ids": [...], "dest": "wallpaper" | "collage" | "import"}).
-        A photo already in the pipeline is skipped, one whose processed photo is in the web trash too (the
-        page offers to purge it first, see /purge), and so is a video bound for a collage."""
+        A photo already in the pipeline is skipped, and so is a video bound for a collage. A photo whose
+        processed copy is only in the web trash is skipped too, unless the request says "purge": true:
+        then, once the photo has been added to the queue, the processed photos made from it are deleted
+        for good (a whole collage, if it was part of one), so the original is not "known" any more. The
+        purge happens only for a photo that was sent, so a refused send never costs anyone a processed photo."""
         if store is None or cfg is None:
             return jsonify({"error": "sending is not available"}), 404
         data = body()
-        ids, dest = ids_from(data), data.get("dest")
+        ids, dest, purge = ids_from(data), data.get("dest"), data.get("purge") is True
         if ids is None or dest not in SEND_DESTINATIONS:
             return jsonify({"error": "choose photos and a destination"}), 400
+        if purge and revisions is None:
+            return jsonify({"error": "purging is not available"}), 404
         album = album_for(dest)
         if not album:
             return jsonify({"error": "that entry queue is not set up"}), 400
         states = pipeline_states()
+        purged: list[str] = []
 
         def one(asset, client):
-            if states.get(asset["id"]) == household.IN_PIPELINE:
+            state = states.get(asset["id"])
+            if state == household.IN_PIPELINE:
                 return "already in the pipeline"
-            if states.get(asset["id"]) == household.IN_PIPELINE_TRASH:
+            if state == household.IN_PIPELINE_TRASH and not purge:
                 return "in the pipeline's trash"
             if dest == "collage" and asset.get("type") == "VIDEO":
                 return "a video can't go in a collage"
+            duplicate = False
             for result in client.add_assets_to_album(album, [asset["id"]]):
                 if result.get("success") is False:
-                    return "already in that queue" if result.get("error") == "duplicate" else f"Immich refused: {result.get('error')}"
-            return ""
+                    if result.get("error") != "duplicate":
+                        return f"Immich refused: {result.get('error')}"
+                    duplicate = True
+            if state == household.IN_PIPELINE_TRASH:
+                # Sent (or already waiting in the queue from an earlier try): now the processed copy can go.
+                trashed = [p.id for p in household.photos_made_from(store.load(), [asset["id"]]) if p.trashed]
+                if trashed:
+                    purged.extend(actions.delete(store, revisions, trashed).done)
+                return ""
+            return "already in that queue" if duplicate else ""
 
         out = per_photo(ids, one)
-        if out["done"]:
+        out["purged"] = purged
+        if out["done"] or purged:
             changed()
         return jsonify(out)
 

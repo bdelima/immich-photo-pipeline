@@ -110,11 +110,12 @@ def test_the_viewer_has_stepped_zoom_icons_and_the_round_i_and_the_actions():
 def test_photos_search_select_send_download_and_trash_use_the_household_routes():
     js = read("static", "photos.js")
     for route in ("/api/household/search?", "/api/household/filters", "/api/household/suggest?type=", "/api/household/send",
-                  "/api/household/purge", "/api/household/trash", "/api/household/download", "/download"):
+                  "/api/household/trash", "/api/household/download", "/download"):
         assert route in js
     assert 'month?bucket=" + encodeURIComponent(s.bucket) + (showSent ? "&sent=1" : "")' in js      # in-pipeline photos hidden unless asked
     assert "Show photos already in the pipeline" in js and "let showSent = false" in js
-    assert '"Purge and send"' in js and "pipeline === \"trash\"" in js                                # the purge offer for photos in the trash
+    assert '"Send and purge"' in js and "pipeline === \"trash\"" in js                              # the purge offer for photos in the trash
+    assert "purge: trashed.length > 0" in js and "/api/household/purge" not in js                  # one request: the server purges only what it sent
     assert "a video can\\'t go in a collage" in js
     assert '"ph-pick"' in js and '"ph-dpick' in js and "Select day" in js
 

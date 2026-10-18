@@ -225,6 +225,66 @@ def test_send_refuses_a_wrong_request(tmp_path):
     assert c.post("/api/household/send", json={"ids": [A] + [("%032x" % n) for n in range(201)], "dest": "import"}).status_code == 400
 
 
+def test_send_with_purge_deletes_the_processed_photo_only_after_the_photo_was_sent(tmp_path):
+    store = library(tmp_path, p1=photo("p1", C, trashed=True))
+    anna = Fake(ANNA)
+    sent = []
+    c, _ = make(tmp_path, Fake(OWN, assets={C: asset(C)}), store, extra=[anna], sent=sent)
+    out = c.post("/api/household/send", json={"ids": [C], "dest": "wallpaper", "purge": True}).get_json()
+    assert out["done"] == [C] and out["purged"] == ["p1"] and anna.added == [("alb-wall", [C])]
+    assert "p1" not in store.load().photos and household.pipeline_states(store.load()) == {}
+    assert sent                                                    # the page and the poll cycle are told
+
+
+def test_send_without_the_purge_flag_never_purges(tmp_path):
+    for flag in (None, False, "yes", 1):
+        store = library(tmp_path, p1=photo("p1", C, trashed=True))
+        anna = Fake(ANNA)
+        c, _ = make(tmp_path, Fake(OWN, assets={C: asset(C)}), store, extra=[anna])
+        payload = {"ids": [C], "dest": "wallpaper"}
+        if flag is not None:
+            payload["purge"] = flag
+        out = c.post("/api/household/send", json=payload).get_json()
+        assert out["done"] == [] and out["purged"] == [] and anna.added == []
+        assert out["skipped"][0]["reason"] == "in the pipeline's trash" and "p1" in store.load().photos
+
+
+def test_a_send_that_does_not_happen_never_costs_a_processed_photo(tmp_path):
+    # Immich refuses, the owner has no key, and a video bound for a collage: the processed photo stays in every case.
+    refused = Fake(ANNA)
+    refused.add_results = [{"id": C, "success": False, "error": "no_permission"}]
+    for n, (aid, assets, dest, anna) in enumerate([
+            (C, {C: asset(C)}, "wallpaper", refused),
+            (D, {D: asset(D, owner=BEN)}, "wallpaper", Fake(ANNA)),
+            (V, {V: asset(V, kind="VIDEO")}, "collage", Fake(ANNA))]):
+        here = tmp_path / f"case{n}"
+        here.mkdir()
+        store = library(here, p1=photo("p1", aid, trashed=True))
+        c, _ = make(here, Fake(OWN, assets=assets), store, extra=[anna])
+        out = c.post("/api/household/send", json={"ids": [aid], "dest": dest, "purge": True}).get_json()
+        assert out["done"] == [] and out["purged"] == [] and len(out["skipped"]) == 1
+        assert "p1" in store.load().photos and household.pipeline_states(store.load()) == {aid: "trash"}
+
+
+def test_send_with_purge_removes_a_whole_collage_and_leaves_live_photos_alone(tmp_path):
+    store = library(tmp_path, p1=photo("p1", C, A, trashed=True), p2=photo("p2", B))
+    anna = Fake(ANNA)
+    c, _ = make(tmp_path, Fake(OWN, assets={C: asset(C), B: asset(B)}), store, extra=[anna])
+    out = c.post("/api/household/send", json={"ids": [C, B], "dest": "import", "purge": True}).get_json()
+    assert out["done"] == [C] and out["purged"] == ["p1"]
+    assert {s["id"]: s["reason"] for s in out["skipped"]} == {B: "already in the pipeline"}
+    assert set(store.load().photos) == {"p2"}                      # the live photo was not touched; the collage went whole
+
+
+def test_send_with_purge_treats_an_already_queued_photo_as_sent(tmp_path):
+    store = library(tmp_path, p1=photo("p1", C, trashed=True))
+    anna = Fake(ANNA)
+    anna.add_results = [{"id": C, "success": False, "error": "duplicate"}]
+    c, _ = make(tmp_path, Fake(OWN, assets={C: asset(C)}), store, extra=[anna])
+    out = c.post("/api/household/send", json={"ids": [C], "dest": "import", "purge": True}).get_json()
+    assert out["done"] == [C] and out["purged"] == ["p1"] and "p1" not in store.load().photos
+
+
 # ---- purge ----
 
 def test_purge_deletes_only_trashed_photos_made_from_the_originals_so_they_can_be_sent_again(tmp_path):
