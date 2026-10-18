@@ -96,3 +96,29 @@ def test_months_are_kept_and_only_near_rows_are_drawn_with_the_next_and_previous
     assert "for (const j of [i - 1, i + 1])" in js and "new Image().src = thumbUrl" in js
     assert not re.search(r"s\.items\s*=\s*null", js)                 # never thrown away
     assert "opacity: 0" in read("static", "photos.css") and ".ph-tile img.in" in read("static", "photos.css")
+
+
+def test_the_viewer_has_stepped_zoom_icons_and_the_round_i_and_the_actions():
+    js = read("static", "photos.js")
+    assert "const ZSTEP = 0.25, ZMAX = 4;" in js and 'id="pv-fit"' in js and 'id="pv-out"' in js and 'id="pv-in"' in js
+    assert 'class="pv-i" id="pv-info"' in js and "pv-zoom" not in js                      # the old Zoom/Info text buttons are gone
+    assert '$("pv-out").hidden = $("pv-fit").hidden = $("pv-pct").hidden = vid || zoom <= 1;' in js     # shown only while zoomed in
+    assert "e.ctrlKey" in js and "pointerdown" in js                                      # Ctrl + wheel zooms, a drag pans
+    assert 'id="pv-send"' in js and 'id="pv-dl"' in js and 'id="pv-trash"' in js
+
+
+def test_photos_search_select_send_download_and_trash_use_the_household_routes():
+    js = read("static", "photos.js")
+    for route in ("/api/household/search?", "/api/household/filters", "/api/household/suggest?type=", "/api/household/send",
+                  "/api/household/trash", "/api/household/download", "/download"):
+        assert route in js
+    assert 'month?bucket=" + encodeURIComponent(s.bucket) + (showSent ? "&sent=1" : "")' in js      # in-pipeline photos hidden unless asked
+    assert "Show photos already in the pipeline" in js and "let showSent = false" in js
+    assert '"Send and purge"' in js and "pipeline === \"trash\"" in js                              # the purge offer for photos in the trash
+    assert "purge: trashed.length > 0" in js and "/api/household/purge" not in js                  # one request: the server purges only what it sent
+    assert "a video can\\'t go in a collage" in js
+    assert '"ph-pick"' in js and '"ph-dpick' in js and "Select day" in js
+
+
+def test_the_collage_maker_place_is_not_part_of_the_photos_view():
+    assert "Make collage" not in read("static", "photos.js")

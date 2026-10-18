@@ -185,10 +185,14 @@ class ImmichClient:
         """Sets an album's description (PATCH /albums/{id})."""
         self._request("PATCH", f"/albums/{album_id}", json={"description": description})
 
-    def add_assets_to_album(self, album_id: str, asset_ids: list[str]) -> None:
+    def add_assets_to_album(self, album_id: str, asset_ids: list[str]) -> list[dict]:
+        """Adds assets to an album. Immich answers 200 with one result per asset
+        ({"id", "success", "error"}), so a refusal for one asset is not an HTTP error;
+        the results come back for callers that want to look."""
         if not asset_ids:
-            return
-        self._request("PUT", f"/albums/{album_id}/assets", json={"ids": asset_ids})
+            return []
+        body = self._request("PUT", f"/albums/{album_id}/assets", json={"ids": asset_ids})
+        return [r for r in body if isinstance(r, dict)] if isinstance(body, list) else []
 
     def remove_assets_from_album(self, album_id: str, asset_ids: list[str]) -> None:
         if not asset_ids:
@@ -333,6 +337,51 @@ class ImmichClient:
             resp.close()
             raise ImmichError(f"GET /assets/{asset_id}/video/playback -> {resp.status_code}")
         return resp
+
+    def open_original(self, asset_id: str):
+        """An asset's original file as an open streaming response (GET /assets/{id}/original),
+        for the caller to pass on and close."""
+        resp = self._session.get(f"{self.base_url}/api/assets/{asset_id}/original", stream=True, timeout=60)
+        if not resp.ok:
+            resp.close()
+            raise ImmichError(f"GET /assets/{asset_id}/original -> {resp.status_code}")
+        return resp
+
+    def open_archive(self, asset_ids: list[str]):
+        """A zip of several assets' originals as an open streaming response
+        (POST /download/archive), for the caller to pass on and close."""
+        resp = self._session.post(
+            f"{self.base_url}/api/download/archive", json={"assetIds": list(asset_ids)}, stream=True, timeout=60)
+        if not resp.ok:
+            resp.close()
+            raise ImmichError(f"POST /download/archive -> {resp.status_code}")
+        return resp
+
+    # ---- search ---------------------------------------------------------------
+
+    def search_assets(self, kind: str, body: dict) -> dict:
+        """One page of search results: kind "smart" (what a photo looks like, POST /search/smart)
+        or "metadata" (file name, description, path, text in the picture, and the filters,
+        POST /search/metadata). Returns {"items": [asset dicts], "next": the next page number or None}."""
+        if kind not in ("smart", "metadata"):
+            raise ValueError(f"unknown search kind {kind!r}")
+        out = self._request("POST", f"/search/{kind}", json=body) or {}
+        assets = out.get("assets") or {}
+        items = [a for a in (assets.get("items") or []) if isinstance(a, dict)]
+        nxt = assets.get("nextPage")
+        return {"items": items, "next": int(nxt) if nxt not in (None, "") else None}
+
+    def suggestions(self, kind: str, **params) -> list[str]:
+        """Values Immich knows for a search filter (GET /search/suggestions): kind is one of
+        country, state, city, camera-make, camera-model, camera-lens-model."""
+        out = self._request("GET", "/search/suggestions", params={"type": kind, **params}) or []
+        return [str(v) for v in out if isinstance(v, (str, int)) and str(v)]
+
+    def list_people(self) -> list[dict]:
+        """The people this account has named (GET /people): [{"id", "name"}, ...], named ones only."""
+        out = self._request("GET", "/people", params={"withHidden": "false"}) or {}
+        people = out.get("people") if isinstance(out, dict) else out
+        return [{"id": p["id"], "name": p["name"]} for p in (people or []) if isinstance(p, dict) and p.get("id") and p.get("name")]
 
     # ---- activities (comments) --------------------------------------------
 

@@ -73,7 +73,9 @@ def create_app(
         register_action_routes(app, store, revisions, cfg, on_change)
         register_chat_routes(app, store, on_job, recipe, revisions, on_change, immich, extra_immich)
     if immich is not None:
-        register_household_routes(app, immich, immich_thumbs)
+        register_household_routes(
+            app, immich, immich_thumbs, store=store, revisions=revisions, cfg=cfg, extra_immich=extra_immich,
+            on_change=on_change)
     if rules is not None:
         _register_rules_routes(app, rules)
 
