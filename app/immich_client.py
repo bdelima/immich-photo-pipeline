@@ -258,6 +258,82 @@ class ImmichClient:
             body = self._request("POST", "/assets", data=data, files=files)
         return body["id"]
 
+    # ---- the household timeline ---------------------------------------------
+
+    def _timeline_get(self, path: str, params: dict) -> Any:
+        """A GET on the timeline endpoints. Immich 1.133 dropped the `size` query
+        parameter (buckets are always months); a server that still wants it
+        answers 400 without it, so that one case is retried with it.
+
+        `visibility=timeline` is always sent: Immich refuses `withPartners` (400) unless
+        the visibility is named and is not archive or locked, and it is also what keeps
+        archived photos off the page."""
+        params = {**params, "visibility": "timeline"}
+        try:
+            return self._request("GET", path, params=params)
+        except ImmichError as exc:
+            if "-> 400" not in str(exc):
+                raise
+            return self._request("GET", path, params={**params, "size": "MONTH"})
+
+    def timeline_buckets(self) -> list[dict]:
+        """The months that have photos, newest first, on this account's timeline
+        with its partners' (GET /timeline/buckets?withPartners=true&visibility=timeline):
+        [{"timeBucket": "2026-10-01T00:00:00.000Z", "count": 412}, ...]."""
+        body = self._timeline_get("/timeline/buckets", {"withPartners": "true"})
+        return [b for b in (body or []) if isinstance(b, dict) and b.get("timeBucket")]
+
+    def timeline_bucket(self, time_bucket: str) -> list[dict]:
+        """One month's assets, each as a plain dict (id, ownerId, ratio, isVideo,
+        duration, fileCreatedAt, localOffsetHours, isTrashed, visibility).
+        Immich 1.133 and later answer with one list per field; older versions
+        answered with a list of assets. Both come back as a list of dicts."""
+        body = self._timeline_get("/timeline/bucket", {"timeBucket": time_bucket, "withPartners": "true"})
+        if isinstance(body, list):
+            return [_legacy_timeline_row(a) for a in body if isinstance(a, dict)]
+        if not isinstance(body, dict) or not isinstance(body.get("id"), list):
+            return []
+        ids = body["id"]
+
+        def column(name: str) -> list:
+            values = body.get(name)
+            return values if isinstance(values, list) and len(values) == len(ids) else [None] * len(ids)
+
+        cols = {k: column(k) for k in (
+            "ownerId", "ratio", "isImage", "isTrashed", "visibility", "duration", "fileCreatedAt", "localOffsetHours",
+            "city", "country", "isFavorite")}
+        return [
+            {
+                "id": ids[i], "ownerId": cols["ownerId"][i], "ratio": cols["ratio"][i],
+                "isVideo": cols["isImage"][i] is False, "isTrashed": bool(cols["isTrashed"][i]),
+                "visibility": cols["visibility"][i], "duration": cols["duration"][i],
+                "fileCreatedAt": cols["fileCreatedAt"][i], "localOffsetHours": cols["localOffsetHours"][i],
+                "city": cols["city"][i], "country": cols["country"][i], "isFavorite": bool(cols["isFavorite"][i]),
+            }
+            for i in range(len(ids))
+        ]
+
+    def fetch_image(self, asset_id: str, size: str = "thumbnail") -> tuple[bytes, str]:
+        """A small picture of an asset (GET /assets/{id}/thumbnail, `size` being
+        "thumbnail" or "preview") and its content type."""
+        url = f"{self.base_url}/api/assets/{asset_id}/thumbnail"
+        resp = self._session.get(url, params={"size": size}, timeout=30)
+        if not resp.ok:
+            raise ImmichError(f"GET /assets/{asset_id}/thumbnail -> {resp.status_code}: {resp.text[:200]}")
+        return resp.content, resp.headers.get("content-type", "image/jpeg")
+
+    def open_video(self, asset_id: str, range_header: str | None = None):
+        """The playable version of a video as an open streaming response
+        (GET /assets/{id}/video/playback), passing a Range header on so a player
+        can seek. The caller closes it."""
+        headers = {"Range": range_header} if range_header else {}
+        resp = self._session.get(
+            f"{self.base_url}/api/assets/{asset_id}/video/playback", headers=headers, stream=True, timeout=60)
+        if not resp.ok:
+            resp.close()
+            raise ImmichError(f"GET /assets/{asset_id}/video/playback -> {resp.status_code}")
+        return resp
+
     # ---- activities (comments) --------------------------------------------
 
     def list_comments(self, *, album_id: str, asset_id: str | None = None) -> list[Comment]:
@@ -329,6 +405,21 @@ class ImmichClient:
                 body["id"], asset_id, f"asset {stored}" if stored else "the album itself",
             )
         return body["id"]
+
+
+def _legacy_timeline_row(a: dict) -> dict:
+    """An asset from the list shape older Immich versions return for a month, as the
+    same dict the columns above make."""
+    exif = a.get("exifInfo") or {}
+    w, h = exif.get("exifImageWidth"), exif.get("exifImageHeight")
+    return {
+        "id": a.get("id"), "ownerId": a.get("ownerId"),
+        "ratio": (w / h) if isinstance(w, (int, float)) and isinstance(h, (int, float)) and w and h else None,
+        "isVideo": a.get("type") == "VIDEO", "isTrashed": bool(a.get("isTrashed")),
+        "visibility": "archive" if a.get("isArchived") else "timeline", "duration": a.get("duration"),
+        "fileCreatedAt": a.get("localDateTime") or a.get("fileCreatedAt"), "localOffsetHours": 0,
+        "city": exif.get("city"), "country": exif.get("country"), "isFavorite": bool(a.get("isFavorite")),
+    }
 
 
 def _now_iso() -> str:

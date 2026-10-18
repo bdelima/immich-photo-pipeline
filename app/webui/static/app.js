@@ -93,3 +93,14 @@ async function renderTree(active, base) {
     (h.closest(".brand") || h).after(el);       // under the icon and title, not inside the row
   } catch (e) { /* the hint is optional */ }
 })();
+
+// The Photos page is reached from the links at the foot of the sidebar, on every page that has
+// them. It is added here, once, so each page does not have to list it; a page that already has
+// the link (the Photos page itself) is left alone.
+(() => {
+  const links = document.querySelector("nav .links");
+  if (!links || links.querySelector('a[href="/photos"]')) return;
+  const a = document.createElement("a");
+  a.className = "item"; a.href = "/photos"; a.textContent = "Photos";
+  links.prepend(a);
+})();

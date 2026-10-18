@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Photos &middot; immich-photo-pipeline</title>
+  {% include "_icons.html" %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='pipeline.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='photos.css') }}">
+</head>
+<body>
+  <nav>
+    <h1>Photo pipeline</h1>
+    <div id="tree"></div>
+    <div class="links"><a class="item active" href="/photos">Photos</a><a class="item" href="/rules">Recipe rules</a></div>
+  </nav>
+  <main id="ph-main">
+    <div class="ph-wrap">
+      <div class="ph-top"><h2>Household photos</h2><span id="ph-count" class="chip"></span></div>
+      <div id="ph-note" class="ph-note" hidden></div>
+      <div id="ph-months"></div>
+    </div>
+  </main>
+  <div id="ph-rail" aria-label="Jump to year"></div>
+
+  <div id="pv" hidden>
+    <div class="pv-bar">
+      <button class="btn sec sm" id="pv-back" aria-label="Back to the timeline">&larr; Back</button>
+      <span id="pv-title" class="pv-title"></span>
+      <span class="sp"></span>
+      <button class="btn sec sm" id="pv-zoom" aria-label="Zoom">Zoom</button>
+      <button class="btn sec sm" id="pv-info" aria-label="Details">Info</button>
+    </div>
+    <div class="pv-body">
+      <div class="pv-stage" id="pv-stage"></div>
+      <aside class="pv-side" id="pv-side" hidden></aside>
+    </div>
+    <button class="pv-nav prev" id="pv-prev" aria-label="Previous photo">&lsaquo;</button>
+    <button class="pv-nav next" id="pv-next" aria-label="Next photo">&rsaquo;</button>
+  </div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='photos.js') }}"></script>
+<script>renderTree("", "/").catch(() => {});</script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+/* The household Photos page (/photos); the colours and buttons come from pipeline.css. */
+/* ---- household photos (/photos) ---- */
+.ph-wrap { max-width: none; }
+.ph-top { display: flex; align-items: center; gap: .8rem; margin-bottom: .6rem; }
+.ph-top h2 { margin: 0; font-size: 1.25rem; }
+.ph-note { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1.1rem; margin: .6rem 0; color: var(--soft); }
+.ph-mh { position: sticky; top: -1.4rem; z-index: 2; margin: 0; padding: .7rem 0 .4rem; background: var(--bg); font-size: 1.05rem; }
+.ph-mh .muted { font-weight: 400; font-size: .8rem; }
+.ph-day { font-size: .78rem; color: var(--muted); margin: .7rem 0 .3rem; }
+.ph-row { display: flex; gap: 4px; margin-bottom: 4px; }
+.ph-tile { position: relative; flex: none; padding: 0; border: 0; background: var(--chip); border-radius: 3px; overflow: hidden; cursor: pointer; }
+.ph-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ph-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ph-owner, .ph-dur { position: absolute; font-size: .7rem; color: #fff; background: rgba(0, 0, 0, .55); border-radius: 99px; padding: .05rem .5rem; }
+.ph-owner { left: 6px; bottom: 6px; }
+.ph-dur { right: 6px; top: 6px; }
+#ph-rail { position: fixed; right: 4px; top: 4rem; bottom: 1rem; display: flex; flex-direction: column; justify-content: flex-start; gap: .1rem; z-index: 3; overflow-y: auto; }
+#ph-rail button { border: 0; background: transparent; color: var(--muted); font-size: .72rem; cursor: pointer; padding: .15rem .3rem; border-radius: 6px; }
+#ph-rail button.on { color: var(--accent-text); background: var(--accent-soft); font-weight: 700; }
+main#ph-main { padding-right: 3.4rem; }
+#pv { position: fixed; inset: 0; z-index: 20; background: #000; color: #fff; display: flex; flex-direction: column; }
+#pv[hidden] { display: none; }
+.pv-bar { display: flex; align-items: center; gap: .5rem; padding: .5rem .8rem; background: rgba(0, 0, 0, .6); }
+.pv-bar .sp { flex: 1; }
+.pv-title { font-size: .9rem; color: #d6dbe6; }
+.pv-body { flex: 1; min-height: 0; display: flex; }
+.pv-stage { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: auto; }
+.pv-stage img, .pv-stage video { max-width: 100%; max-height: 100%; object-fit: contain; }
+.pv-stage.zoomed { display: block; }
+.pv-stage.zoomed img { max-width: none; max-height: none; width: 200%; }
+.pv-side { width: 20rem; max-width: 80vw; background: var(--panel); color: var(--text); padding: 1rem; overflow-y: auto; }
+.pv-side h4 { margin: 0 0 .6rem; }
+.pv-side dt { font-size: .72rem; color: var(--muted); margin-top: .6rem; }
+.pv-side dd { margin: 0; overflow-wrap: anywhere; }
+.pv-nav { position: absolute; top: 50%; transform: translateY(-50%); border: 0; width: 2.6rem; height: 4rem; font-size: 2rem; color: #fff; background: rgba(255, 255, 255, .12); cursor: pointer; border-radius: 8px; }
+.pv-nav.prev { left: .6rem; } .pv-nav.next { right: .6rem; }
+.pv-nav[hidden] { display: none; }
+@media (max-width: 700px) { nav { display: none; } main#ph-main { padding: 1rem .8rem; padding-right: 2.6rem; } }
