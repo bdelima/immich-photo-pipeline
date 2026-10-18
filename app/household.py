@@ -233,3 +233,25 @@ def search_items(
         })
     items.sort(key=lambda i: (i["day"], i["time"]), reverse=True)
     return items, found["next"]
+
+
+def album_items(immich: ImmichClient, album_id: str, skip: set[str] | None = None) -> list[dict]:
+    """Everything in an album in the shape of month_items (newest first), without the videos and
+    without the ids in `skip` (originals the pipeline already knows). Used for the Collage Maker
+    place: the photos waiting there."""
+    skip = skip or set()
+    items: list[dict] = []
+    page: int | None = 1
+    while page:
+        found = immich.search_assets("metadata", {"albumIds": [album_id], "page": page, "size": PAGE_SIZE, "withExif": True})
+        for a in found["items"]:
+            if not a.get("id") or a["id"] in skip or a.get("isTrashed") or a.get("type") == "VIDEO":
+                continue
+            day, clock = _search_day(a)
+            items.append({
+                "id": a["id"], "owner_id": a.get("ownerId") or "", "name": a.get("originalFileName") or "",
+                "ratio": _ratio(a), "video": False, "seconds": 0, "day": day, "time": clock, "pipeline": "",
+            })
+        page = found["next"]
+    items.sort(key=lambda i: (i["day"], i["time"]), reverse=True)
+    return items

@@ -23,6 +23,7 @@ from . import events
 from .action_routes import register_action_routes
 from .browse import register_browse_routes
 from .chat_routes import register_chat_routes
+from .collage_routes import register_collage_routes
 from .household_routes import register_household_routes
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,8 @@ def create_app(
         register_household_routes(
             app, immich, immich_thumbs, store=store, revisions=revisions, cfg=cfg, extra_immich=extra_immich,
             on_change=on_change)
+        if cfg is not None and cfg.collage_album_id:
+            register_collage_routes(app, immich, store, cfg, extra_immich=extra_immich, on_change=on_change)
     if rules is not None:
         _register_rules_routes(app, rules)
 
