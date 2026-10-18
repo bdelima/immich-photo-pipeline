@@ -149,7 +149,7 @@ def test_page_renders(tmp_path):
     client, *_ = build(tmp_path)
     page = client.get("/").data
     assert b"/static/pipeline.css" in page and b"/static/app.js" in page
-    # The sidebar's code is shared with the Recipe rules page, so it lives in app.js.
+    # The sidebar's code lives in app.js.
     assert b"/api/tree" in client.get("/static/app.js").data
 
 
@@ -203,14 +203,12 @@ def test_a_video_original_has_no_thumbnail(tmp_path):
     assert client.get("/media/v1/source/0/thumb").status_code == 404
 
 
-def test_the_icons_and_the_pages_that_link_them_are_served(tmp_path):
+def test_the_icons_and_the_page_that_links_them_are_served(tmp_path):
     client, *_ = build(tmp_path)
     assert client.get("/static/icon.svg").status_code == 200
     html = client.get("/").data
     assert b"/static/icon.svg" in html and html.count(b'data:image/png;base64,') == 2
     assert b'rel="apple-touch-icon"' in html
-    rules_template = os.path.join(os.path.dirname(__file__), "..", "app", "webui", "templates", "rules.html")
-    assert '{% include "_icons.html" %}' in open(rules_template).read()
 
 
 def test_the_detail_offers_a_watermark_template_and_the_route_queues_it_for_claude(tmp_path):

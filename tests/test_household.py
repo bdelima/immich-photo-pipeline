@@ -160,6 +160,7 @@ class FakeImmich:
         return {ANNA: "Anna", BEN: "Ben"}.get(uid, "")
 
     def fetch_image(self, asset_id, size):
+        self.fetched = getattr(self, "fetched", 0) + 1
         if self.fail:
             raise ImmichError("GET thumbnail -> 404: gone")
         return b"IMG-" + size.encode(), "image/jpeg"
@@ -211,16 +212,15 @@ def test_valid_ids_and_buckets():
 
 # ---- routes ----
 
-def make_client(fake):
+def make_client(fake, cache=None):
     app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), "..", "app", "webui", "templates"),
                 static_folder=os.path.join(os.path.dirname(__file__), "..", "app", "webui", "static"))
-    register_household_routes(app, fake)
+    register_household_routes(app, fake, cache)
     return app.test_client()
 
 
-def test_page_renders():
-    r = make_client(FakeImmich()).get("/photos")
-    assert r.status_code == 200 and b"photos.js" in r.data
+def test_photos_is_a_view_of_the_main_page_not_a_page_of_its_own():
+    assert make_client(FakeImmich()).get("/photos").status_code == 404
 
 
 def test_months_route_and_error():
@@ -259,28 +259,59 @@ def test_asset_info_route():
     assert r["file_name"] == "IMG_1.jpg" and r["video"] is False and r["meta"]["owner_name"] == "Anna"
 
 
-# ---- navigation ----
+# ---- thumbnails kept on disk, and the headers that let the browser keep them too ----
 
-def test_photos_link_is_added_to_every_sidebar():
-    root = os.path.join(os.path.dirname(__file__), "..", "app", "webui")
-    js = open(os.path.join(root, "static", "app.js"), encoding="utf-8").read()
-    assert 'a.href = "/photos"' in js and "nav .links" in js          # added to any page with the links
-    for name in ("index.html", "rules.html", "photos.html"):
-        html = open(os.path.join(root, "templates", name), encoding="utf-8").read()
-        assert 'class="links"' in html and "app.js" in html            # so each of them gets it
-    assert 'href="/photos"' in open(os.path.join(root, "templates", "photos.html"), encoding="utf-8").read()
+def test_a_thumbnail_is_fetched_from_immich_once_then_served_from_disk(tmp_path):
+    from app.immich_thumbs import ImmichThumbCache
+    fake = FakeImmich()
+    c = make_client(fake, ImmichThumbCache(str(tmp_path)))
+    first = c.get(f"/api/household/{ID1}/thumb")
+    again = c.get(f"/api/household/{ID1}/thumb")
+    assert first.data == again.data == b"IMG-thumbnail" and again.mimetype == "image/jpeg"
+    assert fake.fetched == 1                                  # the second request never reached Immich
+    assert c.get(f"/api/household/{ID1}/preview").data == b"IMG-preview" and fake.fetched == 2
+    # the copy outlives the app: a new cache over the same folder serves it without Immich
+    other = FakeImmich(fail=True)
+    assert make_client(other, ImmichThumbCache(str(tmp_path))).get(f"/api/household/{ID1}/thumb").data == b"IMG-thumbnail"
+    assert getattr(other, "fetched", 0) == 0
 
 
-def test_every_detail_the_info_panel_reads_is_one_the_metadata_provides():
-    import re
-    from app import metadata
-    root = os.path.join(os.path.dirname(__file__), "..", "app", "webui", "static")
-    js = open(os.path.join(root, "photos.js"), encoding="utf-8").read()
-    meta = metadata.meta_from_asset({
-        "localDateTime": "2026-10-02T01:30:00.000Z", "owner": {"name": "Anna"},
-        "exifInfo": {"dateTimeOriginal": "2026-10-02T01:30:00.000Z", "city": "Tamarindo", "country": "Costa Rica",
-                     "latitude": 10.3, "longitude": -85.8, "exifImageWidth": 4000, "exifImageHeight": 3000,
-                     "fileSizeInByte": 2500000, "model": "X100V", "exposureTime": 0.004, "fNumber": 2.0, "iso": 200}})
-    panel = js[js.index("async function loadInfo"):js.index('document.getElementById("pv-back")')]
-    read = set(re.findall(r"\bm\.(\w+)", panel))
-    assert read and read <= set(meta), sorted(read - set(meta))
+def test_pictures_carry_an_etag_and_a_repeat_request_is_answered_304(tmp_path):
+    from app.immich_thumbs import ImmichThumbCache
+    for cache in (ImmichThumbCache(str(tmp_path)), None):     # kept on disk, and not kept
+        c = make_client(FakeImmich(), cache)
+        for kind in ("thumb", "preview"):
+            r = c.get(f"/api/household/{ID2}/{kind}")
+            etag = r.headers["ETag"]
+            assert etag and "max-age" in r.headers["Cache-Control"] and "private" in r.headers["Cache-Control"]
+            again = c.get(f"/api/household/{ID2}/{kind}", headers={"If-None-Match": etag})
+            assert again.status_code == 304 and not again.data
+
+
+def test_a_failed_fetch_is_not_kept(tmp_path):
+    from app.immich_thumbs import ImmichThumbCache
+    cache = ImmichThumbCache(str(tmp_path))
+    assert make_client(FakeImmich(fail=True), cache).get(f"/api/household/{ID1}/thumb").status_code == 502
+    assert cache.get(ID1, "thumbnail") is None
+
+
+def test_the_thumbnail_cache_keeps_every_size_and_type_apart_and_has_no_limit(tmp_path):
+    from app.immich_thumbs import ImmichThumbCache
+    cache = ImmichThumbCache(str(tmp_path))
+    assert cache.get(ID1, "thumbnail") is None
+    path, mime = cache.put(ID1, "thumbnail", b"a", "image/webp")
+    assert mime == "image/webp" and path.endswith(".webp") and cache.get(ID1, "thumbnail") == (path, mime)
+    assert cache.get(ID1, "preview") is None and cache.get(ID2, "thumbnail") is None
+    assert cache.put(ID1, "preview", b"b", "text/html") is None and cache.put(ID1, "preview", b"", "image/jpeg") is None
+    for n in range(300):                                      # nothing is evicted
+        cache.put("%032x" % n, "thumbnail", b"x" * 100, "image/jpeg")
+    assert cache.get("%032x" % 0, "thumbnail") is not None
+    assert not [f for _, _, fs in os.walk(str(tmp_path)) for f in fs if f.endswith(".part")]
+
+
+def test_a_cache_that_cannot_be_written_still_serves_the_picture(tmp_path):
+    from app.immich_thumbs import ImmichThumbCache
+    blocker = tmp_path / "file"
+    blocker.write_text("x")                                   # a file where the folder should be
+    r = make_client(FakeImmich(), ImmichThumbCache(str(blocker))).get(f"/api/household/{ID1}/thumb")
+    assert r.status_code == 200 and r.data == b"IMG-thumbnail"
