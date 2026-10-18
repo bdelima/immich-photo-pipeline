@@ -326,13 +326,18 @@ const PhotosPane = (() => {
   }
 
   // ---- the viewer ----
-  let pv, stage, side, vtitle, zoomed = false, infoOn = false, cur = null;      // cur = { s, i }
+  const ZSTEP = 0.25, ZMAX = 4;       // zoom is relative to the fitted photo: 1 = whole photo in the window
+  let pv, stage, side, vtitle, zoom = 1, infoOn = false, cur = null;      // cur = { s, i }
   function buildViewer() {
     pv = document.createElement("div"); pv.id = "pv"; pv.hidden = true;
     pv.innerHTML =
       '<div class="pv-bar"><button class="btn sec sm" id="pv-back" aria-label="Back to the timeline">&larr; Back</button>' +
       '<span id="pv-title" class="pv-title"></span><span class="sp"></span>' +
-      '<button class="btn sec sm" id="pv-zoom" aria-label="Zoom">Zoom</button><button class="btn sec sm" id="pv-info" aria-label="Details">Info</button></div>' +
+      '<button class="btn sec sm pv-ic" id="pv-fit" aria-label="Fit to window" title="Back to fit" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>' +
+      '<button class="btn sec sm pv-ic" id="pv-out" aria-label="Zoom out" title="Zoom out" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M21 21l-6-6M7 10h6"/></svg></button>' +
+      '<span id="pv-pct" class="pv-pct" hidden></span>' +
+      '<button class="btn sec sm pv-ic" id="pv-in" aria-label="Zoom in" title="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M21 21l-6-6M7 10h6M10 7v6"/></svg></button>' +
+      '<button class="pv-i" id="pv-info" aria-label="Details" title="Details" aria-expanded="false">i</button></div>' +
       '<div class="pv-body"><div class="pv-stage" id="pv-stage"></div><aside class="pv-side" id="pv-side" hidden></aside></div>' +
       '<button class="pv-nav prev" id="pv-prev" aria-label="Previous photo">&lsaquo;</button><button class="pv-nav next" id="pv-next" aria-label="Next photo">&rsaquo;</button>';
     document.body.appendChild(pv);
@@ -340,8 +345,17 @@ const PhotosPane = (() => {
     $("pv-back").onclick = closeViewer;
     $("pv-prev").onclick = () => step(-1);
     $("pv-next").onclick = () => step(1);
-    $("pv-zoom").onclick = () => { zoomed = !zoomed; stage.classList.toggle("zoomed", zoomed); };
-    $("pv-info").onclick = () => { infoOn = !infoOn; side.hidden = !infoOn; if (infoOn) loadInfo(item()); };
+    $("pv-fit").onclick = () => setZoom(1);
+    $("pv-out").onclick = () => setZoom(zoom - ZSTEP);
+    $("pv-in").onclick = () => setZoom(zoom + ZSTEP);
+    $("pv-info").onclick = () => { infoOn = !infoOn; side.hidden = !infoOn; $("pv-info").setAttribute("aria-expanded", String(infoOn)); if (infoOn) loadInfo(item()); applyZoom(true); };
+    stage.addEventListener("wheel", e => { if (e.ctrlKey && !item().video) { e.preventDefault(); setZoom(zoom + (e.deltaY < 0 ? ZSTEP : -ZSTEP)); } }, { passive: false });
+    let drag = null;       // drag to pan once zoomed in
+    stage.addEventListener("pointerdown", e => { if (zoom <= 1) return; drag = { x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop }; stage.setPointerCapture(e.pointerId); stage.classList.add("panning"); });
+    stage.addEventListener("pointermove", e => { if (drag) { stage.scrollLeft = drag.l - (e.clientX - drag.x); stage.scrollTop = drag.t - (e.clientY - drag.y); } });
+    const endDrag = () => { drag = null; stage.classList.remove("panning"); };
+    stage.addEventListener("pointerup", endDrag); stage.addEventListener("pointercancel", endDrag);
+    window.addEventListener("resize", () => { if (!pv.hidden) applyZoom(false); });
     document.addEventListener("keydown", e => {
       if (pv.hidden) return;
       if (e.key === "Escape") closeViewer(); else if (e.key === "ArrowLeft") step(-1); else if (e.key === "ArrowRight") step(1);
@@ -350,14 +364,31 @@ const PhotosPane = (() => {
   const item = () => cur && cur.s.items[cur.i];
   function openViewer(s, i) { if (!pv) buildViewer(); if (i < 0) return; cur = { s, i }; pv.hidden = false; show(); }
   function closeViewer() { if (!pv || pv.hidden) return; pv.hidden = true; stage.innerHTML = ""; cur = null; }
+  // Zoom works by sizing the picture to a multiple of its fitted width; the stage scrolls (and drags) to pan.
+  function setZoom(z) { zoom = Math.min(ZMAX, Math.max(1, Math.round(z * 100) / 100)); applyZoom(true); }
+  function applyZoom(keepCentre) {
+    const img = stage.querySelector("img"), it = item();
+    const vid = !it || it.video;
+    $("pv-in").hidden = vid; $("pv-out").hidden = $("pv-fit").hidden = $("pv-pct").hidden = vid || zoom <= 1;
+    $("pv-in").disabled = zoom >= ZMAX;
+    $("pv-pct").textContent = Math.round(zoom * 100) + "%";
+    stage.classList.toggle("can-pan", zoom > 1);
+    if (!img) return;
+    const fx = (stage.scrollLeft + stage.clientWidth / 2) / (stage.scrollWidth || 1), fy = (stage.scrollTop + stage.clientHeight / 2) / (stage.scrollHeight || 1);
+    if (zoom <= 1) { img.style.width = ""; img.classList.remove("zoomed"); stage.scrollLeft = stage.scrollTop = 0; return; }
+    const ratio = it.ratio || (img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1.5);
+    img.classList.add("zoomed");
+    img.style.width = Math.round(Math.min(stage.clientWidth, stage.clientHeight * ratio) * zoom) + "px";
+    if (keepCentre) { stage.scrollLeft = fx * stage.scrollWidth - stage.clientWidth / 2; stage.scrollTop = fy * stage.scrollHeight - stage.clientHeight / 2; }
+  }
   function show() {
-    const it = item(); zoomed = false;
+    const it = item(); zoom = 1;
     vtitle.textContent = dayLabel(it.day) + (it.time ? " · " + it.time : "") + (it.owner ? " · " + it.owner : "");
     stage.className = "pv-stage";
     stage.innerHTML = it.video
       ? '<video controls autoplay playsinline src="/api/household/' + it.id + '/video"></video>'
       : '<img alt="" src="/api/household/' + it.id + '/preview">';
-    $("pv-zoom").disabled = it.video;
+    applyZoom(false);
     edges();
     if (infoOn) loadInfo(it);
   }
