@@ -259,7 +259,7 @@ function daysLeft(p) {
   return Math.ceil(trashDays - age);
 }
 const leftText = n => n <= 0 ? "due" : n + "d left";
-function closeConfirm() { const c = $("confirm"); c.hidden = true; c.innerHTML = ""; }
+function closeConfirm() { dropLayer("confirm"); const c = $("confirm"); c.hidden = true; c.innerHTML = ""; }
 // Asks before anything is deleted. Cancel has the focus, so Enter alone never deletes.
 function confirmDelete(photos, go) {
   const n = photos.length, c = $("confirm");
@@ -271,10 +271,10 @@ function confirmDelete(photos, go) {
     <ul><li>the finished photo and every earlier step</li><li>the pipeline's copy of the original</li><li>its history and chat</li><li>its copy in Immich, deleted for good (including from Immich's trash)</li></ul>
     <div class="keep">Not touched: the contributor's original in their own Immich library.</div>
     <div class="acts"><button class="btn sec" id="cdNo">Cancel</button><button class="btn danger" id="cdYes">Delete</button></div></div>`;
-  c.hidden = false;
-  $("cdNo").onclick = closeConfirm;
-  $("cdYes").onclick = () => { closeConfirm(); go(); };
-  c.onclick = e => { if (e.target === c) closeConfirm(); };
+  c.hidden = false; pushLayer("confirm", closeConfirm);          // the browser's Back closes it, like Cancel
+  $("cdNo").onclick = () => backLayer("confirm", closeConfirm);
+  $("cdYes").onclick = () => { backLayer("confirm", closeConfirm); go(); };
+  c.onclick = e => { if (e.target === c) backLayer("confirm", closeConfirm); };
   $("cdNo").focus();
 }
 const deleteSel = () => { const photos = selPhotos(); if (photos.length) confirmDelete(photos, () => act("/api/photos/delete", { ids: photos.map(p => p.id) }, "Deleted")); };
@@ -291,7 +291,7 @@ function paintRetention() {
   b.textContent = retLabel();
   if (view !== "trash") closeRetention();
 }
-function closeRetention() { const p = $("retPop"); if (!p.hidden) { p.hidden = true; p.innerHTML = ""; $("retBtn").setAttribute("aria-expanded", "false"); } }
+function closeRetention() { dropLayer("retention"); const p = $("retPop"); if (!p.hidden) { p.hidden = true; p.innerHTML = ""; $("retBtn").setAttribute("aria-expanded", "false"); } }
 function openRetention() {
   const pop = $("retPop"), btn = $("retBtn");
   pop.innerHTML = `<h4>Auto-delete from Trash</h4>
@@ -304,7 +304,7 @@ function openRetention() {
   const r = btn.getBoundingClientRect();
   pop.style.top = (r.bottom + 8) + "px";
   pop.style.right = Math.max(8, document.documentElement.clientWidth - r.right) + "px";
-  pop.hidden = false;
+  pop.hidden = false; pushLayer("retention", closeRetention);       // the browser's Back closes it, like Cancel
   btn.setAttribute("aria-expanded", "true");
   const never = () => pop.querySelector("input[name=rm]:checked").value === "never";
   const draft = () => never() ? 0 : Math.max(1, Math.min(365, Math.floor(+$("rd").value) || 1));
@@ -321,13 +321,13 @@ function openRetention() {
   for (const el of pop.querySelectorAll("input[name=rm]")) el.onchange = refresh;
   $("rd").oninput = refresh;
   for (const b of pop.querySelectorAll("#rPresets button")) b.onclick = () => { pop.querySelector("input[value=days]").checked = true; $("rd").value = b.dataset.d; refresh(); };
-  $("rNo").onclick = closeRetention;
+  $("rNo").onclick = () => backLayer("retention", closeRetention);
   $("rYes").onclick = async () => {
     const days = draft();
     const res = await fetch("/api/trash-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trash_days: days }) });
     const out = await res.json();
     if (!res.ok) { say(out.error || "That didn't work.", true); return; }
-    closeRetention();
+    backLayer("retention", closeRetention);
     trashDays = out.trash_days;
     await select(view, true, true);
     say(out.deleted ? `Auto-deleted ${plural(out.deleted, "photo")} older than ${plural(trashDays, "day")}` : "Auto-delete: " + (trashDays ? "after " + plural(trashDays, "day") : "off"));
@@ -335,8 +335,8 @@ function openRetention() {
   refresh();
   $("rd").focus();
 }
-$("retBtn").onclick = () => $("retPop").hidden ? openRetention() : closeRetention();
-document.addEventListener("click", e => { if (!$("retPop").hidden && !e.target.closest("#retPop, #retBtn")) closeRetention(); });
+$("retBtn").onclick = () => $("retPop").hidden ? openRetention() : backLayer("retention", closeRetention);
+document.addEventListener("click", e => { if (!$("retPop").hidden && !e.target.closest("#retPop, #retBtn")) backLayer("retention", closeRetention); });
 
 async function revertTo(id, step) {
   const r = await fetch("/api/photos/" + id + "/revert", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ step }) });
@@ -996,8 +996,8 @@ window.addEventListener("popstate", () => { if (skipPops) { skipPops--; return; 
 function closeOriginal() { dropLayer("overlay"); const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
 function closeViewer() { closeOriginal(); dropLayer("viewer"); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && !$("confirm").hidden) { closeConfirm(); return; }
-  if (e.key === "Escape" && !$("retPop").hidden) { closeRetention(); return; }
+  if (e.key === "Escape" && !$("confirm").hidden) { backLayer("confirm", closeConfirm); return; }
+  if (e.key === "Escape" && !$("retPop").hidden) { backLayer("retention", closeRetention); return; }
   if (e.key === "Escape" && !$("overlay").hidden) { if (!$("infoPop") || $("infoPop").hidden) backLayer("overlay", closeOriginal); else toggleInfo(false); return; }
   if (e.key === "Escape" && menuEl) { closeMenu(); return; }
   if (open < 0) return;
