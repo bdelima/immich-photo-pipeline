@@ -10,5 +10,12 @@ Settled with Bob from the "Household Photos Wireframe". The README describes wha
 - **Trash on any household photo** goes to the Immich trash of the account that owns it, after a confirmation. The pipeline's own copies are not touched. Sending and trashing use the owner's key (`IMMICH_EXTRA_API_KEY`), because Immich only lets an owner add their photo to an album or trash it.
 - **Naming.** The third destination is "Import Only" (the app's name for it; the wireframe said "Importer").
 - **People filter** is empty until Immich has named people (the face rebuild).
-- **Not built yet:** a Collage Maker place (select 2 to 12 mixed photos and make a collage; it changes intake, the worker and the recipe), and editing tools.
+- **Collage Maker is a place, and nothing is grouped automatically.** The old rule (a portrait waits for a second one, then 2 or 3 are grouped) is gone from intake, tests, the README and the recipe, along with the "waiting for a partner" status. Photos in the Collage Maker album only wait until a person selects 2 to 12 and presses Make collage. Landscape and portrait can be mixed.
+- **Claude chooses the layout per set** (recipe section 7): one shared mat, a 16:9 canvas and balanced sizes are fixed; the arrangement is not. It can be changed afterwards in the photo's chat.
+- **Sources are in the order selected.** The place sends the ids in click order and the collage records them that way; the recipe reads that order as the reading order. The collage is named after its first source, like every collage.
+- **What was built the same as search results.** The waiting list is drawn with the search-results machinery (months, days, its own timeline), not the flat rows of the wireframe. It is the whole album at once (no paging), without videos and without originals the pipeline already knows.
+- **Remove only touches the Collage Maker album.** The photo stays in its owner's library. Each configured key is tried in turn, because Immich lets only the account that added a photo take it out of an album; photos that none can remove are reported with the reason.
+- **Videos in the album are still recorded as failed** (unchanged), so they do not wait for ever; they cannot go in a collage.
+- **The sidebar count is cached for 10 seconds** on the server (and dropped on any change made here), so keeping the page open does not ask Immich every few seconds. It is left off when Immich cannot be asked.
+- **Not built yet:** editing tools.
 - **Unverified against a real Immich:** the search request fields (`ocr`, `isNotInAlbum`, `visibility`, `personIds`, `lensModel`), `/search/suggestions`, `/people` and `/download/archive`. Checked only against a fake.
