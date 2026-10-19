@@ -57,6 +57,7 @@ nav .sep { margin: .7rem .4rem; border-top: 1px solid var(--line); }
 .ph-tile.sel { outline: 3px solid var(--accent-2); outline-offset: -3px; }
 .ph-tile.sel .ph-pick { background: var(--accent-2); border-color: var(--accent-2); }
 .ph-dpick { display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--muted); vertical-align: -3px; margin-right: .5rem; cursor: pointer; box-sizing: border-box; }
+.ph-collage .ph-dpick { display: none; }       /* no Select day in Collage Maker */
 .ph-dpick:hover { border-color: var(--text); }
 .ph-dpick.on { background: var(--accent-2); border-color: var(--accent-2); }
 .ph-tag { position: absolute; right: 6px; bottom: 6px; font-size: .68rem; font-weight: 700; border-radius: 99px; padding: .05rem .5rem; background: var(--up-soft); color: var(--up); }

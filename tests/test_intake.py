@@ -4,43 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.immich_client import Asset
-from app.intake import is_portrait, is_video, plan_collage_maker
-
-
-def make_asset(asset_id, orientation=None):
-    return Asset(id=asset_id, original_file_name=f"{asset_id}.jpg", exif_orientation=orientation)
-
-
-def test_is_portrait_detects_rotated_exif():
-    assert is_portrait(make_asset("a", orientation="6"))
-    assert is_portrait(make_asset("a", orientation="8"))
-    assert not is_portrait(make_asset("a", orientation="1"))
-    assert not is_portrait(make_asset("a", orientation=None))
-
-
-def test_plan_collage_maker_waits_on_singleton():
-    plan = plan_collage_maker([make_asset("a")])
-    assert plan.action == "wait"
-    assert plan.asset_ids == ["a"]
-
-
-def test_plan_collage_maker_groups_two():
-    plan = plan_collage_maker([make_asset("a"), make_asset("b")])
-    assert plan.action == "group"
-    assert plan.asset_ids == ["a", "b"]
-
-
-def test_plan_collage_maker_caps_at_three():
-    assets = [make_asset(x) for x in ["a", "b", "c", "d"]]
-    plan = plan_collage_maker(assets)
-    assert plan.action == "group"
-    assert plan.asset_ids == ["a", "b", "c"]
-
-
-def test_plan_collage_maker_empty_waits_with_nothing():
-    plan = plan_collage_maker([])
-    assert plan.action == "wait"
-    assert plan.asset_ids == []
+from app.intake import is_video
 
 
 def test_is_video_goes_by_the_file_extension():
@@ -103,39 +67,22 @@ def test_an_original_already_in_the_library_is_not_picked_up_again(tmp_path):
     assert intake.scan() == []
 
 
-def test_two_portraits_in_collage_maker_become_one_collage(tmp_path):
-    intake, store = scanner(tmp_path, collage=[named("a"), named("b")])
-    assert intake.scan() == ["a"]
-    photo = store.load().photos["a"]
-    assert photo.kind == "collage" and [s.asset_id for s in photo.sources] == ["a", "b"]
-    assert photo.status == "processing" and photo.queue == "collage"
-
-
-def test_a_lone_portrait_waits_and_records_nothing(tmp_path):
-    intake, store = scanner(tmp_path, collage=[named("a")])
-    assert intake.scan() == [] and store.load().photos == {}
-    intake.immich.queues["co"].append(named("b"))
-    assert intake.scan() == ["a"]
-
-
-def test_seven_portraits_make_two_collages_and_leave_one_waiting(tmp_path):
+def test_photos_in_collage_maker_wait_and_nothing_is_grouped_for_them(tmp_path):
     intake, store = scanner(tmp_path, collage=[named(c) for c in "abcdefg"])
-    assert intake.scan() == ["a", "d"]
-    assert [s.asset_id for s in store.load().photos["d"].sources] == ["d", "e", "f"]
-    assert "g" not in {s.asset_id for p in store.load().photos.values() for s in p.sources}
+    assert intake.scan() == [] and store.load().photos == {}
 
 
-def test_a_video_in_collage_maker_is_recorded_as_failed_and_does_not_join_a_collage(tmp_path):
+def test_a_video_in_collage_maker_is_recorded_as_failed_and_the_photos_beside_it_keep_waiting(tmp_path):
     intake, store = scanner(tmp_path, collage=[named("v", "clip.mov"), named("a"), named("b")])
     intake.scan()
     lib = store.load()
     assert lib.photos["v"].status == "failed" and "collage" in lib.photos["v"].error
-    assert [s.asset_id for s in lib.photos["a"].sources] == ["a", "b"]
+    assert set(lib.photos) == {"v"}
 
 
 def test_a_queue_that_cannot_be_listed_is_skipped_for_now(tmp_path):
-    intake, store = scanner(tmp_path, wallpaper=[named("a")], collage=[named("b"), named("c")], fail={"wp"})
-    assert intake.scan() == ["b"]
+    intake, store = scanner(tmp_path, wallpaper=[named("a")], collage=[named("v", "clip.mov")], fail={"wp"})
+    assert intake.scan() == ["v"]
     intake.immich.fail.clear()
     assert intake.scan() == ["a"]
 

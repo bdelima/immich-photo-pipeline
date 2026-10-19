@@ -13,7 +13,7 @@ def read(*parts):
 
 def test_count_changes_are_marked_until_the_row_is_clicked_and_a_drop_to_zero_clears_on_a_timer():
     js = read("static", "app.js")
-    assert 'PILL_VIEWS = ["queue", "review", "trash"]' in js
+    assert 'PILL_VIEWS = ["queue", "collage", "review", "trash"]' in js
     assert "ZERO_CLEAR_MS = 10000" in js
     assert "function noteCount" in js and "function paintCount" in js and "function clearCountMark" in js
     assert 'class="cdelta ' in js and 'e.target.closest("#tree a.item")' in js        # a click on the row clears its mark
@@ -43,7 +43,7 @@ def test_the_original_opens_with_an_info_button_beside_close_and_a_three_group_p
 
 def test_escape_closes_the_popup_before_the_picture():
     page = read("templates", "index.html")
-    assert 'if (!$("infoPop") || $("infoPop").hidden) closeOriginal(); else toggleInfo(false);' in page
+    assert 'if (!$("infoPop") || $("infoPop").hidden) backLayer("overlay", closeOriginal); else toggleInfo(false);' in page
 
 
 def test_the_info_button_matches_close_in_height_and_is_round():

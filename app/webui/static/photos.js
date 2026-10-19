@@ -23,8 +23,8 @@ const PhotosPane = (() => {
     "(Account settings &rarr; Sharing &rarr; Partners). Their photos then appear here.";
 
   const pane = $("photosView");
-  let built = false, started = false, sc, tl, host, note, head, selbar, panel, resBox, resHead, moreBtn;
-  const secs = {};            // bucket -> { bucket, month, count, el, head, body, items, layout, rendered, ... }
+  let built = false, started = false, sc, tl, host, note, head, selbar, panel, resBox, resHead, rtl;
+  let secs = {};            // bucket -> { bucket, month, count, el, head, body, items, layout, rendered, ... }
   let order = [];             // buckets, newest first
   let inflight = 0, savedTop = 0;
 
@@ -41,7 +41,8 @@ const PhotosPane = (() => {
   // What the person has asked to see. Photos already in the pipeline are hidden unless showSent.
   const Q = { text: "", mode: "context", from: "", to: "", country: "", state: "", city: "", type: "", owner: "", make: "", model: "", lens: "",
     people: new Set(), favorites: false, archive: false, notInAlbum: false };
-  let showSent = false, searching = false, monthsStale = false, resSec = null, nextPage = null, loadingMore = false, searchToken = 0;
+  let collage = false;       // the Collage Maker place is showing (it reuses the search-results machinery)
+  let showSent = false, searching = false, monthsStale = false, allResults = [], main = null, nextPage = null, loadingMore = false, searchToken = 0;
   const sel = new Set();     // selected photo ids
   const byId = new Map();    // photo id -> { it, s } for every photo loaded (its section, for the day and removals)
   const MODES = { context: "Context", file_name: "File name", description: "Description", path: "Full path or folder", ocr: "OCR" };
@@ -78,20 +79,21 @@ const PhotosPane = (() => {
   function build() {
     built = true;
     pane.innerHTML =
-      '<div class="ph-top"><div class="card head" id="ph-head"><h2>Photos</h2><span id="ph-count" class="chip"></span>' +
-      '<div class="ph-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>' +
+      '<div class="ph-top"><div class="card head" id="ph-head"><h2 id="ph-title">Photos</h2><span id="ph-count" class="chip"></span>' +
+      '<div class="ph-search" id="ph-searchbox"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>' +
       '<input id="ph-q" placeholder="Search the household\'s photos" aria-label="Search" autocomplete="off">' +
       '<button id="ph-clear" class="ph-x" aria-label="Clear search" hidden>&times;</button>' +
       '<button id="ph-tune" class="ph-x" aria-label="Search filters" aria-expanded="false" aria-controls="ph-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></button></div></div>' +
       '<div class="card ph-selbar" id="ph-selbar" hidden><button id="ph-selclear" class="ph-x" aria-label="Clear selection">&times;</button><strong id="ph-selcount"></strong>' +
       '<button class="btn sec sm" id="ph-selday">Select day</button><span class="sp"></span><span id="ph-selwarn" class="ph-warn"></span>' +
-      '<button class="btn sec sm" id="ph-seldl">Download</button><button class="btn warn sm" id="ph-seltrash">Trash</button><button class="btn sm" id="ph-selsend" aria-haspopup="menu">Send to &#9662;</button></div>' +
+      '<button class="btn sec sm" id="ph-seldl">Download</button><button class="btn warn sm" id="ph-seltrash">Trash</button><button class="btn sm" id="ph-selsend" aria-haspopup="menu">Send to &#9662;</button>' +
+      '<button class="btn sec sm" id="ph-selremove" hidden>Remove from Collage Maker</button><button class="btn sm" id="ph-selmake" hidden>Make collage (select 2 or more)</button></div>' +
       '<div class="ph-panel" id="ph-panel" role="dialog" aria-label="Search filters" hidden>' + PANEL + '</div></div>' +
       '<div class="ph-wrap"><div class="ph-scroll" id="ph-scroll"><div id="ph-note" class="ph-note" hidden></div>' +
       '<div id="ph-res" class="ph-resline" hidden><span id="ph-restext"></span><button class="btn sec sm" id="ph-resclear">Clear search</button></div>' +
       '<div id="ph-results" hidden></div><div id="ph-months"></div></div>' +
-      '<div class="ph-tl" id="ph-tl" role="tree" aria-label="Timeline"></div></div>';
-    sc = $("ph-scroll"); tl = $("ph-tl"); host = $("ph-months"); note = $("ph-note");
+      '<div class="ph-tl" id="ph-tl" role="tree" aria-label="Timeline"></div><div class="ph-tl" id="ph-rtl" role="tree" aria-label="Timeline of the results" hidden></div></div>';
+    sc = $("ph-scroll"); tl = $("ph-tl"); rtl = $("ph-rtl"); host = $("ph-months"); note = $("ph-note");
     head = $("ph-head"); selbar = $("ph-selbar"); panel = $("ph-panel"); resBox = $("ph-results"); resHead = $("ph-res");
     sc.addEventListener("scroll", () => { schedule(); clearTimeout(followTimer); followTimer = setTimeout(follow, FOLLOW_MS); }, { passive: true });
     let rz = null;
@@ -195,7 +197,6 @@ const PhotosPane = (() => {
 
   function relayoutAll() {
     const W = width();
-    if (searching && resSec && resSec.items && resSec.items.length) { clearRows(resSec); computeLayout(resSec, W); setHeight(resSec, resSec.layout.h); }
     for (const b of order) {
       const s = secs[b];
       if (s.layout && s.items && s.items.length) { clearRows(s); computeLayout(s, W); setHeight(s, s.layout.h); }
@@ -211,20 +212,16 @@ const PhotosPane = (() => {
   function update() {
     if (!built || pane.hidden) return;
     const box = sc.getBoundingClientRect();
-    if (searching) {                       // the results replace the months
-      if (resSec && resSec.items) {
-        drawRows(resSec, box);
-        const r = resSec.el.getBoundingClientRect();
-        if (nextPage && !loadingMore && r.bottom < box.bottom + DATA_NEAR) loadMore();
-      }
-      return;
-    }
     if (!order.length) return;
     for (const b of order) {
       const s = secs[b], r = s.el.getBoundingClientRect();
       if (r.bottom > box.top - DATA_NEAR && r.top < box.bottom + DATA_NEAR && !s.items) ensure(s);
       const near = r.bottom > box.top - TILE_NEAR && r.top < box.bottom + TILE_NEAR;
       if (near && s.items) drawRows(s, box); else if (s.rendered.size) clearRows(s);
+    }
+    if (searching && nextPage && !loadingMore) {            // the end of the results is close: fetch the next page
+      const last = secs[order[order.length - 1]];
+      if (last && last.el.getBoundingClientRect().bottom < box.bottom + DATA_NEAR) loadMore();
     }
   }
 
@@ -278,7 +275,7 @@ const PhotosPane = (() => {
   }
 
   // ---- the timeline: year > month > day ----
-  const rowOf = {}, kidsOf = {}, isOpen = {}, auto = {};
+  let rowOf = {}, kidsOf = {}, isOpen = {}, auto = {};
   let current = null, here = null;
 
   function node(key, label, count, cls, expandable, parentEl) {
@@ -356,7 +353,7 @@ const PhotosPane = (() => {
   // Which row the photos on screen belong to: the day at the top of the screen once its month is
   // known, otherwise its month. Called when scrolling pauses, so it does not flicker.
   function follow() {
-    if (!built || pane.hidden || searching || !order.length) return;
+    if (!built || pane.hidden || !order.length) return;
     const box = sc.getBoundingClientRect(), probe = box.top + 64;
     let s = null;
     for (const b of order) { const x = secs[b]; if (x.el.getBoundingClientRect().bottom > probe) { s = x; break; } }
@@ -406,6 +403,7 @@ const PhotosPane = (() => {
       '<div class="pv-bar"><button class="btn sec sm" id="pv-back" aria-label="Back to the timeline">&larr; Back</button>' +
       '<span id="pv-title" class="pv-title"></span><span class="sp"></span>' +
       '<button class="btn sm" id="pv-send" aria-haspopup="menu">Send to &#9662;</button>' +
+      '<button class="btn sec sm" id="pv-pick" hidden>Select for collage</button><button class="btn sec sm" id="pv-remove" hidden>Remove from Collage Maker</button>' +
       '<button class="btn sec sm pv-ic" id="pv-fit" aria-label="Fit to window" title="Back to fit" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>' +
       '<button class="btn sec sm pv-ic" id="pv-out" aria-label="Zoom out" title="Zoom out" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M21 21l-6-6M7 10h6"/></svg></button>' +
       '<span id="pv-pct" class="pv-pct" hidden></span>' +
@@ -417,10 +415,12 @@ const PhotosPane = (() => {
       '<button class="pv-nav prev" id="pv-prev" aria-label="Previous photo">&lsaquo;</button><button class="pv-nav next" id="pv-next" aria-label="Next photo">&rsaquo;</button>';
     document.body.appendChild(pv);
     stage = $("pv-stage"); side = $("pv-side"); vtitle = $("pv-title");
-    $("pv-back").onclick = closeViewer;
+    $("pv-back").onclick = backFromViewer;
     $("pv-prev").onclick = () => step(-1);
     $("pv-next").onclick = () => step(1);
     $("pv-send").onclick = e => sendMenu(e.currentTarget, [item().id]);
+    $("pv-pick").onclick = () => { toggleSel(item().id); paintPick(); };
+    $("pv-remove").onclick = () => removeFromCollage([item().id]);
     $("pv-dl").onclick = () => download([item().id]);
     $("pv-trash").onclick = () => trashFlow([item().id]);
     $("pv-fit").onclick = () => setZoom(1);
@@ -437,12 +437,23 @@ const PhotosPane = (() => {
     document.addEventListener("keydown", e => {
       if (pv.hidden) return;
       if (document.querySelector(".ph-modalback") || sendEl) return;                  // a dialog or menu has the keys first
-      if (e.key === "Escape") closeViewer(); else if (e.key === "ArrowLeft") step(-1); else if (e.key === "ArrowRight") step(1);
+      if (e.key === "Escape") backFromViewer(); else if (e.key === "ArrowLeft") step(-1); else if (e.key === "ArrowRight") step(1);
     });
   }
   const item = () => cur && cur.s.items[cur.i];
-  function openViewer(s, i) { if (!pv) buildViewer(); if (i < 0) return; cur = { s, i }; pv.hidden = false; show(); }
+  const flatItems = () => order.flatMap(b => secs[b].items || []);
+  // The viewer takes one step in the browser's history, so the browser's Back button closes it and leaves the
+  // timeline where it was, the same as the Back button on the viewer. Stepping between photos adds nothing.
+  let pushed = false;
+  function openViewer(s, i) {
+    if (!pv) buildViewer(); if (i < 0) return;
+    if (pv.hidden) { try { history.pushState({ phViewer: 1 }, ""); pushed = true; } catch (e) { /* no history: Back just won't be caught */ } }
+    cur = { s, i }; pv.hidden = false; show();
+  }
   function closeViewer() { if (!pv || pv.hidden) return; pv.hidden = true; stage.innerHTML = ""; cur = null; }
+  // Back button, Escape: also gives back the history step the viewer took.
+  function backFromViewer() { if (pushed) { pushed = false; closeViewer(); history.back(); } else closeViewer(); }
+  window.addEventListener("popstate", () => { if (pv && !pv.hidden) { pushed = false; closeViewer(); } else pushed = false; });
   // Zoom works by sizing the picture to a multiple of its fitted width; the stage scrolls (and drags) to pan.
   function setZoom(z) { zoom = Math.min(ZMAX, Math.max(1, Math.round(z * 100) / 100)); applyZoom(true); }
   function applyZoom(keepCentre) {
@@ -470,11 +481,18 @@ const PhotosPane = (() => {
       : '<img alt="" src="/api/household/' + it.id + '/preview">';
     applyZoom(false);
     edges();
+    $("pv-send").hidden = $("pv-dl").hidden = $("pv-trash").hidden = collage;       // Collage Maker: select, remove, zoom and details only
+    $("pv-pick").hidden = $("pv-remove").hidden = !collage;
+    if (collage) paintPick();
     if (infoOn) loadInfo(it);
+  }
+  function paintPick() {
+    const on = sel.has(item().id), b = $("pv-pick");
+    b.textContent = on ? "Selected ✓" : "Select for collage"; b.classList.toggle("sec", !on); b.setAttribute("aria-pressed", String(on));
   }
   // Whether there is a photo before or after, looking across month boundaries.
   function edges() {
-    if (cur.s.results) { $("pv-prev").hidden = cur.i <= 0; $("pv-next").hidden = cur.i >= cur.s.items.length - 1 && !nextPage; return; }
+    if (cur.s.results) { const f = flatItems(), j = f.indexOf(item()); $("pv-prev").hidden = j <= 0; $("pv-next").hidden = j >= f.length - 1 && !nextPage; return; }
     const k = order.indexOf(cur.s.bucket);
     $("pv-prev").hidden = cur.i <= 0 && k <= 0;
     $("pv-next").hidden = cur.i >= cur.s.items.length - 1 && k >= order.length - 1;
@@ -483,10 +501,12 @@ const PhotosPane = (() => {
   async function step(d) {
     if (!cur) return;
     if (cur.s.results) {                              // search results: along the list, fetching the next page at its end
-      const j = cur.i + d;
-      if (j >= cur.s.items.length && nextPage && !loadingMore) await loadMore();
-      if (!cur || j < 0 || j >= cur.s.items.length) return;
-      cur = { s: cur.s, i: j }; show(); return;
+      const here_ = item();
+      let f = flatItems(), j = f.indexOf(here_) + d;
+      if (j >= f.length && nextPage && !loadingMore) { await loadMore(); f = flatItems(); j = f.indexOf(here_) + d; }
+      if (!cur || j < 0 || j >= f.length) return;
+      const e = byId.get(f[j].id);
+      cur = { s: e.s, i: e.s.items.indexOf(f[j]) }; show(); return;
     }
     let k = order.indexOf(cur.s.bucket), i = cur.i + d, s = cur.s;
     while (i < 0 || i >= s.items.length) {
@@ -554,20 +574,34 @@ const PhotosPane = (() => {
     return bits.join(" · ");
   }
   function resultText() {
-    const n = resSec && resSec.items ? resSec.items.length : 0;
+    const n = allResults.length;
     return (n ? plural(n, "result") + (nextPage ? " so far" : "") : "No results") + (summary() ? " for " + summary() : "") + ". Newest first on each page.";
   }
 
+  // A search shows its results the way the main page shows the timeline: by month and day, with a timeline of
+  // its own. The main page's state is put aside while searching and put back when the search is cleared.
+  function enterSearch() {
+    if (!main) main = { secs, order, rowOf, kidsOf, isOpen, auto, current, here, host, tl };
+    secs = {}; order = []; rowOf = {}; kidsOf = {}; isOpen = {}; auto = {}; current = null; here = null;
+    host = resBox; tl = rtl; allResults = [];
+    host.innerHTML = ""; tl.innerHTML = "";
+    $("ph-months").hidden = true; $("ph-tl").hidden = true; resBox.hidden = false; rtl.hidden = false;
+  }
+  function leaveSearch() {
+    if (!main) return;
+    ({ secs, order, rowOf, kidsOf, isOpen, auto, current, here, host, tl } = main); main = null;
+    resBox.hidden = true; rtl.hidden = true; resBox.innerHTML = ""; rtl.innerHTML = "";
+    host.hidden = false; tl.hidden = false;
+    for (const k of Object.keys(secs)) if (secs[k].items) reg(secs[k], secs[k].items);     // a result that was also on the timeline had taken its entry
+  }
   async function runSearch() {
     readForm(); closePanel();
     if (!hasSearch()) { await clearSearch(false); return; }
     const token = ++searchToken;
     searching = true; sel.clear();
     for (const [id, e] of byId) if (e.s.results) byId.delete(id);
-    tl.hidden = true; host.hidden = true; resBox.hidden = false; resHead.hidden = false;
+    enterSearch(); resHead.hidden = false;
     $("ph-clear").hidden = false;
-    resBox.innerHTML = '<section class="ph-month"><div class="ph-body"></div></section>';
-    resSec = { results: true, items: [], layout: null, rendered: new Map(), el: resBox.firstChild, body: resBox.firstChild.firstChild, head: null, bucket: "" };
     nextPage = null;
     $("ph-restext").textContent = "Searching…";
     sc.scrollTop = 0; closeViewer(); paintSel();
@@ -577,15 +611,43 @@ const PhotosPane = (() => {
       addResults(d);
     } catch (e) {
       if (token !== searchToken) return;
-      resSec.items = []; $("ph-restext").textContent = "Couldn't search Immich. " + (e.message || "");
+      $("ph-restext").textContent = "Couldn't search Immich. " + (e.message || "");
     }
   }
   function addResults(d) {
     nextPage = d.next || null;
-    resSec.items = resSec.items.concat(d.items); reg(resSec, d.items);
-    if (resSec.items.length) layoutSection(resSec); else resSec.body.innerHTML = "";
+    allResults = allResults.concat(d.items).sort((a, b) => (b.day + b.time).localeCompare(a.day + a.time));
+    rebuildResults();
     $("ph-restext").textContent = resultText();
     schedule();
+  }
+  // Groups everything found so far into months (newest first) and lays them out like the main page.
+  function rebuildResults() {
+    const top = sc.scrollTop;
+    for (const [id, e] of byId) if (e.s.results) byId.delete(id);
+    for (const k of Object.keys(secs)) delete secs[k];
+    for (const o of [rowOf, kidsOf, isOpen, auto]) for (const k of Object.keys(o)) delete o[k];
+    host.innerHTML = ""; tl.innerHTML = ""; order = []; current = null; here = null;
+    const groups = new Map();
+    for (const it of allResults) {
+      if (!it.day) continue;
+      const m = it.day.slice(0, 7);
+      if (!groups.has(m)) groups.set(m, []);
+      groups.get(m).push(it);
+    }
+    const months = [...groups.keys()].sort().reverse().map(m => ({ bucket: "r" + m, month: m, count: groups.get(m).length }));
+    order = months.map(m => m.bucket);
+    for (const m of months) {
+      const el = document.createElement("section"); el.className = "ph-month";
+      el.innerHTML = '<h3 class="ph-mh">' + esc(monthLabel(m.month)) + ' <span class="muted">' + m.count.toLocaleString() + '</span></h3><div class="ph-body"></div>';
+      secs[m.bucket] = { bucket: m.bucket, month: m.month, count: m.count, el, head: el.firstChild, body: el.lastChild, items: groups.get(m.month),
+        layout: null, rendered: new Map(), state: "ready", promise: null, failed: false, warmed: true, results: true };
+      host.appendChild(el);
+    }
+    buildTimeline(months);
+    for (const m of months) { const s = secs[m.bucket]; reg(s, s.items); layoutSection(s); }
+    sc.scrollTop = top;
+    schedule(); follow();
   }
   async function loadMore() {
     if (!searching || !nextPage || loadingMore) return;
@@ -604,9 +666,8 @@ const PhotosPane = (() => {
       for (const b of $("ph-modes").children) b.classList.toggle("on", b.dataset.mode === "context");
     }
     for (const [id, e] of byId) if (e.s.results) byId.delete(id);
-    sel.clear(); resSec = null; nextPage = null; searching = false;
-    resBox.hidden = true; resHead.hidden = true; resBox.innerHTML = ""; $("ph-clear").hidden = true;
-    host.hidden = false; tl.hidden = false;
+    sel.clear(); allResults = []; nextPage = null; searching = false;
+    leaveSearch(); resHead.hidden = true; $("ph-clear").hidden = true; $("ph-months").hidden = false;
     closeViewer(); paintSel();
     if (monthsStale) { monthsStale = false; resetMonths(); } else { schedule(); follow(); }
   }
@@ -689,6 +750,13 @@ const PhotosPane = (() => {
     const inTrash = items.filter(i => i.pipeline === "trash").length, inPipe = items.filter(i => i.pipeline === "in").length;
     $("ph-selwarn").textContent = [inPipe ? plural(inPipe, "photo") + " already in the pipeline will not be sent" : "",
       inTrash ? inTrash + " in the pipeline's trash: Send to will ask to purge " + (inTrash === 1 ? "it" : "them") + " first" : ""].filter(Boolean).join(" · ");
+    if (collage) {
+      const mk = $("ph-selmake");
+      mk.disabled = n < COLLAGE_MIN || n > COLLAGE_MAX;
+      mk.textContent = n < COLLAGE_MIN ? "Make collage (select " + COLLAGE_MIN + " or more)" : n > COLLAGE_MAX ? "Make collage (" + COLLAGE_MAX + " at most)" : "Make collage from " + n;
+      $("ph-selwarn").textContent = n > COLLAGE_MAX ? "A collage takes " + COLLAGE_MAX + " photos at most. Deselect " + (n - COLLAGE_MAX) + "." : "";
+      if (pv && !pv.hidden && cur) paintPick();
+    }
   }
   function wireSelection() {
     $("ph-selclear").onclick = () => { sel.clear(); paintSel(); };
@@ -700,6 +768,85 @@ const PhotosPane = (() => {
     $("ph-selsend").onclick = e => sendMenu(e.currentTarget, [...sel]);
     $("ph-seldl").onclick = () => download([...sel]);
     $("ph-seltrash").onclick = () => trashFlow([...sel]);
+    $("ph-selmake").onclick = makeCollage;
+    $("ph-selremove").onclick = () => removeFromCollage([...sel]);
+  }
+
+  // ---- Collage Maker ----
+  // The photos waiting in the Collage Maker album, shown like search results (by month and day, with a timeline).
+  // Nothing is grouped for the person: they select 2 to 12 that belong together and press Make collage. The photos
+  // are laid out in the order they were selected. Photos left unselected stay here.
+  const COLLAGE_MIN = 2, COLLAGE_MAX = 12;
+  const collageText = () => allResults.length
+    ? plural(allResults.length, "photo") + " waiting in Collage Maker. Select the ones that belong together (" + COLLAGE_MIN + " to " + COLLAGE_MAX +
+      "), then make a collage. Photos you leave unselected stay here."
+    : "Nothing is waiting in Collage Maker. Send photos here with Send to in Photos.";
+  function setCollageMode(on) {
+    collage = on; pane.classList.toggle("ph-collage", on);
+    $("ph-title").textContent = on ? "Collage Maker" : "Photos";
+    $("ph-searchbox").hidden = on; $("ph-count").hidden = on; $("ph-resclear").hidden = on;
+    for (const id of ["ph-selday", "ph-seldl", "ph-seltrash", "ph-selsend"]) $(id).hidden = on;
+    $("ph-selmake").hidden = $("ph-selremove").hidden = !on;
+  }
+  async function enterCollage() {
+    if (collage) return refreshCollage();
+    if (searching) await clearSearch(true);
+    savedTop = sc.scrollTop; sel.clear(); closeViewer(); closePanel();
+    setCollageMode(true);
+    searching = true; nextPage = null;
+    enterSearch(); resHead.hidden = false; sc.scrollTop = 0; paintSel();
+    await refreshCollage();
+  }
+  function leaveCollage() {
+    if (!collage) return;
+    setCollageMode(false);
+    clearSearch(false);
+  }
+  async function refreshCollage() {
+    const token = ++searchToken;
+    $("ph-restext").textContent = "Looking in Collage Maker…";
+    try {
+      const d = await api("/api/collage/waiting");
+      if (token !== searchToken || !collage) return;
+      allResults = d.items; nextPage = null;
+      const ids = new Set(allResults.map(i => i.id));
+      for (const id of [...sel]) if (!ids.has(id)) sel.delete(id);
+      rebuildResults(); paintSel();
+      $("ph-restext").textContent = collageText();
+    } catch (e) {
+      if (token === searchToken) $("ph-restext").textContent = "Couldn't read Collage Maker from Immich. " + (e.message || "");
+    }
+  }
+  // Photos that have left Collage Maker (made into a collage, or removed) go from the page; the sidebar count follows.
+  function collageGone(ids) {
+    const g = new Set(ids), here_ = cur && item() ? item().id : null;
+    allResults = allResults.filter(i => !g.has(i.id));
+    for (const id of ids) sel.delete(id);
+    if (here_ && g.has(here_)) backFromViewer();
+    rebuildResults(); paintSel();
+    $("ph-restext").textContent = collageText();
+    document.dispatchEvent(new Event("collage-changed"));
+  }
+  async function makeCollage() {
+    const ids = [...sel];
+    if (ids.length < COLLAGE_MIN || ids.length > COLLAGE_MAX) return;
+    $("ph-selmake").disabled = true;
+    const out = await post("/api/collage/make", { ids });
+    if (!out) { await refreshCollage(); return; }
+    toast("Sent to Claude. The collage will appear in Review when it is done.");
+    collageGone(ids);
+  }
+  async function removeFromCollage(ids) {
+    if (!ids.length) return;
+    const out = await post("/api/collage/remove", { ids });
+    if (!out) { await refreshCollage(); return; }
+    const why = {};
+    for (const s of out.skipped || []) why[s.reason] = (why[s.reason] || 0) + 1;
+    const skipped = Object.entries(why).map(([r, n]) => n + " " + r).join(", ");
+    toast((out.done.length ? "Removed from Collage Maker. The photos stay in the owner's Immich library." : "") +
+      (skipped ? (out.done.length ? " " : "") + "Not removed: " + skipped + "." : ""), !out.done.length && !!skipped);
+    if (out.done.length) collageGone(out.done);
+    if (out.skipped && out.skipped.length) await refreshCollage();
   }
 
   // ---- what can be done with photos ----
@@ -720,6 +867,7 @@ const PhotosPane = (() => {
   // Removes photos from the page (trashed, or sent and hidden), keeping the layout and the viewer in step.
   function dropItems(ids) {
     const curId = cur && item() ? item().id : null, touched = new Set();
+    if (searching) { const gone = new Set(ids); allResults = allResults.filter(i => !gone.has(i.id)); }
     for (const id of ids) {
       const e = byId.get(id); if (!e) continue;
       e.s.items = e.s.items.filter(i => i.id !== id); byId.delete(id); sel.delete(id); touched.add(e.s);
@@ -831,13 +979,15 @@ const PhotosPane = (() => {
   }
 
   // ---- coming and going ----
-  function show_() {
+  function show_(which) {
     if (!built) build();
+    if (which === "collage") { enterCollage(); return; }
+    leaveCollage();
     if (!started) start(); else { sc.scrollTop = savedTop; schedule(); follow(); }
   }
   function hide() {
-    if (built && !pane.hidden) savedTop = sc.scrollTop;
-    closeViewer(); closeSendMenu(); closePanel();
+    if (built && !pane.hidden && !collage) savedTop = sc.scrollTop;
+    closeViewer(); closeSendMenu(); closePanel(); leaveCollage();
   }
   return { show: show_, hide };
 })();

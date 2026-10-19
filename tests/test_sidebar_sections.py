@@ -111,7 +111,7 @@ def test_the_preview_is_drawn_on_the_original_and_a_click_shows_it_whole():
     assert '(onOriginal ? " on the original · " + drawn + " corner"' in page and '" · no original on file"' in page
     click = page[page.index('$("wmPreview").onclick'):page.index("// The colour each line was drawn in")]
     assert "if (!onOriginal) return;" in click and '"/api/photos/" + id + "/watermark/whole"' in click
-    assert 'const o = $("overlay");' in click and "closeOriginal()" in click      # the overlay the original's thumbnail uses
+    assert 'const o = $("overlay");' in click and 'backLayer("overlay", closeOriginal)' in click      # the overlay the original's thumbnail uses
     css = read("static", "pipeline.css")
     assert "#viewer .wm .wmpreview.whole { cursor: zoom-in; }" in css
 
@@ -147,7 +147,7 @@ def test_clicking_the_finished_photo_shows_it_large_in_the_overlay_the_original_
     assert "if (shown) shown.onclick = () => showCurrent(p.id, p.version);" in page
     fn = page[page.index("function showCurrent"):page.index("function closeOriginal")]
     assert '`<img src="/media/${id}/full?v=${version}" alt="The photo">' in fn and 'const o = $("overlay");' in fn
-    assert "o.onclick = () => closeOriginal();" in fn                        # a click, or Esc, closes it as for an original
+    assert 'o.onclick = () => backLayer("overlay", closeOriginal);' in fn                        # a click, or Esc, closes it as for an original
     assert "#viewer .stage img { cursor: zoom-in; }" in read("static", "pipeline.css")
 
 

@@ -17,7 +17,7 @@ def test_there_is_a_close_in_the_photo_header_and_one_in_the_sidebar():
     head = page[page.index('$("vhead").innerHTML ='):page.index("const run = (path, what)")]
     assert 'id="vClose2"' in head and "close-top" in head
     assert page.count('id="vClose"') == 1 and 'class="asidebar"' in page
-    assert '$("vClose").onclick = $("vClose2").onclick = closeViewer;' in page
+    assert '$("vClose").onclick = $("vClose2").onclick = () => backLayer("viewer", closeViewer);' in page
 
 
 def test_the_photo_header_close_only_shows_in_the_stacked_layout():

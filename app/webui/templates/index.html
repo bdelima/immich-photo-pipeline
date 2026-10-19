@@ -124,11 +124,12 @@ function moveMenu(anchor) {
 // ---- the places ----
 // Photos and Recipe rules are views in this window, like Review and the albums: the sidebar and
 // header stay, only the area on the right changes (photos.js and rules.js draw them).
-const isPane = v => v === "photos" || v === "rules";
+const isPane = v => v === "photos" || v === "collage" || v === "rules";
+const paneOn = v => v === "collage" ? window.FEATURES.photos : window.FEATURES[v];
 function showPane(v) {
-  if (v !== "photos") PhotosPane.hide();               // remembers where the timeline was, before it is hidden
+  if (v !== "photos" && v !== "collage") PhotosPane.hide();               // remembers where the timeline was, before it is hidden
   $("pipeView").hidden = isPane(v);
-  $("photosView").hidden = v !== "photos";
+  $("photosView").hidden = v !== "photos" && v !== "collage";
   $("rulesView").hidden = v !== "rules";
 }
 async function openPane(v) {
@@ -138,12 +139,15 @@ async function openPane(v) {
   document.title = viewTitle(v) + " · immich-photo-pipeline";
   showPane(v);
   renderTree(v, "").then(t => { treeAlbums = t.albums; albums = t.albums.map(a => a.name); }).catch(() => {});
-  if (v === "photos") PhotosPane.show(); else RulesPane.show();
+  if (v === "photos" || v === "collage") PhotosPane.show(v); else RulesPane.show();
 }
+
+// Collage Maker changed (a collage was made, photos were removed): the sidebar count follows.
+document.addEventListener("collage-changed", () => { renderTree(view, "").catch(() => {}); });
 
 // ---- the grid ----
 async function select(v, keep, keepViewer) {
-  if (isPane(v) && window.FEATURES[v]) return openPane(v);
+  if (isPane(v) && paneOn(v)) return openPane(v);
   if (isPane(v)) { history.replaceState(null, "", viewHash("review")); v = "review"; }   // not available here
   showPane(v);
   const token = ++loadToken;
@@ -255,7 +259,7 @@ function daysLeft(p) {
   return Math.ceil(trashDays - age);
 }
 const leftText = n => n <= 0 ? "due" : n + "d left";
-function closeConfirm() { const c = $("confirm"); c.hidden = true; c.innerHTML = ""; }
+function closeConfirm() { dropLayer("confirm"); const c = $("confirm"); c.hidden = true; c.innerHTML = ""; }
 // Asks before anything is deleted. Cancel has the focus, so Enter alone never deletes.
 function confirmDelete(photos, go) {
   const n = photos.length, c = $("confirm");
@@ -267,10 +271,10 @@ function confirmDelete(photos, go) {
     <ul><li>the finished photo and every earlier step</li><li>the pipeline's copy of the original</li><li>its history and chat</li><li>its copy in Immich, deleted for good (including from Immich's trash)</li></ul>
     <div class="keep">Not touched: the contributor's original in their own Immich library.</div>
     <div class="acts"><button class="btn sec" id="cdNo">Cancel</button><button class="btn danger" id="cdYes">Delete</button></div></div>`;
-  c.hidden = false;
-  $("cdNo").onclick = closeConfirm;
-  $("cdYes").onclick = () => { closeConfirm(); go(); };
-  c.onclick = e => { if (e.target === c) closeConfirm(); };
+  c.hidden = false; pushLayer("confirm", closeConfirm);          // the browser's Back closes it, like Cancel
+  $("cdNo").onclick = () => backLayer("confirm", closeConfirm);
+  $("cdYes").onclick = () => { backLayer("confirm", closeConfirm); go(); };
+  c.onclick = e => { if (e.target === c) backLayer("confirm", closeConfirm); };
   $("cdNo").focus();
 }
 const deleteSel = () => { const photos = selPhotos(); if (photos.length) confirmDelete(photos, () => act("/api/photos/delete", { ids: photos.map(p => p.id) }, "Deleted")); };
@@ -287,7 +291,7 @@ function paintRetention() {
   b.textContent = retLabel();
   if (view !== "trash") closeRetention();
 }
-function closeRetention() { const p = $("retPop"); if (!p.hidden) { p.hidden = true; p.innerHTML = ""; $("retBtn").setAttribute("aria-expanded", "false"); } }
+function closeRetention() { dropLayer("retention"); const p = $("retPop"); if (!p.hidden) { p.hidden = true; p.innerHTML = ""; $("retBtn").setAttribute("aria-expanded", "false"); } }
 function openRetention() {
   const pop = $("retPop"), btn = $("retBtn");
   pop.innerHTML = `<h4>Auto-delete from Trash</h4>
@@ -300,7 +304,7 @@ function openRetention() {
   const r = btn.getBoundingClientRect();
   pop.style.top = (r.bottom + 8) + "px";
   pop.style.right = Math.max(8, document.documentElement.clientWidth - r.right) + "px";
-  pop.hidden = false;
+  pop.hidden = false; pushLayer("retention", closeRetention);       // the browser's Back closes it, like Cancel
   btn.setAttribute("aria-expanded", "true");
   const never = () => pop.querySelector("input[name=rm]:checked").value === "never";
   const draft = () => never() ? 0 : Math.max(1, Math.min(365, Math.floor(+$("rd").value) || 1));
@@ -317,13 +321,13 @@ function openRetention() {
   for (const el of pop.querySelectorAll("input[name=rm]")) el.onchange = refresh;
   $("rd").oninput = refresh;
   for (const b of pop.querySelectorAll("#rPresets button")) b.onclick = () => { pop.querySelector("input[value=days]").checked = true; $("rd").value = b.dataset.d; refresh(); };
-  $("rNo").onclick = closeRetention;
+  $("rNo").onclick = () => backLayer("retention", closeRetention);
   $("rYes").onclick = async () => {
     const days = draft();
     const res = await fetch("/api/trash-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trash_days: days }) });
     const out = await res.json();
     if (!res.ok) { say(out.error || "That didn't work.", true); return; }
-    closeRetention();
+    backLayer("retention", closeRetention);
     trashDays = out.trash_days;
     await select(view, true, true);
     say(out.deleted ? `Auto-deleted ${plural(out.deleted, "photo")} older than ${plural(trashDays, "day")}` : "Auto-delete: " + (trashDays ? "after " + plural(trashDays, "day") : "off"));
@@ -331,8 +335,8 @@ function openRetention() {
   refresh();
   $("rd").focus();
 }
-$("retBtn").onclick = () => $("retPop").hidden ? openRetention() : closeRetention();
-document.addEventListener("click", e => { if (!$("retPop").hidden && !e.target.closest("#retPop, #retBtn")) closeRetention(); });
+$("retBtn").onclick = () => $("retPop").hidden ? openRetention() : backLayer("retention", closeRetention);
+document.addEventListener("click", e => { if (!$("retPop").hidden && !e.target.closest("#retPop, #retBtn")) backLayer("retention", closeRetention); });
 
 async function revertTo(id, step) {
   const r = await fetch("/api/photos/" + id + "/revert", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ step }) });
@@ -444,7 +448,7 @@ function wireFolds() {
 async function openViewer(i) {
   if (i < 0 || i >= list.length) return;
   stopPoll(); closeMenu();
-  open = i;
+  open = i; pushLayer("viewer", closeViewer);
   const p = await api("/api/photos/" + list[i].id);
   if (open !== i) return;
   if (!$("viewer").classList.contains("open")) for (const k of Object.keys(folds)) folds[k] = false;   // a photo opens with every section folded
@@ -512,7 +516,7 @@ async function openViewer(i) {
     (p.legacy_notes.length ? `<h4>Earlier notes</h4><ul class="meta" style="margin:0 1.1rem .5rem;padding-left:1.1rem">${p.legacy_notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "") +
     foldSection("chat", "Chat", chat) +
     (p.chat_blocked ? "" : foldSection("wm", "Watermark", watermarkForm(p.watermark)));
-  $("vClose").onclick = $("vClose2").onclick = closeViewer;
+  $("vClose").onclick = $("vClose2").onclick = () => backLayer("viewer", closeViewer);
   wireFolds();
   wireWatermark(p.id, p.watermark);
   for (const b of $("panel").querySelectorAll("[data-orig]")) b.onclick = () => showOriginal(p.id, p.sources.find(x => x.index === +b.dataset.orig), b.dataset.type);
@@ -689,8 +693,8 @@ function wireWatermark(id, w) {
       status("");
       const o = $("overlay");
       o.innerHTML = `<img src="${url}" alt="The original with the watermark"><button class="btn sec sm close" aria-label="Close">Close</button>`;
-      o.hidden = false;
-      o.onclick = () => { closeOriginal(); URL.revokeObjectURL(url); };
+      o.hidden = false; pushLayer("overlay", closeOriginal);
+      o.onclick = () => { backLayer("overlay", closeOriginal); URL.revokeObjectURL(url); };
     } catch (e) { status("That couldn't be drawn."); }
   };
   // The colour each line was drawn in (the server skips empty lines, so count the ones with text).
@@ -929,11 +933,11 @@ function showOriginal(id, source, type) {
     `<button type="button" class="btn sec sm close" aria-label="Close original">Close</button></div>` +
     `<div class="infopop" id="infoPop" role="dialog" aria-label="About this original" hidden>` +
     `<h5>About this original <button type="button" class="x" id="infoX" aria-label="Close information">&times;</button></h5>${originalInfo(source)}</div>`;
-  o.hidden = false;
-  o.onclick = e => { if (e.target.tagName !== "VIDEO") closeOriginal(); };
+  o.hidden = false; pushLayer("overlay", closeOriginal);
+  o.onclick = e => { if (e.target.tagName !== "VIDEO") backLayer("overlay", closeOriginal); };
   const tools = o.querySelector(".tools");
   tools.onclick = e => e.stopPropagation();                    // the buttons are not clicks on the photo
-  tools.querySelector(".close").onclick = closeOriginal;
+  tools.querySelector(".close").onclick = () => backLayer("overlay", closeOriginal);
   $("infoPop").onclick = e => e.stopPropagation();
   $("infoBtn").onclick = () => toggleInfo();
   $("infoX").onclick = () => toggleInfo(false);
@@ -974,20 +978,32 @@ function originalInfo(source) {
 function showCurrent(id, version) {
   const o = $("overlay");
   o.innerHTML = `<img src="/media/${id}/full?v=${version}" alt="The photo"><button class="btn sec sm close" aria-label="Close photo">Close</button>`;
-  o.hidden = false;
-  o.onclick = () => closeOriginal();
+  o.hidden = false; pushLayer("overlay", closeOriginal);
+  o.onclick = () => backLayer("overlay", closeOriginal);
 }
-function closeOriginal() { const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
-function closeViewer() { closeOriginal(); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
+// The photo window and the original/finished photo over it each take one step in the browser's history, so the
+// browser's Back button closes the top one (and nothing more) and leaves the page where it was. Their own Back,
+// Close and Escape give that step back; a close the page makes by itself (changing view, the photo gone) does
+// not touch the history, so it can never undo a change of view.
+const layers = []; let skipPops = 0;
+function pushLayer(name, close) {
+  if (layers.some(l => l.name === name)) return;
+  try { history.pushState({ layer: name }, ""); layers.push({ name, close }); } catch (e) { /* no history: Back just won't be caught */ }
+}
+function dropLayer(name) { const i = layers.findIndex(l => l.name === name); if (i >= 0) layers.splice(i, 1); return i >= 0; }
+function backLayer(name, close) { if (dropLayer(name)) { close(); skipPops++; history.back(); } else close(); }
+window.addEventListener("popstate", () => { if (skipPops) { skipPops--; return; } const l = layers.pop(); if (l) l.close(); });
+function closeOriginal() { dropLayer("overlay"); const o = $("overlay"); o.hidden = true; o.innerHTML = ""; }
+function closeViewer() { closeOriginal(); dropLayer("viewer"); stopPoll(); open = -1; $("viewer").classList.remove("open"); $("stage").innerHTML = ""; }
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && !$("confirm").hidden) { closeConfirm(); return; }
-  if (e.key === "Escape" && !$("retPop").hidden) { closeRetention(); return; }
-  if (e.key === "Escape" && !$("overlay").hidden) { if (!$("infoPop") || $("infoPop").hidden) closeOriginal(); else toggleInfo(false); return; }
+  if (e.key === "Escape" && !$("confirm").hidden) { backLayer("confirm", closeConfirm); return; }
+  if (e.key === "Escape" && !$("retPop").hidden) { backLayer("retention", closeRetention); return; }
+  if (e.key === "Escape" && !$("overlay").hidden) { if (!$("infoPop") || $("infoPop").hidden) backLayer("overlay", closeOriginal); else toggleInfo(false); return; }
   if (e.key === "Escape" && menuEl) { closeMenu(); return; }
   if (open < 0) return;
   const typing = ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName);
   if (typing && e.key !== "Escape") return;
-  if (e.key === "Escape") closeViewer();
+  if (e.key === "Escape") backLayer("viewer", closeViewer);
   else if (e.key === "ArrowRight") openViewer(open + 1);
   else if (e.key === "ArrowLeft") openViewer(open - 1);
 });

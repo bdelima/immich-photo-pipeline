@@ -125,7 +125,6 @@ def test_enqueue_unknown_photo_is_a_404(tmp_path):
     ({"trashed": True}, "trash"),
     ({"media_type": "video"}, "Videos"),
     ({"status": "processing"}, "being processed"),
-    ({"status": "waiting"}, "partner"),
     ({"status": "failed"}, "failed"),
 ])
 def test_enqueue_is_refused_when_the_photo_cannot_be_modified(tmp_path, fields, fragment):

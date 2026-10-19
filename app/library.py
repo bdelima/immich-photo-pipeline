@@ -34,7 +34,6 @@ INBOX = "inbox"      # picked up from an entry queue, no result yet
 REVIEW = "review"    # processed, waiting for a decision
 
 # A photo's progress through the pipeline.
-STATUS_WAITING = "waiting"                  # a lone portrait waiting for a partner
 STATUS_PROCESSING = "processing"
 STATUS_AWAITING_ANSWER = "awaiting_answer"  # Claude asked a question about the photo
 STATUS_FAILED = "failed"

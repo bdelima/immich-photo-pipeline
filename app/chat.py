@@ -35,7 +35,7 @@ import tempfile
 
 from .library import (
     CHAT_DONE, CHAT_FAILED, CHAT_QUEUED, CHAT_WORKING,
-    INBOX, REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY, STATUS_WAITING,
+    INBOX, REVIEW, STATUS_AWAITING_ANSWER, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
     ChatMessage, LibraryStore, Photo, Revision,
 )
 from .recipe_runner import CommentContext, RecipeResult, RecipeRunner
@@ -76,8 +76,6 @@ def blocked_reason(photo: Photo) -> str | None:
         return "Videos are kept exactly as they were added; they can't be modified."
     if photo.status == STATUS_PROCESSING:
         return "It is still being processed."
-    if photo.status == STATUS_WAITING:
-        return "It is waiting for a partner photo."
     if photo.status == STATUS_FAILED:
         return "Processing failed, so there is nothing to change yet."
     return None
