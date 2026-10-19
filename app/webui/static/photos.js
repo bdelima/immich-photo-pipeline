@@ -41,6 +41,7 @@ const PhotosPane = (() => {
   // What the person has asked to see. Photos already in the pipeline are hidden unless showSent.
   const Q = { text: "", mode: "context", from: "", to: "", country: "", state: "", city: "", type: "", owner: "", make: "", model: "", lens: "",
     people: new Set(), favorites: false, archive: false, notInAlbum: false };
+  let collage = false;       // the Collage Maker place is showing (it reuses the search-results machinery)
   let showSent = false, searching = false, monthsStale = false, allResults = [], main = null, nextPage = null, loadingMore = false, searchToken = 0;
   const sel = new Set();     // selected photo ids
   const byId = new Map();    // photo id -> { it, s } for every photo loaded (its section, for the day and removals)
@@ -78,14 +79,15 @@ const PhotosPane = (() => {
   function build() {
     built = true;
     pane.innerHTML =
-      '<div class="ph-top"><div class="card head" id="ph-head"><h2>Photos</h2><span id="ph-count" class="chip"></span>' +
-      '<div class="ph-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>' +
+      '<div class="ph-top"><div class="card head" id="ph-head"><h2 id="ph-title">Photos</h2><span id="ph-count" class="chip"></span>' +
+      '<div class="ph-search" id="ph-searchbox"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>' +
       '<input id="ph-q" placeholder="Search the household\'s photos" aria-label="Search" autocomplete="off">' +
       '<button id="ph-clear" class="ph-x" aria-label="Clear search" hidden>&times;</button>' +
       '<button id="ph-tune" class="ph-x" aria-label="Search filters" aria-expanded="false" aria-controls="ph-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></button></div></div>' +
       '<div class="card ph-selbar" id="ph-selbar" hidden><button id="ph-selclear" class="ph-x" aria-label="Clear selection">&times;</button><strong id="ph-selcount"></strong>' +
       '<button class="btn sec sm" id="ph-selday">Select day</button><span class="sp"></span><span id="ph-selwarn" class="ph-warn"></span>' +
-      '<button class="btn sec sm" id="ph-seldl">Download</button><button class="btn warn sm" id="ph-seltrash">Trash</button><button class="btn sm" id="ph-selsend" aria-haspopup="menu">Send to &#9662;</button></div>' +
+      '<button class="btn sec sm" id="ph-seldl">Download</button><button class="btn warn sm" id="ph-seltrash">Trash</button><button class="btn sm" id="ph-selsend" aria-haspopup="menu">Send to &#9662;</button>' +
+      '<button class="btn sec sm" id="ph-selremove" hidden>Remove from Collage Maker</button><button class="btn sm" id="ph-selmake" hidden>Make collage (select 2 or more)</button></div>' +
       '<div class="ph-panel" id="ph-panel" role="dialog" aria-label="Search filters" hidden>' + PANEL + '</div></div>' +
       '<div class="ph-wrap"><div class="ph-scroll" id="ph-scroll"><div id="ph-note" class="ph-note" hidden></div>' +
       '<div id="ph-res" class="ph-resline" hidden><span id="ph-restext"></span><button class="btn sec sm" id="ph-resclear">Clear search</button></div>' +
@@ -401,6 +403,7 @@ const PhotosPane = (() => {
       '<div class="pv-bar"><button class="btn sec sm" id="pv-back" aria-label="Back to the timeline">&larr; Back</button>' +
       '<span id="pv-title" class="pv-title"></span><span class="sp"></span>' +
       '<button class="btn sm" id="pv-send" aria-haspopup="menu">Send to &#9662;</button>' +
+      '<button class="btn sec sm" id="pv-pick" hidden>Select for collage</button><button class="btn sec sm" id="pv-remove" hidden>Remove from Collage Maker</button>' +
       '<button class="btn sec sm pv-ic" id="pv-fit" aria-label="Fit to window" title="Back to fit" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>' +
       '<button class="btn sec sm pv-ic" id="pv-out" aria-label="Zoom out" title="Zoom out" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M21 21l-6-6M7 10h6"/></svg></button>' +
       '<span id="pv-pct" class="pv-pct" hidden></span>' +
@@ -416,6 +419,8 @@ const PhotosPane = (() => {
     $("pv-prev").onclick = () => step(-1);
     $("pv-next").onclick = () => step(1);
     $("pv-send").onclick = e => sendMenu(e.currentTarget, [item().id]);
+    $("pv-pick").onclick = () => { toggleSel(item().id); paintPick(); };
+    $("pv-remove").onclick = () => removeFromCollage([item().id]);
     $("pv-dl").onclick = () => download([item().id]);
     $("pv-trash").onclick = () => trashFlow([item().id]);
     $("pv-fit").onclick = () => setZoom(1);
@@ -476,7 +481,14 @@ const PhotosPane = (() => {
       : '<img alt="" src="/api/household/' + it.id + '/preview">';
     applyZoom(false);
     edges();
+    $("pv-send").hidden = $("pv-dl").hidden = $("pv-trash").hidden = collage;       // Collage Maker: select, remove, zoom and details only
+    $("pv-pick").hidden = $("pv-remove").hidden = !collage;
+    if (collage) paintPick();
     if (infoOn) loadInfo(it);
+  }
+  function paintPick() {
+    const on = sel.has(item().id), b = $("pv-pick");
+    b.textContent = on ? "Selected ✓" : "Select for collage"; b.classList.toggle("sec", !on); b.setAttribute("aria-pressed", String(on));
   }
   // Whether there is a photo before or after, looking across month boundaries.
   function edges() {
@@ -580,6 +592,7 @@ const PhotosPane = (() => {
     ({ secs, order, rowOf, kidsOf, isOpen, auto, current, here, host, tl } = main); main = null;
     resBox.hidden = true; rtl.hidden = true; resBox.innerHTML = ""; rtl.innerHTML = "";
     host.hidden = false; tl.hidden = false;
+    for (const k of Object.keys(secs)) if (secs[k].items) reg(secs[k], secs[k].items);     // a result that was also on the timeline had taken its entry
   }
   async function runSearch() {
     readForm(); closePanel();
@@ -737,6 +750,13 @@ const PhotosPane = (() => {
     const inTrash = items.filter(i => i.pipeline === "trash").length, inPipe = items.filter(i => i.pipeline === "in").length;
     $("ph-selwarn").textContent = [inPipe ? plural(inPipe, "photo") + " already in the pipeline will not be sent" : "",
       inTrash ? inTrash + " in the pipeline's trash: Send to will ask to purge " + (inTrash === 1 ? "it" : "them") + " first" : ""].filter(Boolean).join(" · ");
+    if (collage) {
+      const mk = $("ph-selmake");
+      mk.disabled = n < COLLAGE_MIN || n > COLLAGE_MAX;
+      mk.textContent = n < COLLAGE_MIN ? "Make collage (select " + COLLAGE_MIN + " or more)" : n > COLLAGE_MAX ? "Make collage (" + COLLAGE_MAX + " at most)" : "Make collage from " + n;
+      $("ph-selwarn").textContent = n > COLLAGE_MAX ? "A collage takes " + COLLAGE_MAX + " photos at most. Deselect " + (n - COLLAGE_MAX) + "." : "";
+      if (pv && !pv.hidden && cur) paintPick();
+    }
   }
   function wireSelection() {
     $("ph-selclear").onclick = () => { sel.clear(); paintSel(); };
@@ -748,6 +768,85 @@ const PhotosPane = (() => {
     $("ph-selsend").onclick = e => sendMenu(e.currentTarget, [...sel]);
     $("ph-seldl").onclick = () => download([...sel]);
     $("ph-seltrash").onclick = () => trashFlow([...sel]);
+    $("ph-selmake").onclick = makeCollage;
+    $("ph-selremove").onclick = () => removeFromCollage([...sel]);
+  }
+
+  // ---- Collage Maker ----
+  // The photos waiting in the Collage Maker album, shown like search results (by month and day, with a timeline).
+  // Nothing is grouped for the person: they select 2 to 12 that belong together and press Make collage. The photos
+  // are laid out in the order they were selected. Photos left unselected stay here.
+  const COLLAGE_MIN = 2, COLLAGE_MAX = 12;
+  const collageText = () => allResults.length
+    ? plural(allResults.length, "photo") + " waiting in Collage Maker. Select the ones that belong together (" + COLLAGE_MIN + " to " + COLLAGE_MAX +
+      "), then make a collage. Photos you leave unselected stay here."
+    : "Nothing is waiting in Collage Maker. Send photos here with Send to in Photos.";
+  function setCollageMode(on) {
+    collage = on; pane.classList.toggle("ph-collage", on);
+    $("ph-title").textContent = on ? "Collage Maker" : "Photos";
+    $("ph-searchbox").hidden = on; $("ph-count").hidden = on; $("ph-resclear").hidden = on;
+    for (const id of ["ph-selday", "ph-seldl", "ph-seltrash", "ph-selsend"]) $(id).hidden = on;
+    $("ph-selmake").hidden = $("ph-selremove").hidden = !on;
+  }
+  async function enterCollage() {
+    if (collage) return refreshCollage();
+    if (searching) await clearSearch(true);
+    savedTop = sc.scrollTop; sel.clear(); closeViewer(); closePanel();
+    setCollageMode(true);
+    searching = true; nextPage = null;
+    enterSearch(); resHead.hidden = false; sc.scrollTop = 0; paintSel();
+    await refreshCollage();
+  }
+  function leaveCollage() {
+    if (!collage) return;
+    setCollageMode(false);
+    clearSearch(false);
+  }
+  async function refreshCollage() {
+    const token = ++searchToken;
+    $("ph-restext").textContent = "Looking in Collage Maker…";
+    try {
+      const d = await api("/api/collage/waiting");
+      if (token !== searchToken || !collage) return;
+      allResults = d.items; nextPage = null;
+      const ids = new Set(allResults.map(i => i.id));
+      for (const id of [...sel]) if (!ids.has(id)) sel.delete(id);
+      rebuildResults(); paintSel();
+      $("ph-restext").textContent = collageText();
+    } catch (e) {
+      if (token === searchToken) $("ph-restext").textContent = "Couldn't read Collage Maker from Immich. " + (e.message || "");
+    }
+  }
+  // Photos that have left Collage Maker (made into a collage, or removed) go from the page; the sidebar count follows.
+  function collageGone(ids) {
+    const g = new Set(ids), here_ = cur && item() ? item().id : null;
+    allResults = allResults.filter(i => !g.has(i.id));
+    for (const id of ids) sel.delete(id);
+    if (here_ && g.has(here_)) backFromViewer();
+    rebuildResults(); paintSel();
+    $("ph-restext").textContent = collageText();
+    document.dispatchEvent(new Event("collage-changed"));
+  }
+  async function makeCollage() {
+    const ids = [...sel];
+    if (ids.length < COLLAGE_MIN || ids.length > COLLAGE_MAX) return;
+    $("ph-selmake").disabled = true;
+    const out = await post("/api/collage/make", { ids });
+    if (!out) { await refreshCollage(); return; }
+    toast("Sent to Claude. The collage will appear in Review when it is done.");
+    collageGone(ids);
+  }
+  async function removeFromCollage(ids) {
+    if (!ids.length) return;
+    const out = await post("/api/collage/remove", { ids });
+    if (!out) { await refreshCollage(); return; }
+    const why = {};
+    for (const s of out.skipped || []) why[s.reason] = (why[s.reason] || 0) + 1;
+    const skipped = Object.entries(why).map(([r, n]) => n + " " + r).join(", ");
+    toast((out.done.length ? "Removed from Collage Maker. The photos stay in the owner's Immich library." : "") +
+      (skipped ? (out.done.length ? " " : "") + "Not removed: " + skipped + "." : ""), !out.done.length && !!skipped);
+    if (out.done.length) collageGone(out.done);
+    if (out.skipped && out.skipped.length) await refreshCollage();
   }
 
   // ---- what can be done with photos ----
@@ -880,13 +979,15 @@ const PhotosPane = (() => {
   }
 
   // ---- coming and going ----
-  function show_() {
+  function show_(which) {
     if (!built) build();
+    if (which === "collage") { enterCollage(); return; }
+    leaveCollage();
     if (!started) start(); else { sc.scrollTop = savedTop; schedule(); follow(); }
   }
   function hide() {
-    if (built && !pane.hidden) savedTop = sc.scrollTop;
-    closeViewer(); closeSendMenu(); closePanel();
+    if (built && !pane.hidden && !collage) savedTop = sc.scrollTop;
+    closeViewer(); closeSendMenu(); closePanel(); leaveCollage();
   }
   return { show: show_, hide };
 })();
