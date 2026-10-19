@@ -348,7 +348,7 @@ async function revertTo(id, step) {
   if (i >= 0) openViewer(i);
 }
 // What a thumbnail shows; when it is unchanged the tile is left alone.
-const tileSig = p => [p.version, p.status, p.live, p.has_image, p.media_type, p.trashed_at, trashDays].join("|");
+const tileSig = p => [p.version, p.status, p.live, p.has_image, p.media_type, p.trashed_at, p.ratio, trashDays].join("|");
 function trashBadge(p) {
   const n = p.trashed ? daysLeft(p) : null;
   return n === null ? "" : `<span class="badge age${n <= 0 ? " due" : ""}">${leftText(n)}</span>`;
@@ -359,7 +359,8 @@ function tile(p, i) {
     ? `<img loading="lazy" src="/media/${p.id}/thumb?v=${p.version}" alt="">`
     : `<div class="ph">${esc(p.media_type === "video" ? "Video" : p.status.replace("_", " "))}</div>`;
   const on = selected.has(p.id);
-  return `<div class="tile${on ? " sel" : ""}" data-i="${i}" data-id="${esc(p.id)}" data-sig="${esc(tileSig(p))}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""} aria-label="Select">${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
+  const shape = p.ratio > 0 ? p.ratio : 1.5;                  // the photo's own shape (width over height); a placeholder gets a plain one
+  return `<div class="tile${on ? " sel" : ""}" style="--r:${shape}" data-i="${i}" data-id="${esc(p.id)}" data-sig="${esc(tileSig(p))}">${inner}<input class="pick" type="checkbox"${on ? " checked" : ""} aria-label="Select">${label ? `<span class="badge">${esc(label)}</span>` : ""}` +
          `${p.live ? `<span class="badge live">Live</span>` : ""}${trashBadge(p)}</div>`;
 }
 

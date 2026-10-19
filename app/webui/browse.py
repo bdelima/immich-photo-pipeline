@@ -147,6 +147,30 @@ def register_browse_routes(
             abort(404)
         return photo
 
+    ratios: dict[str, float] = {}      # revision file -> width over height; a revision file never changes
+
+    def ratio_of(photo: Photo) -> float | None:
+        """The shape of the photo now showing (width over height, as it is displayed), read from the
+        image's header and remembered, so the grid can lay tiles out in their own shape. None for a
+        video, a photo with no image yet, or an image that can't be read."""
+        rev = photo.current_revision()
+        if photo.media_type != "image" or rev is None:
+            return None
+        if rev.file in ratios:
+            return ratios[rev.file]
+        try:
+            from PIL import Image
+            with Image.open(revisions.path(rev.file)) as img:
+                w, h = img.size
+                if img.getexif().get(274) in (5, 6, 7, 8):          # stored sideways
+                    w, h = h, w
+        except Exception:
+            return None
+        if w <= 0 or h <= 0:
+            return None
+        ratios[rev.file] = round(w / h, 4)
+        return ratios[rev.file]
+
     def send_stored(relpath: str | None, *, cache: str):
         if not relpath:
             abort(404)
@@ -170,7 +194,7 @@ def register_browse_routes(
         photos = photos_in_view(store.load(), request.args.get("view", "review"))
         if photos is None:
             return jsonify({"error": "unknown view"}), 400
-        return jsonify({"photos": [summary(p) for p in photos], "trash_days": store.load().trash_days})
+        return jsonify({"photos": [{**summary(p), "ratio": ratio_of(p)} for p in photos], "trash_days": store.load().trash_days})
 
     @app.get("/api/photos/<photo_id>")
     def api_photo(photo_id: str):
