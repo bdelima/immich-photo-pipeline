@@ -144,7 +144,7 @@ def test_the_viewer_in_collage_maker_has_only_select_remove_zoom_and_details():
     js = read("static", "photos.js")
     assert '$("pv-send").hidden = $("pv-dl").hidden = $("pv-trash").hidden = collage;' in js
     assert '$("pv-pick").hidden = $("pv-remove").hidden = !collage;' in js
-    assert '"Selected \\u2713" : "Select for collage"' in js and 'id="pv-remove" hidden>Remove from Collage Maker' in js
+    assert '"Selected ✓" : "Select for collage"' in js and 'id="pv-remove" hidden>Remove from Collage Maker' in js
 
 
 def test_search_results_are_shown_like_the_timeline_by_month_and_day_with_their_own_timeline():
