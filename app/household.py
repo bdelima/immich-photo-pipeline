@@ -209,10 +209,11 @@ def search_items(
     immich: ImmichClient, own_id: str, text: str, mode: str, filters: dict, page: int = 1,
     states: dict[str, str] | None = None, include_sent: bool = False, owner_id: str = "",
 ) -> tuple[list[dict], int | None]:
-    """One page of search results in the shape of month_items (newest first within the page),
-    and the next page number or None. Leaves out what the timeline leaves out: the pipeline's
-    own photos, the trashed, and (unless asked for) photos already in the pipeline. `owner_id`
-    keeps only that account's photos."""
+    """One page of search results in the shape of month_items, and the next page number or None.
+    Newest first within the page, except a search by meaning (the Context type with words), which
+    keeps Immich's order: the best match first. Leaves out what the timeline leaves out: the
+    pipeline's own photos, the trashed, and (unless asked for) photos already in the pipeline.
+    `owner_id` keeps only that account's photos."""
     states = states or {}
     kind, body = search_body(text, mode, filters, page)
     found = immich.search_assets(kind, body)
@@ -231,7 +232,8 @@ def search_items(
             "id": a["id"], "owner_id": a.get("ownerId") or "", "ratio": _ratio(a), "video": video,
             "seconds": _seconds(a.get("duration")) if video else 0, "day": day, "time": clock, "pipeline": mark,
         })
-    items.sort(key=lambda i: (i["day"], i["time"]), reverse=True)
+    if kind != "smart":            # a search by meaning keeps Immich's order: the best match first
+        items.sort(key=lambda i: (i["day"], i["time"]), reverse=True)
     return items, found["next"]
 
 

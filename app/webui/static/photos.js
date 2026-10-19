@@ -42,6 +42,7 @@ const PhotosPane = (() => {
   const Q = { text: "", mode: "context", from: "", to: "", country: "", state: "", city: "", type: "", owner: "", make: "", model: "", lens: "",
     people: new Set(), favorites: false, archive: false, notInAlbum: false };
   let collage = false;       // the Collage Maker place is showing (it reuses the search-results machinery)
+  let bestFirst = false;      // a search with text to match: results stay in Immich's order, best match first, with no months
   let showSent = false, searching = false, monthsStale = false, allResults = [], main = null, nextPage = null, loadingMore = false, searchToken = 0;
   const sel = new Set();     // selected photo ids
   const byId = new Map();    // photo id -> { it, s } for every photo loaded (its section, for the day and removals)
@@ -157,9 +158,11 @@ const PhotosPane = (() => {
   function computeLayout(s, W) {
     const rows = [], dayTop = {}, days = [];
     let y = 0;
-    for (const it of s.items) { const d = days[days.length - 1]; if (d && d.day === it.day) d.items.push(it); else days.push({ day: it.day, items: [it] }); }
+    if (s.flat) days.push({ day: "", items: s.items });          // best match first: one run of tiles, no day headers
+    else for (const it of s.items) { const d = days[days.length - 1]; if (d && d.day === it.day) d.items.push(it); else days.push({ day: it.day, items: [it] }); }
     for (const d of days) {
-      dayTop[d.day] = y; rows.push({ kind: "day", top: y, h: DAYH, label: dayLabel(d.day), ids: d.items.map(i => i.id) }); y += DAYH;
+      dayTop[d.day] = y;
+      if (!s.flat) { rows.push({ kind: "day", top: y, h: DAYH, label: dayLabel(d.day), ids: d.items.map(i => i.id) }); y += DAYH; }
       let row = [], sum = 0;
       const flush = last => {
         if (!row.length) return;
@@ -357,7 +360,7 @@ const PhotosPane = (() => {
     const box = sc.getBoundingClientRect(), probe = box.top + 64;
     let s = null;
     for (const b of order) { const x = secs[b]; if (x.el.getBoundingClientRect().bottom > probe) { s = x; break; } }
-    if (!s) return;
+    if (!s || s.flat) return;
     let want = s.month;
     if (s.layout && s.layout.days.length) {
       const bt = s.body.getBoundingClientRect().top;
@@ -575,7 +578,7 @@ const PhotosPane = (() => {
   }
   function resultText() {
     const n = allResults.length;
-    return (n ? plural(n, "result") + (nextPage ? " so far" : "") : "No results") + (summary() ? " for " + summary() : "") + ". Newest first on each page.";
+    return (n ? plural(n, "result") + (nextPage ? " so far" : "") : "No results") + (summary() ? " for " + summary() : "") + (bestFirst ? ". Best match first." : ". Newest first on each page.");
   }
 
   // A search shows its results the way the main page shows the timeline: by month and day, with a timeline of
@@ -583,7 +586,7 @@ const PhotosPane = (() => {
   function enterSearch() {
     if (!main) main = { secs, order, rowOf, kidsOf, isOpen, auto, current, here, host, tl };
     secs = {}; order = []; rowOf = {}; kidsOf = {}; isOpen = {}; auto = {}; current = null; here = null;
-    host = resBox; tl = rtl; allResults = [];
+    host = resBox; tl = rtl; allResults = []; bestFirst = false;
     host.innerHTML = ""; tl.innerHTML = "";
     $("ph-months").hidden = true; $("ph-tl").hidden = true; resBox.hidden = false; rtl.hidden = false;
   }
@@ -601,6 +604,7 @@ const PhotosPane = (() => {
     searching = true; sel.clear();
     for (const [id, e] of byId) if (e.s.results) byId.delete(id);
     enterSearch(); resHead.hidden = false;
+    bestFirst = Q.mode === "context" && !!Q.text;
     $("ph-clear").hidden = false;
     nextPage = null;
     $("ph-restext").textContent = "Searching…";
@@ -616,7 +620,8 @@ const PhotosPane = (() => {
   }
   function addResults(d) {
     nextPage = d.next || null;
-    allResults = allResults.concat(d.items).sort((a, b) => (b.day + b.time).localeCompare(a.day + a.time));
+    allResults = allResults.concat(d.items);
+    if (!bestFirst) allResults.sort((a, b) => (b.day + b.time).localeCompare(a.day + a.time));
     rebuildResults();
     $("ph-restext").textContent = resultText();
     schedule();
@@ -628,6 +633,16 @@ const PhotosPane = (() => {
     for (const k of Object.keys(secs)) delete secs[k];
     for (const o of [rowOf, kidsOf, isOpen, auto]) for (const k of Object.keys(o)) delete o[k];
     host.innerHTML = ""; tl.innerHTML = ""; order = []; current = null; here = null;
+    if (bestFirst) {                      // one section, in the order Immich gave, with no months and no timeline
+      const el = document.createElement("section"); el.className = "ph-month"; el.innerHTML = '<div class="ph-body"></div>';
+      secs.rbest = { bucket: "rbest", month: "", count: allResults.length, el, head: null, body: el.firstChild, items: allResults, flat: true,
+        layout: null, rendered: new Map(), state: "ready", promise: null, failed: false, warmed: true, results: true };
+      order = ["rbest"]; host.appendChild(el); tl.hidden = true;
+      reg(secs.rbest, allResults); layoutSection(secs.rbest);
+      sc.scrollTop = top; schedule();
+      return;
+    }
+    tl.hidden = false;
     const groups = new Map();
     for (const it of allResults) {
       if (!it.day) continue;
