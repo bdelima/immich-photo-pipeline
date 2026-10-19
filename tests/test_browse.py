@@ -246,3 +246,28 @@ def test_the_detail_offers_a_watermark_template_and_the_route_queues_it_for_clau
         ("title", True, False, False), ("subject", False, False, False), ("location", False, True, False), ("author", False, False, True), ("date", False, False, True)]
     assert again["parts"]["place"] == "Costa Rica"
     assert client.post("/api/photos/nope/watermark", json={"title": "x"}).status_code == 404
+
+
+def test_each_photo_in_a_list_carries_its_own_shape(tmp_path):
+    client, store, revisions = build(tmp_path)
+    by = {p["id"]: p for p in client.get("/api/photos?view=review").get_json()["photos"]}
+    assert by["r1"]["ratio"] == 1.3333 and by["v1"]["ratio"] is None          # 800 x 600; a video has none
+    assert {p["id"]: p["ratio"] for p in client.get("/api/photos?view=queue").get_json()["photos"]} == {"q1": None, "f1": None}
+    from PIL import Image as _I
+    tall = tmp_path / "tall.jpg"
+    _I.new("RGB", (300, 600), (1, 2, 3)).save(tall)
+    rel, sha = revisions.save_revision("a1", 5, str(tall))
+    def fn(lib):
+        ph = lib.photos["a1"]
+        ph.revisions.append(Revision(n=5, parent=0, file=rel, sha256=sha, instruction="tall"))
+        ph.current = 5
+    store.update(fn)
+    assert {p["id"]: p["ratio"] for p in client.get("/api/photos?view=live").get_json()["photos"]}["a1"] == 0.5
+
+
+def test_the_grid_lays_tiles_out_in_their_own_shape_not_squares():
+    here = os.path.join(os.path.dirname(__file__), "..", "app", "webui")
+    css = open(os.path.join(here, "static", "pipeline.css"), encoding="utf-8").read()
+    page = open(os.path.join(here, "templates", "index.html"), encoding="utf-8").read()
+    assert "aspect-ratio: var(--r)" in css and "aspect-ratio: 1;" not in css and ".grid::after" in css
+    assert 'style="--r:${shape}"' in page and "p.ratio" in page
