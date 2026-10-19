@@ -146,7 +146,7 @@ The photo is revised as usual if you also asked for a change, and the reply says
 
 > Saved for future photos: "Keep collage items balanced by size."
 
-To take one back, tell the chat to forget it ("forget r7"); it answers "Forgotten: ..." with the rule's wording. A message without such a cue ("too pink") is only ever a revision of that one photo. If the classifier is unsure, it chooses revision.
+To take one back, tell the chat to forget it by its number ("forget r7"); the saved reply doesn't show the number, but every rule's card in the **Recipe rules** view starts with it ("Rule r7"). The chat answers "Forgotten: ..." with the rule's wording. A message without such a cue ("too pink") is only ever a revision of that one photo. If the classifier is unsure, it chooses revision.
 
 **Rules can apply to everything, to single photos only, or to collages only.** The pipeline picks the scope from what you said ("for collages…"); you can also add or fix one in the Recipe rules view. A collage-only rule is never added to a single-photo run, and vice versa.
 
