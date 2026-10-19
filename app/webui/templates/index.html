@@ -124,11 +124,12 @@ function moveMenu(anchor) {
 // ---- the places ----
 // Photos and Recipe rules are views in this window, like Review and the albums: the sidebar and
 // header stay, only the area on the right changes (photos.js and rules.js draw them).
-const isPane = v => v === "photos" || v === "rules";
+const isPane = v => v === "photos" || v === "collage" || v === "rules";
+const paneOn = v => v === "collage" ? window.FEATURES.photos : window.FEATURES[v];
 function showPane(v) {
-  if (v !== "photos") PhotosPane.hide();               // remembers where the timeline was, before it is hidden
+  if (v !== "photos" && v !== "collage") PhotosPane.hide();               // remembers where the timeline was, before it is hidden
   $("pipeView").hidden = isPane(v);
-  $("photosView").hidden = v !== "photos";
+  $("photosView").hidden = v !== "photos" && v !== "collage";
   $("rulesView").hidden = v !== "rules";
 }
 async function openPane(v) {
@@ -138,12 +139,15 @@ async function openPane(v) {
   document.title = viewTitle(v) + " · immich-photo-pipeline";
   showPane(v);
   renderTree(v, "").then(t => { treeAlbums = t.albums; albums = t.albums.map(a => a.name); }).catch(() => {});
-  if (v === "photos") PhotosPane.show(); else RulesPane.show();
+  if (v === "photos" || v === "collage") PhotosPane.show(v); else RulesPane.show();
 }
+
+// Collage Maker changed (a collage was made, photos were removed): the sidebar count follows.
+document.addEventListener("collage-changed", () => { renderTree(view, "").catch(() => {}); });
 
 // ---- the grid ----
 async function select(v, keep, keepViewer) {
-  if (isPane(v) && window.FEATURES[v]) return openPane(v);
+  if (isPane(v) && paneOn(v)) return openPane(v);
   if (isPane(v)) { history.replaceState(null, "", viewHash("review")); v = "review"; }   // not available here
   showPane(v);
   const token = ++loadToken;
