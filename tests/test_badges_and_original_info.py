@@ -13,7 +13,7 @@ def read(*parts):
 
 def test_count_changes_are_marked_until_the_row_is_clicked_and_a_drop_to_zero_clears_on_a_timer():
     js = read("static", "app.js")
-    assert 'PILL_VIEWS = ["queue", "review", "trash"]' in js
+    assert 'PILL_VIEWS = ["queue", "collage", "review", "trash"]' in js
     assert "ZERO_CLEAR_MS = 10000" in js
     assert "function noteCount" in js and "function paintCount" in js and "function clearCountMark" in js
     assert 'class="cdelta ' in js and 'e.target.closest("#tree a.item")' in js        # a click on the row clears its mark

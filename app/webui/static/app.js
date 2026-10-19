@@ -8,7 +8,7 @@ const api = async url => { const r = await fetch(url); if (!r.ok) throw new Erro
 // address fragment of the main page (/#album:costa-rica), which is how the
 // notes on the Immich albums link straight to one. An older link that has
 // the album's name (/#album:Costa%20Rica) still works.
-const PANE_VIEWS = { photos: "Photos", rules: "Recipe rules" };
+const PANE_VIEWS = { photos: "Photos", collage: "Collage Maker", rules: "Recipe rules" };
 const viewHash = v => "#" + encodeURIComponent(v).replace(/%3A/gi, ":");
 const hashView = h => { try { return decodeURIComponent((h || "").replace(/^#/, "")); } catch (e) { return ""; } };
 const viewTitle = (v, albums) => {
@@ -30,7 +30,7 @@ const canonicalView = (v, albums) => {
 // clicked; the one exception is a count that has dropped to 0, whose mark is removed after a
 // few seconds, since there is nothing left to look at. The first count seen is not a change.
 // Queue, Review and Trash also put the count in a blue pill while it is above zero.
-const PILL_VIEWS = ["queue", "review", "trash"];
+const PILL_VIEWS = ["queue", "collage", "review", "trash"];
 const ZERO_CLEAR_MS = 10000;
 const countState = {};          // view -> { n, delta, changed }
 const zeroTimers = {};
@@ -72,18 +72,22 @@ document.addEventListener("click", e => {
 function treeItem(v, label, n, active, base) {
   return `<a class="item${v === active ? " active" : ""}" href="${base}${viewHash(v)}" data-view="${esc(v)}"><span>${esc(label)}</span>${countHtml(v, n)}</a>`;
 }
-// Photos and Recipe rules have no count. They are views in the same window, and the sidebar offers
-// only the ones the server can show (window.FEATURES, set by the page).
-function paneItem(v, active) {
-  return `<a class="item pane${v === active ? " active" : ""}" href="${viewHash(v)}" data-view="${v}"><span>${PANE_VIEWS[v]}</span></a>`;
+// Photos, Collage Maker and Recipe rules are views in the same window, and the sidebar offers only the ones the
+// server can show (window.FEATURES, set by the page; Collage Maker comes with Photos). Collage Maker has a count
+// of the photos waiting there (n is null when Immich can't be asked just now, and the count is left off).
+function paneItem(v, active, n) {
+  const count = n == null ? "" : countHtml(v, n);
+  return `<a class="item pane${v === active ? " active" : ""}" href="${viewHash(v)}" data-view="${v}"><span>${PANE_VIEWS[v]}</span>${count}</a>`;
 }
 // Draws the sidebar: Photos, a line, the places the pipeline keeps (Queue, Review, Live, the albums,
 // Trash), then a line (the .links box) and Recipe rules. `base` is the page's own address, "" on the main page.
 async function renderTree(active, base) {
-  const t = await api("/api/tree"), feat = window.FEATURES || {};
+  const feat = window.FEATURES || {};
+  const [t, waiting] = await Promise.all([api("/api/tree"),
+    feat.photos ? api("/api/collage/count").then(c => c.count, () => null) : null]);
   $("tree").innerHTML =
     (feat.photos ? paneItem("photos", active) + `<div class="sep"></div>` : "") +
-    treeItem("queue", "Queue", t.queue, active, base) + treeItem("review", "Review", t.review, active, base) +
+    treeItem("queue", "Queue", t.queue, active, base) + (feat.photos ? paneItem("collage", active, waiting) : "") + treeItem("review", "Review", t.review, active, base) +
     treeItem("live", "Live", t.live, active, base) +
     `<div class="group">Albums</div>` + t.albums.map(a => treeItem(a.view, a.name, a.count, active, base)).join("") +
     `<div class="group">&nbsp;</div>` + treeItem("trash", "Trash", t.trash, active, base) +

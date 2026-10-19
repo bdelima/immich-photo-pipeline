@@ -51,19 +51,19 @@ def test_the_main_page_holds_both_views_and_the_sidebar_offers_what_the_server_c
 def test_the_sidebar_is_photos_a_line_the_places_a_line_then_recipe_rules():
     js = read("static", "app.js")
     body = js[js.index("async function renderTree"):js.index("// A small version hint")]
-    order = [body.index(k) for k in ('paneItem("photos"', 'class="sep"', 'treeItem("queue"', 'treeItem("review"', 'treeItem("live"',
+    order = [body.index(k) for k in ('paneItem("photos"', 'class="sep"', 'treeItem("queue"', 'paneItem("collage"', 'treeItem("review"', 'treeItem("live"',
                                       '>Albums<', 'treeItem("trash"', 'class="links"', 'paneItem("rules"')]
     assert order == sorted(order)
     assert body.count('<div class="sep">') == 1 and body.count('<div class="links">') == 1
-    assert 'PANE_VIEWS = { photos: "Photos", rules: "Recipe rules" }' in js
+    assert 'PANE_VIEWS = { photos: "Photos", collage: "Collage Maker", rules: "Recipe rules" }' in js
     assert 'class="brand"' in read("templates", "index.html") and "Immich Photo Pipeline" in read("templates", "index.html")
 
 
 def test_choosing_photos_or_rules_swaps_the_area_on_the_right_and_nothing_else():
     page = read("templates", "index.html")
-    assert 'const isPane = v => v === "photos" || v === "rules";' in page
-    assert "if (isPane(v) && window.FEATURES[v]) return openPane(v);" in page
-    assert "PhotosPane.show()" in page and "RulesPane.show()" in page and "PhotosPane.hide()" in page
+    assert 'const isPane = v => v === "photos" || v === "collage" || v === "rules";' in page
+    assert "if (isPane(v) && paneOn(v)) return openPane(v);" in page
+    assert 'PhotosPane.show(v)' in page and "RulesPane.show()" in page and "PhotosPane.hide()" in page
     assert "if (isPane(view)) return;" in page                       # the live sync has no grid to keep in step there
     assert '#tree a.item:not(.pane)' in page                         # and its count check ignores the two views
 
@@ -120,8 +120,31 @@ def test_photos_search_select_send_download_and_trash_use_the_household_routes()
     assert '"ph-pick"' in js and '"ph-dpick' in js and "Select day" in js
 
 
-def test_the_collage_maker_place_is_not_part_of_the_photos_view():
-    assert "Make collage" not in read("static", "photos.js")
+def test_collage_maker_is_a_place_under_queue_that_shares_the_photos_view_and_has_a_count():
+    app, page, photos = read("static", "app.js"), read("templates", "index.html"), read("static", "photos.js")
+    assert 'feat.photos ? paneItem("collage", active, waiting)' in app and '"/api/collage/count"' in app    # offered with Photos
+    assert 'v !== "photos" && v !== "collage"' in page and 'document.addEventListener("collage-changed"' in page
+    assert "async function enterCollage()" in photos and "function leaveCollage()" in photos and "/api/collage/waiting" in photos
+
+
+def test_collage_maker_selects_two_to_twelve_and_makes_or_removes_with_the_wireframes_words():
+    js = read("static", "photos.js")
+    assert "const COLLAGE_MIN = 2, COLLAGE_MAX = 12;" in js
+    for text in ('"Make collage (select " + COLLAGE_MIN + " or more)"', '"Make collage (" + COLLAGE_MAX + " at most)"', '"Make collage from " + n',
+                 '"A collage takes " + COLLAGE_MAX + " photos at most. Deselect "', "Select the ones that belong together (",
+                 "Sent to Claude. The collage will appear in Review when it is done.",
+                 "Removed from Collage Maker. The photos stay in the owner's Immich library."):
+        assert text in js
+    assert '"/api/collage/make", { ids }' in js and '"/api/collage/remove", { ids }' in js           # ids in the order selected
+    assert 'for (const id of ["ph-selday", "ph-seldl", "ph-seltrash", "ph-selsend"]) $(id).hidden = on;' in js     # no Send to, Download, Trash, Select day
+    assert ".ph-collage .ph-dpick { display: none; }" in read("static", "photos.css")
+
+
+def test_the_viewer_in_collage_maker_has_only_select_remove_zoom_and_details():
+    js = read("static", "photos.js")
+    assert '$("pv-send").hidden = $("pv-dl").hidden = $("pv-trash").hidden = collage;' in js
+    assert '$("pv-pick").hidden = $("pv-remove").hidden = !collage;' in js
+    assert '"Selected \\u2713" : "Select for collage"' in js and 'id="pv-remove" hidden>Remove from Collage Maker' in js
 
 
 def test_search_results_are_shown_like_the_timeline_by_month_and_day_with_their_own_timeline():
@@ -129,6 +152,7 @@ def test_search_results_are_shown_like_the_timeline_by_month_and_day_with_their_
     assert 'id="ph-rtl"' in js and "function rebuildResults()" in js and "buildTimeline(months)" in js     # months, days and a timeline of the results
     assert "function enterSearch()" in js and "function leaveSearch()" in js                             # the main page's state is put aside, then back
     assert "resSec" not in js and "flatItems" in js                                                      # the viewer steps across months of results
+    assert "a result that was also on the timeline had taken its entry" in js                          # clearing a search gives the timeline its photos back for selecting
 
 
 def test_the_browsers_back_button_closes_the_viewer_the_same_as_its_own_back_button():
