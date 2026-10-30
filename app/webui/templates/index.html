@@ -793,9 +793,25 @@ function wireWatermark(id, w) {
   };
 
   // ---- the fields and their choices ----
+  // The first time a Title is typed (or picked) and it is on no line yet, it goes on the top line and
+  // everything else moves down a line, with its style. If the last line is already in use there is no
+  // room to push into, so nothing moves and the Title is left for the "+ Add" pulldown.
+  const placeTitleOnTop = it => {
+    if (WM_LINES.some(k => it[k] > 0)) return;
+    if (items.some(x => x.v > 0)) { status("All three lines are in use: add the Title to one with \"+ Add\"."); return; }
+    for (const x of items) { x.v = x.u; x.u = x.t; x.t = 0; }
+    it.t = 1;
+    lines.v = lines.u; lines.u = lines.t; lines.t = { font: "Liberation Sans", color: "auto", bold: false, italic: false };
+    fontSaw.v = fontSaw.u; fontSaw.u = fontSaw.t; fontSaw.t = undefined;
+    const down = k => (k === "t" ? "u" : k === "u" ? "v" : null);
+    openStrip = down(openStrip); fontHint = down(fontHint);
+    drawRows();
+  };
   const setText = (it, text) => {
+    const first = it.key === "title" && !it.text.trim() && text.trim();
     it.text = text; it.raw = undefined;
     const box = $(FIELDS[it.key]); if (box && box.value !== text) box.value = text;
+    if (first) placeTitleOnTop(it);
     drawPreview();
   };
   const choices = key => {
