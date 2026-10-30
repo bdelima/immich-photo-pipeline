@@ -158,3 +158,14 @@ def test_the_sidebar_title_is_immich_photo_pipeline_with_the_site_icon_beside_it
     assert "<h1>Immich Photo Pipeline</h1>" in brand
     assert "nav .brand { display: flex;" in read("static", "pipeline.css")
     assert '(h.closest(".brand") || h).after(el)' in read("static", "app.js")           # the version goes under the row
+
+
+def test_the_first_title_goes_on_the_top_line_and_pushes_the_others_down():
+    page = read("templates", "index.html")
+    place = page[page.index("const placeTitleOnTop = it => {"):page.index("const setText = (it, text) => {")]
+    assert "if (WM_LINES.some(k => it[k] > 0)) return;" in place          # a Title already on a line stays where it is
+    assert "if (items.some(x => x.v > 0))" in place                       # no room: nothing moves
+    assert "x.v = x.u; x.u = x.t; x.t = 0;" in place and "it.t = 1;" in place
+    assert "lines.v = lines.u; lines.u = lines.t;" in place               # each line's style goes down with it
+    setter = page[page.index("const setText = (it, text) => {"):page.index("const choices = key =>")]
+    assert 'it.key === "title" && !it.text.trim() && text.trim()' in setter   # only the first time text appears
